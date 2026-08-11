@@ -43,10 +43,11 @@ relitigated here.
 
 ## Review round 1 (2026-08-11)
 
-- **Same-tower gutters close** (layout rule): the gutter between two adjacent
-  columns is eliminated when some layer spans both — monoline primary bands
-  and retentions extend half a gutter each and meet, so a tower has no white
-  holes below its umbrella. Gutters between unrelated towers stay open.
+- **All interior gutters close** (layout rule): adjacent columns always split
+  the gutter between them, so bands and retentions meet edge-to-edge across
+  the whole chart. (First pass closed only same-tower gutters; the user chose
+  to close them all — noting: visually separate towers no longer read as
+  separate placements, the column headers now carry that distinction.)
 - **Reference-line dollar labels sit above the line**, not centred on it.
 - **Column footers show full line names** (wrapped), abbreviations remain in
   the ASCII preview where width is scarce.
