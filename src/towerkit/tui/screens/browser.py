@@ -65,7 +65,10 @@ class ProgramBrowser(Screen):
         table = self.query_one("#programs", DataTable)
         table.clear()
         self.programs_dir.mkdir(parents=True, exist_ok=True)
-        for path in sorted(self.programs_dir.glob("*.json")):
+        paths = sorted(self.programs_dir.glob("*.json")) + sorted(
+            (self.programs_dir / "private").glob("*.json")
+        )
+        for path in paths:
             program, diags = validate_file(path)
             if not diags.ok:
                 badge = f"✗ {len(diags.errors)}"

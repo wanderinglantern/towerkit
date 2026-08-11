@@ -54,6 +54,12 @@ the *current checkout* editable, so re-running it after `git pull` picks up
 code changes without a new release. Maintainers rebuild the wheelhouse with
 `make wheelhouse` after changing dependencies and attach it to the release.
 
+### Client data
+
+`programs/private/` is **gitignored** — put real client programs there. The
+TUI browser lists it alongside `programs/`, but nothing in it can reach the
+public repository or CI.
+
 ## Design in one minute
 
 - **Lines are columns; layers carry `appliesTo`.** An umbrella spanning three

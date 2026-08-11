@@ -316,3 +316,19 @@ class TestRenderOptionsMenu:
             assert editor.theme_path == Path("themes/marsh.json")
             assert app.show_premiums is False
             assert app.show_totals is True
+
+
+class TestPrivatePrograms:
+    @pytest.mark.asyncio
+    async def test_private_subdir_listed_in_browser(self, tmp_path, monkeypatch) -> None:
+        programs = tmp_path / "programs"
+        (programs / "private").mkdir(parents=True)
+        shutil.copy(SAMPLE, programs / "atomic-2026.json")
+        shutil.copy(SAMPLE, programs / "private" / "client.json")
+        monkeypatch.chdir(tmp_path)
+        app = TowerkitApp()
+        async with app.run_test(size=(120, 40)):
+            table = app.screen.query_one("#programs")
+            names = [table.get_row_at(i)[1] for i in range(table.row_count)]
+            assert "atomic-2026.json" in names
+            assert "client.json" in names

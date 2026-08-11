@@ -8,3 +8,4 @@ dist/
 *.egg-info/
 wheelhouse/
 towerkit-wheelhouse-macos.zip
+programs/private/
