@@ -339,6 +339,12 @@ class EditorScreen(Screen):
             Input(value=layer.name, id="f-layer-name"),
             Label("Policy number", classes="field-label"),
             Input(value=layer.policy_number or "", id="f-layer-policy"),
+            Label("Notes (renders as a chart footnote)", classes="field-label"),
+            Input(
+                value=layer.notes or "",
+                placeholder="e.g. 20% open at renewal",
+                id="f-layer-notes",
+            ),
             Label("Policy period (blank = program period)", classes="field-label"),
             HorizontalGroup(
                 Input(
@@ -541,6 +547,10 @@ class EditorScreen(Screen):
         if wid == "f-layer-policy":
             policy = widget.value.strip() or None
             self._mutate_and_refresh(lambda p: setattr(layer, "policy_number", policy))
+            return
+        if wid == "f-layer-notes":
+            note = widget.value.strip() or None
+            self._mutate_and_refresh(lambda p: setattr(layer, "notes", note))
             return
         if wid in ("f-layer-period-start", "f-layer-period-end"):
             self._commit_layer_period(layer)
@@ -986,6 +996,7 @@ _FIELD_HANDLERS = {
     "f-line-abbr": EditorScreen._commit_line_field,
     "f-layer-name": EditorScreen._commit_layer_field,
     "f-layer-policy": EditorScreen._commit_layer_field,
+    "f-layer-notes": EditorScreen._commit_layer_field,
     "f-layer-period-start": EditorScreen._commit_layer_field,
     "f-layer-period-end": EditorScreen._commit_layer_field,
     "f-layer-attach": EditorScreen._commit_layer_field,

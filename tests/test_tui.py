@@ -332,3 +332,20 @@ class TestPrivatePrograms:
             names = [table.get_row_at(i)[1] for i in range(table.row_count)]
             assert "atomic-2026.json" in names
             assert "client.json" in names
+
+
+class TestLayerNotesField:
+    @pytest.mark.asyncio
+    async def test_note_entered_in_form_lands_on_the_layer(self, sample_copy, monkeypatch) -> None:
+        monkeypatch.chdir(sample_copy.parent.parent)
+        app = TowerkitApp(path=sample_copy)
+        async with app.run_test(size=(140, 45)) as pilot:
+            editor = app.screen
+            editor.selected = ("layer", "umbrella")
+            await editor._rebuild_detail()
+            await pilot.pause()
+            notes = editor.query_one("#f-layer-notes")
+            notes.value = "quota share under negotiation"
+            editor._commit_input(notes)
+            await pilot.pause()
+            assert editor._layer("umbrella").notes == "quota share under negotiation"
