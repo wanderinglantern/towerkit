@@ -17,6 +17,7 @@ from typing import Any
 
 from textual import on
 from textual.app import ComposeResult
+from textual.binding import Binding
 from textual.containers import (
     Horizontal,
     HorizontalGroup,
@@ -64,8 +65,38 @@ from ..widgets.inputs import (
     known_carriers,
     parse_share_pct,
 )
-from ..widgets.modals import ConfirmModal, PromptModal, RenderOptions, RenderOptionsModal
+from ..widgets.modals import (
+    ConfirmModal,
+    HelpModal,
+    PromptModal,
+    RenderOptions,
+    RenderOptionsModal,
+)
 from ..widgets.preview import TowerPreview
+
+EDITOR_HELP = """towerkit editor — keys
+
+Structure
+  a          add an item to the selected group
+  delete     remove the selected item
+  [ / ]      move a selected LINE left/right (column order)
+             (shift+↑/↓ also works if your terminal sends it)
+
+Editing
+  enter      commit the field you are typing in
+  u          undo        ctrl+r  redo
+
+Output
+  r          render (SVG+PNG to dist/)
+  t          render options: theme, totals, premiums,
+             per-cell premium and policy term (saved with the file)
+
+Files
+  ctrl+s     save (canonical JSON; prompts if errors exist)
+  escape     back / close
+
+?            this help
+"""
 
 NodeRef = tuple[str, Any]
 
@@ -90,9 +121,13 @@ class EditorScreen(Screen):
         ("t", "render_options", "Options"),
         ("a", "add_node", "Add"),
         ("delete", "remove_node", "Remove"),
-        ("shift+up", "move_line(-1)", "Line ←"),
-        ("shift+down", "move_line(1)", "Line →"),
+        ("left_square_bracket", "move_line(-1)", "[ line left"),
+        ("right_square_bracket", "move_line(1)", "] line right"),
+        # kept for terminals that actually transmit shift+arrows; many do not
+        Binding("shift+up", "move_line(-1)", show=False),
+        Binding("shift+down", "move_line(1)", show=False),
         ("escape", "back", "Back"),
+        ("question_mark", "help", "Help"),
     ]
 
     CSS = """
@@ -143,6 +178,9 @@ class EditorScreen(Screen):
         yield Footer()
 
     async def on_mount(self) -> None:
+        self.query_one("#structure", Tree).tooltip = (
+            "Select a line, then [ / ] moves its column left or right. ? for all keys."
+        )
         stored = self.session.program.render
         if stored is not None:
             _opts(self).show_totals = stored.show_totals
@@ -278,7 +316,7 @@ class EditorScreen(Screen):
                 "Select a node to edit it.\n\n"
                 "a — add an item to the selected group\n"
                 "delete — remove the selected item\n"
-                "shift+↑/↓ — reorder a selected line (column order)\n"
+                "[ / ] — move a selected line left/right (column order)\n"
                 "r — render · ctrl+s — save · u/ctrl+r — undo/redo"
             )
         ]
@@ -320,6 +358,10 @@ class EditorScreen(Screen):
             Input(value=line.name, id="f-line-name"),
             Label("Column label", classes="field-label"),
             Input(value=line.abbr or "", id="f-line-abbr", placeholder=line.label),
+            Label(
+                "Reorder: [ moves this column left · ] moves it right",
+                classes="row-total",
+            ),
         ]
 
 
@@ -1052,6 +1094,9 @@ class EditorScreen(Screen):
         if not _opts(self).show_premiums:
             parts.append("premiums hidden")
         self.notify(" · ".join(parts))
+
+    def action_help(self) -> None:
+        self.app.push_screen(HelpModal(EDITOR_HELP))
 
     def action_back(self) -> None:
         if self.session.dirty:

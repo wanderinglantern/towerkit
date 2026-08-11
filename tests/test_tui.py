@@ -415,7 +415,7 @@ class TestLineReorder:
             editor = app.screen
             assert editor.session.program.line_ids()[:3] == ["gl", "al", "el"]
             editor.selected = ("line", "al")
-            await editor.action_move_line(-1)
+            await pilot.press("left_square_bracket")  # the real key path
             await pilot.pause()
             assert editor.session.program.line_ids()[:3] == ["al", "gl", "el"]
             # geometry follows the new order
@@ -434,6 +434,36 @@ class TestLineReorder:
         async with app.run_test(size=(140, 45)) as pilot:
             editor = app.screen
             editor.selected = ("line", "gl")
-            await editor.action_move_line(-1)  # already first: no-op
+            await pilot.press("left_square_bracket")  # already first: no-op
             await pilot.pause()
             assert editor.session.program.line_ids()[0] == "gl"
+
+
+class TestHelp:
+    @pytest.mark.asyncio
+    async def test_question_mark_opens_help(self, sample_copy, monkeypatch) -> None:
+        monkeypatch.chdir(sample_copy.parent.parent)
+        app = TowerkitApp(path=sample_copy)
+        async with app.run_test(size=(140, 45)) as pilot:
+            await pilot.press("question_mark")
+            await pilot.pause()
+            from towerkit.tui.widgets.modals import HelpModal
+
+            assert isinstance(app.screen, HelpModal)
+            assert "[ / ]" in app.screen.help_text  # the reorder keys are documented
+            await pilot.press("escape")
+            await pilot.pause()
+
+    @pytest.mark.asyncio
+    async def test_line_form_carries_reorder_hint(self, sample_copy, monkeypatch) -> None:
+        monkeypatch.chdir(sample_copy.parent.parent)
+        app = TowerkitApp(path=sample_copy)
+        async with app.run_test(size=(140, 45)) as pilot:
+            editor = app.screen
+            editor.selected = ("line", "gl")
+            await editor._rebuild_detail()
+            await pilot.pause()
+            from textual.widgets import Label
+
+            texts = [str(w.render()) for w in editor.query(Label)]
+            assert any("moves this column left" in t for t in texts)

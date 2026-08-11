@@ -12,7 +12,13 @@ from ...model import dump_program, load_program
 from ...money import format_money
 from ...validate import validate_file
 from ..session import EditSession, blank_program
-from ..widgets.modals import ConfirmModal, PromptModal, RenderOptions, RenderOptionsModal
+from ..widgets.modals import (
+    ConfirmModal,
+    HelpModal,
+    PromptModal,
+    RenderOptions,
+    RenderOptionsModal,
+)
 from .diff import DiffScreen
 from .editor import EditorScreen, _opts
 
@@ -27,6 +33,7 @@ class ProgramBrowser(Screen):
         ("x", "diff", "Mark/compare"),
         ("t", "render_options", "Options"),
         ("q", "quit", "Quit"),
+        ("question_mark", "help", "Help"),
     ]
 
     CSS = """
@@ -221,6 +228,23 @@ class ProgramBrowser(Screen):
                 getattr(_opts(self), "cell_dates", False),
             ),
             on_choice,
+        )
+
+    def action_help(self) -> None:
+        self.app.push_screen(
+            HelpModal(
+                """towerkit browser — keys
+
+  enter      open the selected program in the editor
+  n          new blank program
+  c          clone as next renewal (bumps period, marks proposed)
+  d          delete (confirms first)
+  r          render the selected program
+  x          mark two programs to compare (renewal diff)
+  t          render options (theme, totals, premiums, cell extras)
+  q          quit        ?  this help
+"""
+            )
         )
 
     def action_quit(self) -> None:

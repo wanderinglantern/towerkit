@@ -185,3 +185,25 @@ class RenderOptionsModal(ModalScreen[RenderOptions | None]):
             self.dismiss(self._result())
         else:
             self.dismiss(None)
+
+
+class HelpModal(ModalScreen[None]):
+    """Key reference, reachable with '?' — the durable home for shortcuts."""
+
+    BINDINGS = [("escape", "dismiss(None)", "Close"), ("question_mark", "dismiss(None)", "Close")]
+
+    DEFAULT_CSS = """
+    HelpModal { align: center middle; }
+    HelpModal > VerticalScroll {
+        width: 62; max-height: 85%; padding: 1 2;
+        border: thick $primary; background: $surface;
+    }
+    """
+
+    def __init__(self, text: str) -> None:
+        super().__init__()
+        self.help_text = text
+
+    def compose(self) -> ComposeResult:
+        with VerticalScroll():
+            yield Label(self.help_text)
