@@ -141,6 +141,14 @@ class TestEditor:
             labels = [str(n.label) for n in editor._walk(tree.root)]
             assert any("Layers (14)" in label for label in labels)
             assert any("Umbrella" in label for label in labels)
+            # the 80%-placed 3rd Excess is highlighted gold, not just marked
+            from rich.text import Text as RichText
+
+            warn_nodes = [
+                n.label for n in editor._walk(tree.root)
+                if isinstance(n.label, RichText) and "3rd Excess" in str(n.label)
+            ]
+            assert warn_nodes and "#CB7E03" in str(warn_nodes[0].style)
             diags = editor.query_one("#diagnostics")
             assert len(diags.children) == 1  # the 80%-placed warning
 

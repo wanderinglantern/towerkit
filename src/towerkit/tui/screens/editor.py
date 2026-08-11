@@ -15,6 +15,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from rich.text import Text
 from textual import on
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -212,12 +213,14 @@ class EditorScreen(Screen):
     def _refresh_preview(self) -> None:
         self.query_one("#preview", TowerPreview).show_program(self.session.program)
 
-    def _marker(self, diags: list[Diagnostic]) -> str:
+    def _tree_label(self, text: str, diags: list[Diagnostic]) -> Text:
+        """Nodes needing review are highlighted, not just marked: errors in
+        the brand danger red, warnings in gold."""
         if any(d.severity == "error" for d in diags):
-            return " ✗"
+            return Text(f"{text} ✗", style="bold #C53532")
         if diags:
-            return " ⚠"
-        return ""
+            return Text(f"{text} ⚠", style="#CB7E03")
+        return Text(text)
 
     def _refresh_tree(self) -> None:
         tree = self.query_one("#structure", Tree)
@@ -225,33 +228,45 @@ class EditorScreen(Screen):
         diags = self.session.diagnostics()
         tree.clear()
         tree.root.data = ("program", None)
-        tree.root.label = f"{program.insured}{self._marker(diags.for_ref(('program', None)))}"
+        tree.root.label = self._tree_label(program.insured, diags.for_ref(("program", None)))
 
         lines = tree.root.add(f"Lines ({len(program.lines)})", data=("lines-group", None))
         for line in program.lines:
-            marker = self._marker(diags.for_ref(("line", line.id)))
-            lines.add_leaf(f"{line.name}{marker}", data=("line", line.id))
+            lines.add_leaf(
+                self._tree_label(line.name, diags.for_ref(("line", line.id))),
+                data=("line", line.id),
+            )
 
         layers = tree.root.add(f"Layers ({len(program.layers)})", data=("layers-group", None))
         for layer in sorted(program.layers, key=lambda ly: (ly.attach, ly.id)):
-            marker = self._marker(diags.for_ref(("layer", layer.id)))
             spans = "/".join(layer.applies_to)
-            layers.add_leaf(f"{layer.name} [{spans}]{marker}", data=("layer", layer.id))
+            layers.add_leaf(
+                self._tree_label(
+                    f"{layer.name} [{spans}]", diags.for_ref(("layer", layer.id))
+                ),
+                data=("layer", layer.id),
+            )
 
         rets = tree.root.add(
             f"Retentions ({len(program.retentions)})", data=("retentions-group", None)
         )
         for idx, retention in enumerate(program.retentions):
-            marker = self._marker(diags.for_ref(("retention", idx)))
-            label = f"{'/'.join(retention.applies_to)} {retention.type.value}{marker}"
-            rets.add_leaf(label, data=("retention", idx))
+            rets.add_leaf(
+                self._tree_label(
+                    f"{'/'.join(retention.applies_to)} {retention.type.value}",
+                    diags.for_ref(("retention", idx)),
+                ),
+                data=("retention", idx),
+            )
 
         subs = tree.root.add(
             f"Sublimits ({len(program.sublimits)})", data=("sublimits-group", None)
         )
         for idx, sublimit in enumerate(program.sublimits):
-            marker = self._marker(diags.for_ref(("sublimit", idx)))
-            subs.add_leaf(f"{sublimit.name}{marker}", data=("sublimit", idx))
+            subs.add_leaf(
+                self._tree_label(sublimit.name, diags.for_ref(("sublimit", idx))),
+                data=("sublimit", idx),
+            )
 
         tree.root.expand_all()
 
