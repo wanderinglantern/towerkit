@@ -211,7 +211,9 @@ class EditorScreen(Screen):
         self.app.sub_title = f"{program.insured} — {name}{star}"
 
     def _refresh_preview(self) -> None:
-        self.query_one("#preview", TowerPreview).show_program(self.session.program)
+        self.query_one("#preview", TowerPreview).show_program(
+            self.session.program, self.session.diagnostics()
+        )
 
     def _tree_label(self, text: str, diags: list[Diagnostic]) -> Text:
         """Nodes needing review are highlighted, not just marked: errors in

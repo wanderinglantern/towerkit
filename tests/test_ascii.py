@@ -79,3 +79,43 @@ class TestContrastText:
         assert contrast_text("#82BAFF", "#FFF", "#000") == "#000"  # sky blue
         assert contrast_text("#FFBF00", "#FFF", "#000") == "#000"  # gold
         assert contrast_text("#CEECFF", "#FFF", "#000") == "#000"
+
+
+class TestErrorHighlighting:
+    def test_error_layer_renders_in_danger_red(self) -> None:
+        from towerkit.model import load_program
+        from towerkit.render.ascii import DANGER, ansi256, render_ascii
+        from towerkit.theme import load_theme
+
+        program = load_program(SAMPLE)
+        out = render_ascii(
+            program, load_theme(), colour=True,
+            error_layers=frozenset({"umbrella"}),
+        )
+        assert f"\x1b[38;5;{ansi256(DANGER)}m" in out
+
+    def test_error_line_tints_the_gap_background(self) -> None:
+        from towerkit.model import load_program
+        from towerkit.render.ascii import DANGER, ansi256, render_ascii
+        from towerkit.theme import load_theme
+
+        program = load_program(SAMPLE)
+        # seed a gap on gl and highlight the line, as the editor would
+        umbrella = next(ly for ly in program.layers if ly.id == "umbrella")
+        umbrella.attach = 5_000_000
+        out = render_ascii(
+            program, load_theme(), colour=True, error_lines=frozenset({"gl"})
+        )
+        assert f"\x1b[38;5;{ansi256(DANGER)}m" in out
+
+    def test_clean_render_has_no_danger_colour(self) -> None:
+        # marsh palette has no reds, so the danger index cannot collide the
+        # way the default theme's #E45756 does under 256-colour quantisation
+        from towerkit.model import load_program
+        from towerkit.render.ascii import DANGER, ansi256, render_ascii
+        from towerkit.theme import load_theme
+
+        marsh = load_theme(Path(__file__).parent.parent / "themes" / "marsh.json")
+        assert all(ansi256(c) != ansi256(DANGER) for c in marsh.carrier_palette)
+        out = render_ascii(load_program(SAMPLE), marsh, colour=True)
+        assert f"\x1b[38;5;{ansi256(DANGER)}m" not in out

@@ -49,6 +49,9 @@ def ansi256(hex_colour: str) -> int:
     return 16 + 36 * cr + 6 * cg + cb
 
 
+DANGER = "#C53532"
+
+
 def render_ascii(
     program: Program,
     theme: Theme,
@@ -56,11 +59,18 @@ def render_ascii(
     height: int = 26,
     colour: bool = True,
     gamma: float = DEFAULT_GAMMA,
+    error_layers: frozenset[str] = frozenset(),
+    error_lines: frozenset[str] = frozenset(),
 ) -> str:
+    """error_layers / error_lines highlight validation targets in danger red:
+    offending layer blocks recolour, and an error line's empty background
+    tints red — which is precisely where a gap shows."""
     tower = build_layout(program, gamma=gamma)
     if not tower.columns:
         return "(no coverage lines)"
-    return _render_layout(tower, program, theme, width, height, colour)
+    return _render_layout(
+        tower, program, theme, width, height, colour, error_layers, error_lines
+    )
 
 
 def _render_layout(
@@ -70,6 +80,8 @@ def _render_layout(
     width: int,
     height: int,
     colour: bool,
+    error_layers: frozenset[str] = frozenset(),
+    error_lines: frozenset[str] = frozenset(),
 ) -> str:
     label_w = 0 if width < 46 else (14 if width < 76 else 20)
     chart_w = max(len(tower.columns) * 2, width - label_w - 1)
@@ -87,11 +99,15 @@ def _render_layout(
     grid = [[_Cell() for _ in range(chart_w)] for _ in range(tower_rows + 1 + ret_rows + 1)]
     zero_row = tower_rows
 
-    # dim background where a column exists but has no cover at that height
+    # dim background where a column exists but has no cover at that height;
+    # a column with a validation error tints red — a gap lights up exactly
+    # where the missing cover is
     for column in tower.columns:
+        broken = column.line_id in error_lines
+        bg = ansi256(DANGER) if broken else ansi256(theme.chrome.grid)
         for row in range(tower_rows):
             for col in range(to_col(column.x0), to_col(column.x1)):
-                grid[row][col] = _Cell(NO_COVER, ansi256(theme.chrome.grid), dim=True)
+                grid[row][col] = _Cell(NO_COVER, bg, dim=not broken)
 
     # participant blocks (unplaced capacity hatched grey)
     for block in tower.participants:
@@ -100,7 +116,9 @@ def _render_layout(
             r1 = max(r1, r0 + 1)
             c0, c1 = to_col(rect.x0), to_col(rect.x1)
             c1 = max(c1, c0 + 1)
-            if block.carrier is None:
+            if block.layer_id in error_layers:
+                cell = _Cell(FULL, ansi256(DANGER))
+            elif block.carrier is None:
                 cell = _Cell(UNPLACED, ansi256(theme.chrome.unplaced))
             else:
                 cell = _Cell(FULL, ansi256(carrier_colours[block.carrier]))
