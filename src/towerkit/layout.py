@@ -123,13 +123,47 @@ def build_layout(program: Program, gamma: float = DEFAULT_GAMMA) -> TowerLayout:
         for layer in program.layers
         if layer.limit > 0 and any(lid in order for lid in layer.applies_to)
     ]
-    ymap = build_y_map(drawable, gamma=gamma)
+    # a follows-underlying layer has a stepped bottom: one y per column,
+    # sitting on that column's stack — all of them become breakpoints
+    stepped: dict[str, dict[str, int]] = {
+        layer.id: program.underlying_tops(layer)
+        for layer in drawable
+        if layer.follows_underlying
+    }
+    extra_points = [top for tops in stepped.values() for top in tops.values()]
+    ymap = build_y_map(drawable, gamma=gamma, extra_points=extra_points)
 
     layer_blocks: list[LayerBlock] = []
     participant_blocks: list[ParticipantBlock] = []
     for layer in drawable:
         runs = _runs(columns, sorted({order[lid] for lid in layer.applies_to if lid in order}))
         y0, y1 = ymap.y(layer.attach), ymap.y(layer.top)
+        bottoms = None
+        if layer.id in stepped:
+            bottoms = {
+                lid: ymap.y(top) for lid, top in stepped[layer.id].items()
+            }
+        outlines = tuple(Rect(r.x0, y0, r.x1, y1) for r in runs)
+        blocks = _allocate(layer, runs, y0, y1)
+        if bottoms is not None:
+            outlines = tuple(
+                piece
+                for outline in outlines
+                for piece in _step_bottom(outline, columns, order, bottoms)
+            )
+            blocks = [
+                ParticipantBlock(
+                    layer_id=b.layer_id,
+                    carrier=b.carrier,
+                    share_bps=b.share_bps,
+                    rects=tuple(
+                        piece
+                        for rect in b.rects
+                        for piece in _step_bottom(rect, columns, order, bottoms)
+                    ),
+                )
+                for b in blocks
+            ]
         layer_blocks.append(
             LayerBlock(
                 layer_id=layer.id,
@@ -140,10 +174,10 @@ def build_layout(program: Program, gamma: float = DEFAULT_GAMMA) -> TowerLayout:
                 signed_bps=layer.signed_bps,
                 y0=y0,
                 y1=y1,
-                outlines=tuple(Rect(r.x0, y0, r.x1, y1) for r in runs),
+                outlines=outlines,
             )
         )
-        participant_blocks.extend(_allocate(layer, runs, y0, y1))
+        participant_blocks.extend(blocks)
 
     max_retention = max((r.amount for r in program.retentions), default=0)
     retention_blocks: list[RetentionBlock] = []
@@ -261,6 +295,28 @@ def _allocate(layer: Layer, runs: list[Run], y0: float, y1: float) -> list[Parti
             )
         )
     return blocks
+
+
+def _step_bottom(
+    rect: Rect,
+    columns: list[Column],
+    order: dict[str, int],
+    bottoms: dict[str, float],
+) -> list[Rect]:
+    """Split a rectangle at column edges and drop each piece's bottom to its
+    column's underlying top — the stepped bottom of a follows layer. Splits
+    land on the columns' exact drawing-extent floats, so tiling stays exact."""
+    pieces: list[Rect] = []
+    for column in columns:
+        lo = max(rect.x0, column.ex0)
+        hi = min(rect.x1, column.ex1)
+        if hi <= lo:
+            continue
+        x_lo = rect.x0 if lo == rect.x0 else column.ex0
+        x_hi = rect.x1 if hi == rect.x1 else column.ex1
+        y0 = bottoms.get(column.line_id, rect.y0)
+        pieces.append(Rect(x_lo, y0, x_hi, rect.y1))
+    return pieces or [rect]
 
 
 def _to_real(t: float, runs: list[Run]) -> float:

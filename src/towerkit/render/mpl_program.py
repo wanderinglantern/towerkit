@@ -94,10 +94,15 @@ def draw_tower(
             )
 
     # layer titles read as the first line of the leftmost cell's text stack
+    follows = {ly.id for ly in program.layers if ly.follows_underlying}
     titles = {
         layer.layer_id: (
             f"{layer.name}{(note_markers or {}).get(layer.layer_id, '')} — "
-            f"{layer_terms(layer.attach, layer.limit)}"
+            + (
+                f"{format_money_compact(layer.limit)} xs underlying"
+                if layer.layer_id in follows
+                else layer_terms(layer.attach, layer.limit)
+            )
         )
         for layer in tower.layers
     }

@@ -7,6 +7,7 @@ strings, so undo/redo can never drift from what a save would write.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from datetime import date
 from pathlib import Path
@@ -37,6 +38,15 @@ def blank_program() -> Program:
         retentions=[],
         sublimits=[],
     )
+
+
+PLACEHOLDER_ID = re.compile(r"^(layer|line|retention|sublimit)(-\d+)?$")
+
+
+def slugify(name: str) -> str:
+    """'Primary D&O' → 'primary-do': ids nobody has to invent."""
+    slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+    return slug or "item"
 
 
 def suggested_attach(program: Program, line_ids: list[str]) -> int:

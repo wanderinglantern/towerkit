@@ -81,6 +81,7 @@ class Layer(_Model):
     name: str = Field(min_length=1)
     policy_number: str | None = Field(alias="policyNumber", default=None)
     period: Period | None = None
+    follows_underlying: bool = Field(alias="followsUnderlying", default=False)
     applies_to: list[str] = Field(alias="appliesTo", min_length=1)
     attach: Money
     limit: int
@@ -155,6 +156,25 @@ class Program(_Model):
         clone.placement = Placement.PROPOSED
         return clone
 
+    def underlying_tops(self, layer: Layer) -> dict[str, int]:
+        """Per-column top of the stack beneath a follows-underlying layer:
+        for each line it spans, the highest top among ordinary layers whose
+        top does not exceed the follows layer's attachment. This is what the
+        stepped bottom edge sits on."""
+        tops: dict[str, int] = {}
+        for lid in layer.applies_to:
+            candidates = [
+                other.top
+                for other in self.layers
+                if other.id != layer.id
+                and not other.follows_underlying
+                and lid in other.applies_to
+                and other.limit > 0
+                and other.top <= layer.attach
+            ]
+            tops[lid] = max(candidates, default=0)
+        return tops
+
     def carriers(self) -> list[str]:
         """Every carrier, in first-appearance order (stable colour assignment)."""
         seen: dict[str, None] = {}
@@ -181,7 +201,7 @@ _PROGRAM_KEYS = (
 )
 _LINE_KEYS = ("id", "name", "abbr")
 _LAYER_KEYS = (
-    "id", "name", "policyNumber", "period", "appliesTo",
+    "id", "name", "policyNumber", "period", "followsUnderlying", "appliesTo",
     "attach", "limit", "premium", "participants", "notes",
 )
 _PARTICIPANT_KEYS = ("carrier", "share")
@@ -230,6 +250,7 @@ def program_to_jsonable(program: Program) -> dict[str, Any]:
                         if layer.period is not None
                         else None
                     ),
+                    "followsUnderlying": layer.follows_underlying or None,
                     "appliesTo": list(layer.applies_to),
                     "attach": layer.attach,
                     "limit": layer.limit,

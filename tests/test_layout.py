@@ -271,3 +271,65 @@ class TestNoRetentionBand:
         tower = build_layout(program)
         assert tower.retentions == ()
         assert tower.retention_band == 0.0
+
+
+class TestFollowsUnderlying:
+    def make_shared_umbrella(self):
+        # two entity GL columns with different primary limits, one shared
+        # umbrella following the underlying tops
+        return make_program(
+            ["a", "b"],
+            [
+                layer("prim-a", ["a"], 0, 1_000_000, [("X", 10_000)]),
+                layer("prim-b", ["b"], 0, 2_000_000, [("Y", 10_000)]),
+                Layer(
+                    id="umb",
+                    name="Shared Umbrella",
+                    applies_to=["a", "b"],
+                    attach=2_000_000,
+                    limit=10_000_000,
+                    follows_underlying=True,
+                    participants=[Participant(carrier="U", share_bps=10_000)],
+                ),
+            ],
+        )
+
+    def test_stepped_bottom_flat_top(self) -> None:
+        tower = build_layout(self.make_shared_umbrella())
+        umb = next(b for b in tower.layers if b.layer_id == "umb")
+        pieces = sorted(umb.outlines, key=lambda r: r.x0)
+        assert len(pieces) == 2
+        left, right = pieces
+        # column a's bottom sits on its $1M top — lower than b's $2M top
+        assert left.y0 < right.y0
+        assert left.y1 == right.y1  # flat top
+        # bottoms sit exactly on the underlying tops
+        assert left.y0 == tower.ymap.y(1_000_000)
+        assert right.y0 == tower.ymap.y(2_000_000)
+
+    def test_participant_rects_follow_the_steps(self) -> None:
+        tower = build_layout(self.make_shared_umbrella())
+        u_block = next(b for b in tower.participants if b.carrier == "U")
+        bottoms = sorted({r.y0 for r in u_block.rects})
+        assert bottoms == sorted(
+            [tower.ymap.y(1_000_000), tower.ymap.y(2_000_000)]
+        )
+        # pieces still tile the span exactly
+        xs = sorted(u_block.rects, key=lambda r: r.x0)
+        for a, b in zip(xs, xs[1:], strict=False):
+            assert a.x1 == b.x0
+
+    def test_validator_accepts_the_stepped_stack(self) -> None:
+        from towerkit.validate import validate_program
+
+        program = self.make_shared_umbrella()
+        assert not validate_program(program).errors
+
+    def test_validator_rejects_wrong_follows_attach(self) -> None:
+        from towerkit.validate import validate_program
+
+        program = self.make_shared_umbrella()
+        umb = next(ly for ly in program.layers if ly.id == "umb")
+        umb.attach = 1_500_000
+        codes = {d.code for d in validate_program(program).errors}
+        assert "layer-follows-attach" in codes

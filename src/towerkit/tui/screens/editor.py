@@ -56,7 +56,7 @@ from ...money import (
 )
 from ...theme import load_theme
 from ...validate import Diagnostic
-from ..session import EditSession
+from ..session import PLACEHOLDER_ID, EditSession, slugify
 from ..widgets.inputs import (
     CarrierSuggester,
     MoneyInput,
@@ -364,6 +364,11 @@ class EditorScreen(Screen):
         widgets += [
             Label("Attach", classes="field-label"),
             MoneyInput(layer.attach, id="f-layer-attach"),
+            Checkbox(
+                "Follows underlying (stepped bottom on each line's stack)",
+                value=layer.follows_underlying,
+                id="f-layer-follows",
+            ),
             Label("Limit", classes="field-label"),
             MoneyInput(layer.limit if layer.limit > 0 else None, id="f-layer-limit"),
             Label("Premium", classes="field-label"),
@@ -515,7 +520,25 @@ class EditorScreen(Screen):
             return
         value = widget.value.strip()
         if widget.id == "f-line-name" and value:
-            self._mutate_and_refresh(lambda p: setattr(line, "name", value))
+            if PLACEHOLDER_ID.match(line.id):
+                # auto-generate the id from the name, cascading references
+                old, new_id = line.id, self.session.unique_id(slugify(value))
+
+                def rename_line(p: Program) -> None:
+                    line.name = value
+                    line.id = new_id
+                    for ly in p.layers:
+                        ly.applies_to = [new_id if x == old else x for x in ly.applies_to]
+                    for r in p.retentions:
+                        r.applies_to = [new_id if x == old else x for x in r.applies_to]
+                    for s in p.sublimits:
+                        s.applies_to = [new_id if x == old else x for x in s.applies_to]
+
+                self._mutate_and_refresh(rename_line)
+                self.selected = ("line", new_id)
+                self._select_tree_node(self.selected)
+            else:
+                self._mutate_and_refresh(lambda p: setattr(line, "name", value))
         elif widget.id == "f-line-abbr":
             self._mutate_and_refresh(lambda p: setattr(line, "abbr", value or None))
         elif widget.id == "f-line-id" and value and value != line.id:
@@ -542,7 +565,14 @@ class EditorScreen(Screen):
         if wid == "f-layer-name":
             value = widget.value.strip()
             if value:
-                self._mutate_and_refresh(lambda p: setattr(layer, "name", value))
+                def rename(p: Program) -> None:
+                    layer.name = value
+                    if PLACEHOLDER_ID.match(layer.id):
+                        layer.id = self.session.unique_id(slugify(value))
+
+                self._mutate_and_refresh(rename)
+                self.selected = ("layer", layer.id)
+                self._select_tree_node(self.selected)
             return
         if wid == "f-layer-policy":
             policy = widget.value.strip() or None
@@ -685,6 +715,28 @@ class EditorScreen(Screen):
     @on(Checkbox.Changed)
     def _checkbox_changed(self, event: Checkbox.Changed) -> None:
         wid = event.checkbox.id or ""
+        if wid == "f-layer-follows":
+            kind, key = self.selected
+            layer = self._layer(key) if kind == "layer" else None
+            if layer is None:
+                return
+            flag = bool(event.value)
+
+            def set_follows(p: Program) -> None:
+                layer.follows_underlying = flag
+                if flag:
+                    # snap attach to the highest underlying top so the
+                    # validator is satisfied by construction
+                    layer.attach = max(
+                        p.underlying_tops(layer).values(), default=0
+                    )
+
+            self._mutate_and_refresh(set_follows)
+            try:
+                self.query_one("#f-layer-attach", MoneyInput).set_amount(layer.attach)
+            except Exception:
+                pass
+            return
         if not wid.startswith("applies-"):
             return
         line_id = wid.removeprefix("applies-")

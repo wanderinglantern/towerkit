@@ -88,6 +88,8 @@ def validate_program(program: Program) -> Diagnostics:
 
     for layer in program.layers:
         _check_layer(layer, line_ids, diags)
+        if layer.follows_underlying:
+            _check_follows(program, layer, diags)
 
     for line in program.lines:
         _check_line_stack(program, line.id, diags)
@@ -174,34 +176,72 @@ def _check_layer(layer: Layer, line_ids: list[str], diags: Diagnostics) -> None:
         )
 
 
+def _check_follows(program: Program, layer: Layer, diags: Diagnostics) -> None:
+    ref = ("layer", layer.id)
+    tops = program.underlying_tops(layer)
+    highest = max(tops.values(), default=0)
+    if layer.attach != highest:
+        diags.error(
+            "layer-follows-attach",
+            f"{layer.name}: follows-underlying attach must equal the highest "
+            f"underlying top {format_money(highest)}, not {format_money(layer.attach)}",
+            ref,
+        )
+    for lid in layer.applies_to:
+        taller = [
+            other.name
+            for other in program.layers
+            if other.id != layer.id
+            and not other.follows_underlying
+            and lid in other.applies_to
+            and other.limit > 0
+            and other.attach < layer.attach < other.top
+        ]
+        if taller:
+            diags.error(
+                "layer-follows-overlap",
+                f"{layer.name}: overlaps {taller[0]!r} on {lid}",
+                ref,
+            )
+
+
+def _effective_attach(program: Program, layer: Layer, line_id: str) -> int:
+    if layer.follows_underlying:
+        return program.underlying_tops(layer).get(line_id, layer.attach)
+    return layer.attach
+
+
 def _check_line_stack(program: Program, line_id: str, diags: Diagnostics) -> None:
     stack = [
         layer for layer in program.layers_for_line(line_id) if layer.limit > 0
     ]
+    stack.sort(key=lambda ly: _effective_attach(program, ly, line_id))
     line = next(ln for ln in program.lines if ln.id == line_id)
     if not stack:
         diags.error("line-empty", f"{line_id}: no layers cover {line.name}", ("line", line_id))
         return
-    if stack[0].attach != 0:
+    base = _effective_attach(program, stack[0], line_id)
+    if base != 0:
         diags.error(
             "line-base",
             f"{line_id}: lowest layer {stack[0].name!r} attaches at "
-            f"{format_money(stack[0].attach)}, not $0",
+            f"{format_money(base)}, not $0",
             ("line", line_id),
         )
     for below, above in zip(stack, stack[1:], strict=False):
-        if above.attach > below.top:
+        above_attach = _effective_attach(program, above, line_id)
+        if above_attach > below.top:
             diags.error(
                 "line-gap",
                 f"{line_id}: GAP {below.name}→{above.name} at "
-                f"{format_money(below.top)} vs {format_money(above.attach)}",
+                f"{format_money(below.top)} vs {format_money(above_attach)}",
                 ("line", line_id),
             )
-        elif above.attach < below.top:
+        elif above_attach < below.top and not above.follows_underlying:
             diags.error(
                 "line-overlap",
                 f"{line_id}: OVERLAP {below.name}→{above.name} at "
-                f"{format_money(below.top)} vs {format_money(above.attach)}",
+                f"{format_money(below.top)} vs {format_money(above_attach)}",
                 ("line", line_id),
             )
 

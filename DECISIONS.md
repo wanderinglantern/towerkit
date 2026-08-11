@@ -133,3 +133,17 @@ relitigated here.
   left; the footnote marker rides on it. Every wrapped carrier-name form
   keeps its premium line, so long names (Indian Harbor) never silently
   drop the per-cell premium.
+
+## Review round 6 (2026-08-11)
+
+- **IDs auto-generate from names**: new layers/lines carry a placeholder id
+  until first named, then take a slug of the name ("Primary D&O" →
+  "primary-do"), uniquified, with line references cascaded. Ids stay stable
+  after that so renewal comparison (which matches by layer id) keeps working.
+- **`followsUnderlying` layers** (schema addition): a shared umbrella over
+  entity columns with different primary limits draws with a stepped bottom —
+  each column's bottom sits on its own underlying top — and a flat top,
+  labelled "xs underlying". Validation requires attach == highest underlying
+  top and checks contiguity per column using effective attachments. The TUI
+  checkbox snaps attach automatically. Rejected alternative: per-column
+  attach maps on every layer — far bigger surface for the same picture.

@@ -129,6 +129,10 @@
           "description": "Policy effective/expiry when it differs from the program period.",
           "$ref": "#/$defs/period"
         },
+        "followsUnderlying": {
+          "description": "The layer's bottom edge follows the top of each column's underlying stack (stepped attachment, flat top).",
+          "type": "boolean"
+        },
         "appliesTo": {
           "type": "array",
           "minItems": 1,

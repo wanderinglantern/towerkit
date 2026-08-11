@@ -49,9 +49,15 @@ class YMap:
         return lo_y + (hi_y - lo_y) * (dollars - lo_d) / (hi_d - lo_d)
 
 
-def build_y_map(layers: Iterable[Layer], gamma: float = DEFAULT_GAMMA) -> YMap:
-    """Breakpoints are every attach and every top across all layers, plus 0."""
-    points = {0}
+def build_y_map(
+    layers: Iterable[Layer],
+    gamma: float = DEFAULT_GAMMA,
+    extra_points: Iterable[int] = (),
+) -> YMap:
+    """Breakpoints are every attach and every top across all layers, plus 0
+    and any extra points (e.g. the stepped bottoms of a follows-underlying
+    layer) — still one global map."""
+    points = {0, *extra_points}
     for layer in layers:
         points.add(layer.attach)
         points.add(layer.attach + layer.limit)
