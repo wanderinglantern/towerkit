@@ -114,9 +114,19 @@ def draw_tower(
     # fill, "To be placed" — distinct from a partially-open remainder
     pending = {ly.layer_id for ly in tower.layers if ly.signed_bps == 0}
 
+    # the layer title rides the WIDEST cell of each layer — a narrow lead
+    # share must not doom the name
+    def _width(b) -> float:
+        return max((r.width for r in b.rects), default=0.0)
+
+    heading_block: dict[str, int] = {}
+    for index, block in enumerate(tower.participants):
+        best = heading_block.get(block.layer_id)
+        if best is None or _width(block) > _width(tower.participants[best]):
+            heading_block[block.layer_id] = index
+
     # participant blocks
-    lead_seen: set[str] = set()
-    for block in tower.participants:
+    for index, block in enumerate(tower.participants):
         if block.carrier is None:
             if block.layer_id in pending:
                 face, hatch, edge = chrome.background, None, "none"
@@ -143,8 +153,7 @@ def draw_tower(
             period = owner_model.period or program.period
             term = _term_text(period)
         heading = None
-        if block.layer_id not in lead_seen:
-            lead_seen.add(block.layer_id)
+        if heading_block.get(block.layer_id) == index:
             heading = titles[block.layer_id]
         _participant_label(
             ax, block, theme, colours, premium, heading, term,
@@ -267,19 +276,28 @@ def _participant_label(
         if prem_line:
             suffixes.append([prem_line])
         suffixes.append([])
-        candidates = [
+        stacks = [
             "\n".join([form, *suffix])
             for suffix in suffixes
             for form in name_forms
         ]
-        candidates += [block.carrier[:1], ""]
         if heading:
-            # the layer title heads the cell stack, same font as the carrier
-            headed = [f"{heading}\n{c}" for c in candidates[:3] if c]
-            wrapped_heading = "\n".join(textwrap.wrap(heading, 18))
-            if wrapped_heading != heading:
-                headed.append(f"{wrapped_heading}\n{candidates[0]}")
-            candidates = [*headed, *candidates]
+            # the layer NAME is the most important line in the cell: every
+            # heading-bearing combination is tried — down to the heading
+            # alone — before any headless fallback
+            headings = [heading]
+            for width in (18, 13):
+                wrapped = "\n".join(textwrap.wrap(heading, width))
+                if wrapped not in headings:
+                    headings.append(wrapped)
+            candidates = [
+                f"{h}\n{stack}" for stack in stacks for h in headings
+            ]
+            candidates += headings
+            candidates += stacks
+        else:
+            candidates = list(stacks)
+        candidates += [block.carrier[:1], ""]
     _fit_text(ax, rect, candidates, fontsize=8.5, color=text_colour, zorder=5)
 
 

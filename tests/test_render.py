@@ -193,3 +193,38 @@ class TestPendingLayers:
         assert "stroke-dasharray" in text  # the dashed pending outline
         # the partially-open primary keeps its distinct treatment
         assert "20% open" in text
+
+
+class TestLayerNameReliability:
+    def test_name_survives_narrow_lead_share_with_extras_on(self, theme, tmp_path) -> None:
+        from datetime import date
+
+        from towerkit.model import Layer, Line, Participant, Period, Placement, Program
+
+        # lead carrier holds only 10% — the old leftmost-heading rule starved
+        # the title; it must ride the widest cell and keep rendering
+        program = Program(
+            insured="X", program="Y", placement=Placement.BOUND,
+            period=Period(start=date(2026, 1, 1), end=date(2027, 1, 1)),
+            lines=[Line(id=f"l{i}", name=f"Line {i}") for i in range(6)],
+            layers=[
+                *[
+                    Layer(id=f"p{i}", name=f"Primary {i}", applies_to=[f"l{i}"],
+                          attach=0, limit=1_000_000,
+                          participants=[Participant(carrier="Zurich", share_bps=10_000)])
+                    for i in range(6)
+                ],
+                Layer(
+                    id="xs", name="Umbrella Excess", applies_to=[f"l{i}" for i in range(6)],
+                    attach=1_000_000, limit=25_000_000, premium=1_000_000,
+                    participants=[
+                        Participant(carrier="Small Lead Co", share_bps=1_000),
+                        Participant(carrier="AIG", share_bps=9_000),
+                    ],
+                ),
+            ],
+        )
+        out = render_program(
+            program, theme, tmp_path, "t", ["svg"], cell_premiums=True, cell_dates=True
+        )[0]
+        assert "Umbrella Excess" in out.read_text()

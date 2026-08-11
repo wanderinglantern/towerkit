@@ -43,6 +43,14 @@ def blank_program() -> Program:
 PLACEHOLDER_ID = re.compile(r"^(layer|line|retention|sublimit)(-\d+)?$")
 
 
+def ordinal(n: int) -> str:
+    if 10 <= n % 100 <= 20:
+        suffix = "th"
+    else:
+        suffix = {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{suffix}"
+
+
 def slugify(name: str) -> str:
     """'Primary D&O' → 'primary-do': ids nobody has to invent."""
     slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
@@ -76,9 +84,17 @@ class EditSession:
     # -- mutation ------------------------------------------------------------
 
     def mutate(self, fn: Callable[[Program], object]) -> None:
-        """Apply one user-visible edit, snapshotting for undo first."""
+        """Apply one user-visible edit, snapshotting for undo first.
+
+        Follows-underlying layers auto-heal afterwards: their attachment is
+        derived state (the highest underlying top), so editing a lower
+        layer's limit can never strand them."""
         before = dumps_program(self.program)
         fn(self.program)
+        for layer in self.program.layers:
+            if layer.follows_underlying:
+                tops = self.program.underlying_tops(layer)
+                layer.attach = max(tops.values(), default=0)
         after = dumps_program(self.program)
         if after != before:
             self._undo.append(before)
@@ -135,9 +151,22 @@ class EditSession:
     def add_layer(self, line_ids: list[str] | None = None) -> Layer:
         lines = line_ids or ([self.program.lines[0].id] if self.program.lines else [])
         attach = suggested_attach(self.program, lines)
+        if attach == 0:
+            name = "New Layer"
+        else:
+            # count the excess layers already stacked on these lines:
+            # the new one is "1st Excess", "2nd Excess", …
+            n = sum(
+                1
+                for ly in self.program.layers
+                if ly.attach > 0
+                and ly.limit > 0
+                and any(lid in ly.applies_to for lid in lines)
+            )
+            name = f"{ordinal(n + 1)} Excess"
         layer = Layer(
             id=self.unique_id("layer"),
-            name="New Layer",
+            name=name,
             applies_to=lines or ["gl"],
             attach=attach,
             limit=5_000_000,
@@ -145,3 +174,24 @@ class EditSession:
         )
         self.mutate(lambda p: p.layers.append(layer))
         return layer
+
+    def restack(self) -> None:
+        """Recalculate every attachment from the stacking order: each layer
+        lands on top of what its lines already carry. One keystroke heals a
+        tower after limit edits — gaps and overlaps disappear."""
+
+        def reflow(p: Program) -> None:
+            tops: dict[str, int] = {line.id: 0 for line in p.lines}
+            ordered = sorted(
+                (ly for ly in p.layers if ly.limit > 0),
+                key=lambda ly: ly.attach,
+            )
+            for layer in ordered:
+                base = max(
+                    (tops.get(lid, 0) for lid in layer.applies_to), default=0
+                )
+                layer.attach = base
+                for lid in layer.applies_to:
+                    tops[lid] = base + layer.limit
+
+        self.mutate(reflow)

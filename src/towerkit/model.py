@@ -176,10 +176,14 @@ class Program(_Model):
         return clone
 
     def underlying_tops(self, layer: Layer) -> dict[str, int]:
-        """Per-column top of the stack beneath a follows-underlying layer:
-        for each line it spans, the highest top among ordinary layers whose
-        top does not exceed the follows layer's attachment. This is what the
-        stepped bottom edge sits on."""
+        """Per-column top of the stack beneath a follows-underlying layer.
+
+        "Beneath" is decided by attachment order — a layer that STARTS below
+        this one is underlying, however tall it has grown — so editing an
+        underlying limit re-seats the follows layer instead of stranding it.
+        A follows layer still at attach 0 uses its top as the seed threshold.
+        """
+        threshold = layer.attach if layer.attach > 0 else layer.top
         tops: dict[str, int] = {}
         for lid in layer.applies_to:
             candidates = [
@@ -189,7 +193,7 @@ class Program(_Model):
                 and not other.follows_underlying
                 and lid in other.applies_to
                 and other.limit > 0
-                and other.top <= layer.attach
+                and other.attach < threshold
             ]
             tops[lid] = max(candidates, default=0)
         return tops

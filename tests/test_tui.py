@@ -542,3 +542,48 @@ class TestPrimaryQuickSelect:
             await pilot.pause()
             # suggested back onto the top of the gl/al/el stack beneath it
             assert layer.attach > 0
+
+
+class TestStackWorkflow:
+    def test_added_excess_layers_get_ordinal_names(self) -> None:
+        session = EditSession.open(SAMPLE)
+        layer = session.add_layer(["pl"])  # pl stack tops at $25M
+        assert layer.name == "2nd Excess"  # Excess PL already sits above zero
+        assert layer.attach == 25_000_000
+
+    def test_restack_heals_gap_and_overlap(self) -> None:
+        session = EditSession.open(SAMPLE)
+
+        def seed(p):
+            by_id = {ly.id: ly for ly in p.layers}
+            by_id["xs-1"].attach = 30_000_000  # gap below
+            by_id["xs-2"].attach = 50_000_000  # overlap above
+
+        session.mutate(seed)
+        assert not session.diagnostics().ok
+        session.restack()
+        diags = session.diagnostics()
+        assert diags.ok, [str(d) for d in diags.errors]
+        by_id = {ly.id: ly for ly in session.program.layers}
+        assert by_id["xs-1"].attach == 27_000_000
+        assert by_id["xs-2"].attach == 52_000_000
+        assert session.undo()  # restack is one undoable edit
+
+    def test_follows_layer_auto_heals_when_underlying_changes(self) -> None:
+
+        session = EditSession.open(SAMPLE)
+
+        def make_follows(p):
+            by_id = {ly.id: ly for ly in p.layers}
+            by_id["umbrella"].follows_underlying = True
+
+        session.mutate(make_follows)
+        umbrella = next(ly for ly in session.program.layers if ly.id == "umbrella")
+        assert umbrella.attach == 2_000_000
+        # grow the GL primary: the follows umbrella re-seats itself
+        session.mutate(
+            lambda p: setattr(
+                next(ly for ly in p.layers if ly.id == "primary-gl"), "limit", 3_000_000
+            )
+        )
+        assert umbrella.attach == 3_000_000

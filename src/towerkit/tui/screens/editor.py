@@ -82,6 +82,8 @@ Structure
   delete     remove the selected item
   [ / ]      move a selected LINE left/right (column order)
              (shift+↑/↓ also works if your terminal sends it)
+  =          restack: recalculate every attachment so layers sit
+             flush on the stack beneath them (heals gaps/overlaps)
 
 Editing
   enter      commit the field you are typing in
@@ -129,6 +131,7 @@ class EditorScreen(Screen):
         Binding("shift+down", "move_line(1)", show=False),
         ("escape", "back", "Back"),
         ("question_mark", "help", "Help"),
+        ("equals_sign", "restack", "= restack"),
     ]
 
     CSS = """
@@ -1152,6 +1155,11 @@ class EditorScreen(Screen):
         if not _opts(self).show_premiums:
             parts.append("premiums hidden")
         self.notify(" · ".join(parts))
+
+    def action_restack(self) -> None:
+        self.session.restack()
+        self.refresh_all()
+        self.notify("attachments recalculated from the stacking order")
 
     def action_help(self) -> None:
         self.app.push_screen(HelpModal(EDITOR_HELP))
