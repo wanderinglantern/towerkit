@@ -64,11 +64,23 @@ class Participant(_Model):
     share_bps: int = Field(ge=0, le=10_000)
 
 
+class Period(_Model):
+    start: date
+    end: date
+
+
 class Layer(_Model):
-    """A slab of cover: `limit` xs `attach`, spanning the `applies_to` lines."""
+    """A slab of cover: `limit` xs `attach`, spanning the `applies_to` lines.
+
+    `policy_number` and `period` capture the issued policy behind the layer —
+    programs can carry several policy effective/expiry dates, so the period
+    is per-layer, defaulting to the program period when absent. This data
+    also feeds the planned Schedules of Insurance output (v2)."""
 
     id: str = Field(min_length=1)
     name: str = Field(min_length=1)
+    policy_number: str | None = Field(alias="policyNumber", default=None)
+    period: Period | None = None
     applies_to: list[str] = Field(alias="appliesTo", min_length=1)
     attach: Money
     limit: int
@@ -101,11 +113,6 @@ class Sublimit(_Model):
     amount: Money
     applies_to: list[str] = Field(alias="appliesTo", min_length=1)
     notes: str | None = None
-
-
-class Period(_Model):
-    start: date
-    end: date
 
 
 class Program(_Model):
@@ -173,7 +180,10 @@ _PROGRAM_KEYS = (
     "lines", "layers", "retentions", "sublimits", "notes",
 )
 _LINE_KEYS = ("id", "name", "abbr")
-_LAYER_KEYS = ("id", "name", "appliesTo", "attach", "limit", "premium", "participants", "notes")
+_LAYER_KEYS = (
+    "id", "name", "policyNumber", "period", "appliesTo",
+    "attach", "limit", "premium", "participants", "notes",
+)
 _PARTICIPANT_KEYS = ("carrier", "share")
 _RETENTION_KEYS = ("appliesTo", "type", "amount", "aggregate", "vehicle", "notes")
 _SUBLIMIT_KEYS = ("name", "amount", "appliesTo", "notes")
@@ -208,6 +218,18 @@ def program_to_jsonable(program: Program) -> dict[str, Any]:
                 {
                     "id": layer.id,
                     "name": layer.name,
+                    "policyNumber": layer.policy_number,
+                    "period": (
+                        _ordered(
+                            {
+                                "start": layer.period.start.isoformat(),
+                                "end": layer.period.end.isoformat(),
+                            },
+                            _PERIOD_KEYS,
+                        )
+                        if layer.period is not None
+                        else None
+                    ),
                     "appliesTo": list(layer.applies_to),
                     "attach": layer.attach,
                     "limit": layer.limit,

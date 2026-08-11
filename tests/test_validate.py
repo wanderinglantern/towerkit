@@ -313,3 +313,23 @@ class TestCliExitCodes:
             cwd=REPO,
         )
         assert result.returncode == 1
+
+
+class TestLayerPolicyData:
+    def test_backwards_period_is_error(self) -> None:
+        from datetime import date as _date
+
+        from towerkit.model import Period as _Period
+
+        program = load_program(SAMPLE)
+        program.layers[0].period = _Period(
+            start=_date(2026, 6, 1), end=_date(2026, 6, 1)
+        )
+        assert "layer-period" in {d.code for d in validate_program(program).errors}
+
+    def test_policy_number_and_period_round_trip(self) -> None:
+        program = load_program(SAMPLE)
+        umbrella = next(ly for ly in program.layers if ly.id == "umbrella")
+        assert umbrella.policy_number is not None
+        prop = next(ly for ly in program.layers if ly.id == "primary-pr")
+        assert prop.period is not None and prop.period.start.month == 4

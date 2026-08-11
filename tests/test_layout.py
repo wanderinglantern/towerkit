@@ -261,3 +261,13 @@ class TestDrafts:
             make_program(["a"], [])
         )
         assert tower.layers == ()
+
+
+class TestNoRetentionBand:
+    def test_band_collapses_without_retentions(self) -> None:
+        program = make_program(
+            ["a"], [layer("l", ["a"], 0, 1_000_000, [("X", 10_000)])]
+        )
+        tower = build_layout(program)
+        assert tower.retentions == ()
+        assert tower.retention_band == 0.0

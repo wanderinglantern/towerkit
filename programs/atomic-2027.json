@@ -44,6 +44,7 @@
     {
       "id": "primary-gl",
       "name": "Primary GL",
+      "policyNumber": "GLP-2027-004521",
       "appliesTo": [
         "gl"
       ],
@@ -132,6 +133,11 @@
     {
       "id": "primary-pr",
       "name": "Primary Property",
+      "policyNumber": "PRP-2027-77210",
+      "period": {
+        "start": "2027-04-01",
+        "end": "2028-04-01"
+      },
       "appliesTo": [
         "pr"
       ],
@@ -148,6 +154,7 @@
     {
       "id": "umbrella",
       "name": "Umbrella",
+      "policyNumber": "UMB-2027-118834",
       "appliesTo": [
         "gl",
         "al",
@@ -296,6 +303,10 @@
     {
       "id": "xs-pr",
       "name": "Excess Property",
+      "period": {
+        "start": "2027-04-01",
+        "end": "2028-04-01"
+      },
       "appliesTo": [
         "pr"
       ],

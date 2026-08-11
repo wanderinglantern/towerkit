@@ -14,7 +14,7 @@ from ...validate import validate_file
 from ..session import EditSession, blank_program
 from ..widgets.modals import ConfirmModal, PromptModal, RenderOptions, RenderOptionsModal
 from .diff import DiffScreen
-from .editor import EditorScreen
+from .editor import EditorScreen, _opts
 
 
 class ProgramBrowser(Screen):
@@ -172,7 +172,7 @@ class ProgramBrowser(Screen):
 
         written = render_program(
             program, load_theme(self.theme_path), Path("dist"), path.stem, ["svg", "png"],
-            show_totals=self.app.show_totals, show_premiums=self.app.show_premiums,
+            show_totals=_opts(self).show_totals, show_premiums=_opts(self).show_premiums,
         )
         self.notify("rendered: " + ", ".join(str(p) for p in written))
 
@@ -201,15 +201,15 @@ class ProgramBrowser(Screen):
             if options is None:
                 return
             self.theme_path = Path(options.theme) if options.theme else None
-            self.app.show_totals = options.show_totals
-            self.app.show_premiums = options.show_premiums
+            _opts(self).show_totals = options.show_totals
+            _opts(self).show_premiums = options.show_premiums
             from ...theme import load_theme
 
             self.notify(f"theme: {load_theme(self.theme_path).name}")
 
         self.app.push_screen(
             RenderOptionsModal(
-                self.theme_path, self.app.show_totals, self.app.show_premiums
+                self.theme_path, _opts(self).show_totals, _opts(self).show_premiums
             ),
             on_choice,
         )

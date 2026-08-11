@@ -175,7 +175,8 @@ def build_layout(program: Program, gamma: float = DEFAULT_GAMMA) -> TowerLayout:
         ymap=ymap,
         ref_lines=ref_lines,
         width=width,
-        retention_band=RETENTION_BAND,
+        # no retentions drawn → no band, so column labels hug the towers
+        retention_band=RETENTION_BAND if retention_blocks else 0.0,
     )
 
 

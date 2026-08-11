@@ -150,6 +150,14 @@ def _check_layer(layer: Layer, line_ids: list[str], diags: Diagnostics) -> None:
             )
         seen.add(lid)
 
+    if layer.period is not None and layer.period.end <= layer.period.start:
+        diags.error(
+            "layer-period",
+            f"{layer.name}: policy period ends {layer.period.end.isoformat()} "
+            f"on or before it starts {layer.period.start.isoformat()}",
+            ref,
+        )
+
     signed = layer.signed_bps
     if signed > BPS_SCALE:
         diags.error(

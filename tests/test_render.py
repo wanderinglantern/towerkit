@@ -110,3 +110,13 @@ class TestLongCarrierNames:
         )
         out = render_program(program, theme, tmp_path, "t", ["svg"])[0]
         assert "Indian Harbor" in out.read_text()
+
+
+class TestLayerNoteFootnotes:
+    def test_notes_render_as_footnotes_with_markers(self, program, theme, tmp_path) -> None:
+        # the sample's 3rd Excess carries a note
+        out = render_program(program, theme, tmp_path, "t", ["svg"])[0]
+        text = out.read_text()
+        assert "¹ 3rd Excess: 20% open at renewal" in text
+        # the marked title itself renders as paths (halo path-effects), so it
+        # leaves no text comment to assert on — verified visually

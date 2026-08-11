@@ -70,6 +70,11 @@ from ..widgets.preview import TowerPreview
 NodeRef = tuple[str, Any]
 
 
+def _opts(screen: Screen) -> Any:
+    """The running TowerkitApp, which carries the shared render options."""
+    return screen.app
+
+
 class DiagItem(ListItem):
     def __init__(self, label: Label, diag_ref: NodeRef) -> None:
         super().__init__(label)
@@ -332,6 +337,21 @@ class EditorScreen(Screen):
             Label(f"Layer: {layer.name}", classes="field-label"),
             Label("Name", classes="field-label"),
             Input(value=layer.name, id="f-layer-name"),
+            Label("Policy number", classes="field-label"),
+            Input(value=layer.policy_number or "", id="f-layer-policy"),
+            Label("Policy period (ISO; blank = program period)", classes="field-label"),
+            HorizontalGroup(
+                Input(
+                    value=layer.period.start.isoformat() if layer.period else "",
+                    placeholder="start",
+                    id="f-layer-period-start",
+                ),
+                Input(
+                    value=layer.period.end.isoformat() if layer.period else "",
+                    placeholder="end",
+                    id="f-layer-period-end",
+                ),
+            ),
             Label("Applies to", classes="field-label"),
         ]
         widgets.append(self._applies_selector(layer.applies_to))
@@ -518,6 +538,13 @@ class EditorScreen(Screen):
             if value:
                 self._mutate_and_refresh(lambda p: setattr(layer, "name", value))
             return
+        if wid == "f-layer-policy":
+            policy = widget.value.strip() or None
+            self._mutate_and_refresh(lambda p: setattr(layer, "policy_number", policy))
+            return
+        if wid in ("f-layer-period-start", "f-layer-period-end"):
+            self._commit_layer_period(layer)
+            return
         if not isinstance(widget, MoneyInput):
             return
         amount = widget.amount
@@ -531,6 +558,25 @@ class EditorScreen(Screen):
         elif wid == "f-layer-premium":
             self._mutate_and_refresh(lambda p: setattr(layer, "premium", amount))
             self._refresh_participant_premiums(layer)
+
+    def _commit_layer_period(self, layer) -> None:
+        from datetime import date
+
+        start_text = self.query_one("#f-layer-period-start", Input).value.strip()
+        end_text = self.query_one("#f-layer-period-end", Input).value.strip()
+        if not start_text and not end_text:
+            self._mutate_and_refresh(lambda p: setattr(layer, "period", None))
+            return
+        if not (start_text and end_text):
+            return  # half-entered; wait for the other field
+        from ...model import Period
+
+        try:
+            period = Period(start=date.fromisoformat(start_text), end=date.fromisoformat(end_text))
+        except ValueError:
+            self.notify("policy period dates are ISO: 2026-01-01", severity="error")
+            return
+        self._mutate_and_refresh(lambda p: setattr(layer, "period", period))
 
     def _refresh_participant_premiums(self, layer) -> None:
         for idx, participant in enumerate(layer.participants):
@@ -866,7 +912,7 @@ class EditorScreen(Screen):
         stem = self.session.path.stem if self.session.path else "untitled"
         written = render_program(
             self.session.program, self.tower_theme, Path("dist"), stem, ["svg", "png"],
-            show_totals=self.app.show_totals, show_premiums=self.app.show_premiums,
+            show_totals=_opts(self).show_totals, show_premiums=_opts(self).show_premiums,
         )
         self.notify("rendered: " + ", ".join(str(p) for p in written))
         open_cmd = os.environ.get("OPEN_CMD")
@@ -879,13 +925,13 @@ class EditorScreen(Screen):
         def on_choice(options: RenderOptions | None) -> None:
             if options is None:
                 return
-            self.app.show_totals = options.show_totals
-            self.app.show_premiums = options.show_premiums
+            _opts(self).show_totals = options.show_totals
+            _opts(self).show_premiums = options.show_premiums
             self.apply_theme(Path(options.theme) if options.theme else None)
 
         self.app.push_screen(
             RenderOptionsModal(
-                self.theme_path, self.app.show_totals, self.app.show_premiums
+                self.theme_path, _opts(self).show_totals, _opts(self).show_premiums
             ),
             on_choice,
         )
@@ -897,9 +943,9 @@ class EditorScreen(Screen):
         preview.tower_theme = self.tower_theme
         self._refresh_preview()
         parts = [f"theme: {self.tower_theme.name}"]
-        if not self.app.show_totals:
+        if not _opts(self).show_totals:
             parts.append("totals hidden")
-        if not self.app.show_premiums:
+        if not _opts(self).show_premiums:
             parts.append("premiums hidden")
         self.notify(" · ".join(parts))
 
@@ -932,6 +978,9 @@ _FIELD_HANDLERS = {
     "f-line-name": EditorScreen._commit_line_field,
     "f-line-abbr": EditorScreen._commit_line_field,
     "f-layer-name": EditorScreen._commit_layer_field,
+    "f-layer-policy": EditorScreen._commit_layer_field,
+    "f-layer-period-start": EditorScreen._commit_layer_field,
+    "f-layer-period-end": EditorScreen._commit_layer_field,
     "f-layer-attach": EditorScreen._commit_layer_field,
     "f-layer-limit": EditorScreen._commit_layer_field,
     "f-layer-premium": EditorScreen._commit_layer_field,

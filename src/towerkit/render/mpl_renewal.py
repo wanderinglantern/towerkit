@@ -69,7 +69,7 @@ def _headline(
 ) -> None:
     chrome = theme.chrome
     fig.text(
-        0.02, 0.955, expiring.insured, fontsize=16, weight="bold",
+        0.02, 0.955, expiring.insured, fontsize=17,
         color=chrome.ink, family=[chrome.title_font or chrome.font, "DejaVu Serif"],
     )
     fig.text(
@@ -118,7 +118,9 @@ def _table(fig, delta: RenewalDelta, theme: Theme, show_premiums: bool = True) -
         fig.text(x, top, title, fontsize=9, weight="bold", ha=ha, color=chrome.ink)
     fig.lines.clear()
 
-    status_colour = {"NEW": "#2E8540", "RENEWED": chrome.muted, "LAPSED": "#C6373C"}
+    # per the brand accessibility matrix: status text on white uses
+    # Green 1000 for success; danger crimson is shared
+    status_colour = {"NEW": "#2F7500", "RENEWED": chrome.muted, "LAPSED": "#C53532"}
     table_rows = list(delta.rows)
     if not show_premiums:
         # premium impact is hidden, so order by structural impact instead

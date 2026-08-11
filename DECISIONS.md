@@ -90,3 +90,25 @@ relitigated here.
   selection in the app impossible (user-reported confusion).
 - **Bundled Noto LGC lacks the Arrows block**: `font.family` is set as an
   explicit list so matplotlib falls back per-glyph to DejaVu for `→`.
+
+## Review round 4 (2026-08-11)
+
+- **marsh theme corrected against the official brand reference** (user
+  supplied the verified .ase/spec-sheet palette; recorded in repo CLAUDE.md
+  and session memory): categorical series order, traffic-light colours as
+  status-only (renewal chips now Green 1000 / danger crimson), serif
+  headings Regular weight (Marsh Serif has no bold), light tints always
+  carrying midnight text via the luminance rule.
+- **Carrier colours are hash-assigned, no maintained list**: md5(name) picks
+  a preferred palette slot — stable for a carrier across every program and
+  machine — with deterministic probing to a free slot on collision. Theme
+  pins still win if a theme chooses to define them; marsh.json defines none.
+- **Layers capture `policyNumber` and an optional per-layer `period`**
+  (schema addition, recorded per §10): programs carry several policy
+  effective/expiry dates, and this data feeds the planned v2 Schedules of
+  Insurance output. Rendering does not show them yet.
+- **Layer `notes` render as chart footnotes** with superscript markers on
+  the layer titles (single-program chart only; the renewal chart stays
+  focused on deltas).
+- **The retention band collapses when a program has no retentions**, so
+  column labels sit directly under the towers.
