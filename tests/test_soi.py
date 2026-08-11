@@ -1,6 +1,73 @@
 """SOI mapping and theming: pure logic, no Excel here."""
 
+from towerkit.model import Program
+from towerkit.soi import carrier_text, coverage_text, limits_text, retention_text
 from towerkit.theme import SoiStyle, _theme_from_jsonable, load_theme
+
+
+def make_program() -> Program:
+    """Exercises every SOI mapping rule: a grouped tower with quota share,
+    a pending layer, an ungrouped line with a sublimit, a same-group
+    umbrella, and a cross-group follows-underlying umbrella."""
+    return Program.model_validate(
+        {
+            "insured": "Atomic Industries, LLC",
+            "program": "Casualty",
+            "placement": "bound",
+            "period": {"start": "2026-01-01", "end": "2027-01-01"},
+            "lines": [
+                {"id": "gl", "name": "General Liability", "group": "Casualty"},
+                {"id": "al", "name": "Auto Liability", "group": "Casualty"},
+                {"id": "prop", "name": "Property"},
+            ],
+            "layers": [
+                {
+                    "id": "gl-primary", "name": "Primary", "appliesTo": ["gl"],
+                    "attach": 0, "limit": 1_000_000, "premium": 50_000,
+                    "policyNumber": "GL-123",
+                    "period": {"start": "2026-02-01", "end": "2027-02-01"},
+                    "participants": [{"carrier": "Zenith", "share_bps": 10_000}],
+                },
+                {
+                    "id": "gl-x1", "name": "1st Excess", "appliesTo": ["gl"],
+                    "attach": 1_000_000, "limit": 4_000_000, "premium": 30_000,
+                    "participants": [
+                        {"carrier": "Alpha Re", "share_bps": 6_000},
+                        {"carrier": "Beta Syndicate", "share_bps": 4_000},
+                    ],
+                },
+                {
+                    "id": "al-primary", "name": "Primary", "appliesTo": ["al"],
+                    "attach": 0, "limit": 1_000_000,
+                },
+                {
+                    "id": "prop-primary", "name": "Primary", "appliesTo": ["prop"],
+                    "attach": 0, "limit": 10_000_000, "premium": 80_000,
+                    "participants": [{"carrier": "Gamma", "share_bps": 10_000}],
+                },
+                {
+                    "id": "casualty-umbrella", "name": "Umbrella",
+                    "appliesTo": ["gl", "al"], "attach": 5_000_000,
+                    "limit": 5_000_000, "premium": 20_000,
+                    "participants": [{"carrier": "Zenith", "share_bps": 10_000}],
+                },
+                {
+                    "id": "program-umbrella", "name": "Program Umbrella",
+                    "appliesTo": ["gl", "prop"], "followsUnderlying": True,
+                    "attach": 0, "limit": 25_000_000, "premium": 40_000,
+                    "participants": [{"carrier": "Delta", "share_bps": 10_000}],
+                },
+            ],
+            "retentions": [
+                {"appliesTo": ["gl", "al"], "type": "sir", "amount": 250_000,
+                 "aggregate": 1_000_000},
+                {"appliesTo": ["prop"], "type": "deductible", "amount": 100_000},
+            ],
+            "sublimits": [
+                {"name": "Flood", "amount": 5_000_000, "appliesTo": ["prop"]},
+            ],
+        }
+    )
 
 
 class TestSoiStyle:
@@ -25,3 +92,75 @@ class TestSoiStyle:
 
     def test_dark_header_fill_keeps_declared_text(self) -> None:
         assert SoiStyle().effective_header_text == "#FFFFFF"
+
+
+class TestCompositionHelpers:
+    def test_sole_full_share_carrier_is_plain(self) -> None:
+        p = make_program()
+        assert carrier_text(p.layers[0]) == "Zenith"
+
+    def test_quota_share_lists_carriers_with_shares(self) -> None:
+        p = make_program()
+        assert carrier_text(p.layers[1]) == "Alpha Re (60%), Beta Syndicate (40%)"
+
+    def test_no_participants_reads_to_be_placed(self) -> None:
+        p = make_program()
+        assert carrier_text(p.layers[2]) == "To be placed"
+
+    def test_primary_limits_quoted_by_limit_alone(self) -> None:
+        p = make_program()
+        assert limits_text(p.layers[2], p) == "$1,000,000"
+
+    def test_excess_limits_use_xs(self) -> None:
+        p = make_program()
+        assert limits_text(p.layers[1], p) == "$4,000,000 xs $1,000,000"
+
+    def test_follows_underlying_reads_xs_underlying(self) -> None:
+        p = make_program()
+        assert limits_text(p.layers[5], p).startswith("$25,000,000 xs underlying")
+
+    def test_sublimits_appended_to_composed_limits(self) -> None:
+        p = make_program()
+        assert limits_text(p.layers[3], p) == "$10,000,000; Sublimit: Flood $5,000,000"
+
+    def test_limits_detail_wins_verbatim(self) -> None:
+        p = make_program()
+        p.layers[0].limits_detail = "Each Occurrence $1,000,000"
+        assert limits_text(p.layers[0], p) == "Each Occurrence $1,000,000"
+
+    def test_primary_retention_composed_with_aggregate(self) -> None:
+        p = make_program()
+        assert retention_text(p.layers[0], p) == "SIR $250,000; Aggregate $1,000,000"
+
+    def test_excess_retention_blank(self) -> None:
+        p = make_program()
+        assert retention_text(p.layers[1], p) == ""
+
+    def test_follows_layer_counts_as_excess_for_retention(self) -> None:
+        p = make_program()
+        assert retention_text(p.layers[5], p) == ""
+
+    def test_retention_detail_wins_verbatim(self) -> None:
+        p = make_program()
+        p.layers[1].retention_detail = "See policy."
+        assert retention_text(p.layers[1], p) == "See policy."
+
+    def test_sole_layer_on_line_shows_line_name(self) -> None:
+        # Drop the cross-group umbrella so Property genuinely has one layer.
+        p = make_program()
+        p.layers = [layer for layer in p.layers if layer.id != "program-umbrella"]
+        assert coverage_text(p.layers[3], p) == "Property"
+
+    def test_towered_by_umbrella_line_appends_layer_name(self) -> None:
+        # The cross-group umbrella makes Property a two-layer line.
+        p = make_program()
+        assert coverage_text(p.layers[3], p) == "Property — Primary"
+
+    def test_towered_line_appends_layer_name(self) -> None:
+        p = make_program()
+        assert coverage_text(p.layers[0], p) == "General Liability — Primary"
+        assert coverage_text(p.layers[1], p) == "General Liability — 1st Excess"
+
+    def test_multi_line_layer_uses_layer_name_plus_line_labels(self) -> None:
+        p = make_program()
+        assert coverage_text(p.layers[4], p) == "Umbrella (GL, AL)"
