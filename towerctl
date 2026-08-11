@@ -1,3 +1,8 @@
 #!/bin/sh
-# Convenience wrapper around the ./install.sh venv:  ./towerctl edit
+# Convenience wrapper around the ./install.sh venv.
+# Bare `./towerctl` opens the editor (program browser) — the overwhelmingly
+# common case; any arguments pass straight through (validate, render, …).
+if [ $# -eq 0 ]; then
+    set -- edit
+fi
 exec "$(dirname "$0")/.venv/bin/towerctl" "$@"
