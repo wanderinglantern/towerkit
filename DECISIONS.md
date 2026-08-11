@@ -184,3 +184,9 @@ relitigated here.
 - **Follows-underlying layers compose limits as "xs underlying"** — their
   attachment is per-column derived state, so no single dollar figure is
   honest; `limitsDetail` overrides where prose is wanted.
+- **openpyxl chosen over a hand-rolled stdlib xlsx writer** (user call;
+  hand-rolled was recommended to avoid the new dep). Costs accepted and
+  handled: wheelhouse rebuild on release, and a zip-normalization pass in
+  soi_xlsx.py to keep byte-identical output.
+- **SOI dates are real Excel dates** formatted mm/dd/yyyy (sample stores
+  text) — sortable/filterable, visually identical.

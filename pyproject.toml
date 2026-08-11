@@ -13,6 +13,7 @@ dependencies = [
     "rapidfuzz>=3.6",
     "babel>=2.14",
     "dateparser>=1.4.2",
+    "openpyxl>=3.1",
 ]
 
 [project.scripts]
