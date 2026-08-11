@@ -587,3 +587,28 @@ class TestStackWorkflow:
             )
         )
         assert umbrella.attach == 3_000_000
+
+
+class TestNodeDiagnosticsDrillThrough:
+    @pytest.mark.asyncio
+    async def test_selected_line_shows_its_own_warning(self, tmp_path, monkeypatch) -> None:
+        import json
+
+        # a program with intentionally no retentions: every line warns
+        source = json.loads(SAMPLE.read_text())
+        source["retentions"] = []
+        programs = tmp_path / "programs"
+        programs.mkdir()
+        target = programs / "no-ret.json"
+        target.write_text(json.dumps(source))
+        monkeypatch.chdir(tmp_path)
+        app = TowerkitApp(path=target)
+        async with app.run_test(size=(140, 45)) as pilot:
+            editor = app.screen
+            editor.selected = ("line", "gl")
+            await editor._rebuild_detail()
+            await pilot.pause()
+            from textual.widgets import Label
+
+            texts = [str(w.render()) for w in editor.query(Label)]
+            assert any("no retention recorded" in t for t in texts), texts

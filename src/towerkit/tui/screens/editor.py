@@ -141,6 +141,7 @@ class EditorScreen(Screen):
     #preview-pane { width: 1fr; }
     #diagnostics { height: 6; border-top: solid $panel; }
     .field-label { color: $text-muted; margin-top: 1; }
+    .node-diag { margin-top: 1; }
     .row-total { color: $text-muted; }
     Input.-invalid { border: tall $error; }
     #detail Input { width: 1fr; }
@@ -320,6 +321,12 @@ class EditorScreen(Screen):
         detail = self.query_one("#detail", VerticalScroll)
         await detail.remove_children()
         self._commit_ref = self.selected
+        # drill-through: the selected node's own issues sit at the top of
+        # its form, so a flagged line explains itself when you open it
+        node_diags = self.session.diagnostics().for_ref(self.selected)
+        for diag in node_diags:
+            style = "bold #C53532" if diag.severity == "error" else "#CB7E03"
+            await detail.mount(Label(Text(str(diag), style=style), classes="node-diag"))
         kind, key = self.selected
         builders: dict[str, Callable[[Any], list[Any]]] = {
             "program": self._form_program,
