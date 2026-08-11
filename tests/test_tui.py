@@ -349,3 +349,35 @@ class TestLayerNotesField:
             editor._commit_input(notes)
             await pilot.pause()
             assert editor._layer("umbrella").notes == "quota share under negotiation"
+
+
+class TestPersistedRenderSettings:
+    @pytest.mark.asyncio
+    async def test_menu_choice_saves_into_the_program(self, sample_copy, monkeypatch) -> None:
+        import shutil as sh
+
+        themes = sample_copy.parent.parent / "themes"
+        themes.mkdir(exist_ok=True)
+        sh.copy(REPO / "themes" / "marsh.json", themes / "marsh.json")
+        monkeypatch.chdir(sample_copy.parent.parent)
+        app = TowerkitApp(path=sample_copy)
+        async with app.run_test(size=(140, 45)) as pilot:
+            editor = app.screen
+            await pilot.press("t")
+            await pilot.pause()
+            modal = app.screen
+            modal.query_one("#themes").highlighted = 1  # marsh
+            modal.query_one("#opt-cell-premiums").value = True
+            modal.query_one("#apply").press()
+            await pilot.pause()
+            stored = editor.session.program.render
+            assert stored is not None
+            assert stored.theme == "themes/marsh.json"
+            assert stored.cell_premiums is True
+            editor.session.save()
+        # a fresh session opens with the same settings
+        app2 = TowerkitApp(path=sample_copy)
+        async with app2.run_test(size=(140, 45)):
+            editor2 = app2.screen
+            assert editor2.tower_theme.name == "marsh"
+            assert app2.cell_premiums is True

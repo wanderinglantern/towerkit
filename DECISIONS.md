@@ -147,3 +147,7 @@ relitigated here.
   top and checks contiguity per column using effective attachments. The TUI
   checkbox snaps attach automatically. Rejected alternative: per-column
   attach maps on every layer — far bigger surface for the same picture.
+- **Render settings persist in the program file** (`render` block: theme,
+  showTotals, showPremiums, cellPremiums): the options menu writes them,
+  both the TUI and CLI read them as defaults, CLI flags still override —
+  no re-selecting on every session.

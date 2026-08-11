@@ -119,6 +119,9 @@ class EditorScreen(Screen):
         self.session = session
         self.selected: NodeRef = ("program", None)
         self._detail_lock = asyncio.Lock()
+        stored = session.program.render
+        if theme_path is None and stored and stored.theme and Path(stored.theme).is_file():
+            theme_path = Path(stored.theme)
         self.theme_path = theme_path
         self.tower_theme = load_theme(theme_path)
         self._carriers = known_carriers(
@@ -138,6 +141,11 @@ class EditorScreen(Screen):
         yield Footer()
 
     async def on_mount(self) -> None:
+        stored = self.session.program.render
+        if stored is not None:
+            _opts(self).show_totals = stored.show_totals
+            _opts(self).show_premiums = stored.show_premiums
+            _opts(self).cell_premiums = stored.cell_premiums
         self.refresh_all()
         await self._rebuild_detail()
         self.query_one("#structure", Tree).focus()
@@ -996,6 +1004,17 @@ class EditorScreen(Screen):
             _opts(self).show_premiums = options.show_premiums
             _opts(self).cell_premiums = options.cell_premiums
             self.apply_theme(Path(options.theme) if options.theme else None)
+            from ...model import RenderSettings
+
+            settings = RenderSettings(
+                theme=options.theme or None,
+                show_totals=options.show_totals,
+                show_premiums=options.show_premiums,
+                cell_premiums=options.cell_premiums,
+            )
+            # persist with the program so next session opens the same way
+            self.session.mutate(lambda p: setattr(p, "render", settings))
+            self.refresh_all()
 
         self.app.push_screen(
             RenderOptionsModal(

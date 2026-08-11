@@ -116,6 +116,15 @@ class Sublimit(_Model):
     notes: str | None = None
 
 
+class RenderSettings(_Model):
+    """Saved chart options, so a program remembers how it should render."""
+
+    theme: str | None = None  # theme file path; None = built-in default
+    show_totals: bool = Field(alias="showTotals", default=True)
+    show_premiums: bool = Field(alias="showPremiums", default=True)
+    cell_premiums: bool = Field(alias="cellPremiums", default=False)
+
+
 class Program(_Model):
     """A complete placement: one insured, one period, one stack of layers."""
 
@@ -125,6 +134,7 @@ class Program(_Model):
     placement: Placement
     period: Period
     currency: str = "USD"
+    render: RenderSettings | None = None
     lines: list[Line] = Field(default_factory=list)
     layers: list[Layer] = Field(default_factory=list)
     retentions: list[Retention] = Field(default_factory=list)
@@ -197,7 +207,7 @@ def _plus_year(d: date) -> date:
 # arbitrarily, git diffs between renewal years would be unreadable.
 _PROGRAM_KEYS = (
     "$schema", "insured", "program", "placement", "period", "currency",
-    "lines", "layers", "retentions", "sublimits", "notes",
+    "render", "lines", "layers", "retentions", "sublimits", "notes",
 )
 _LINE_KEYS = ("id", "name", "abbr")
 _LAYER_KEYS = (
@@ -208,6 +218,7 @@ _PARTICIPANT_KEYS = ("carrier", "share")
 _RETENTION_KEYS = ("appliesTo", "type", "amount", "aggregate", "vehicle", "notes")
 _SUBLIMIT_KEYS = ("name", "amount", "appliesTo", "notes")
 _PERIOD_KEYS = ("start", "end")
+_RENDER_KEYS = ("theme", "showTotals", "showPremiums", "cellPremiums")
 
 
 def _ordered(raw: dict[str, Any], keys: tuple[str, ...]) -> dict[str, Any]:
@@ -229,6 +240,19 @@ def program_to_jsonable(program: Program) -> dict[str, Any]:
             _PERIOD_KEYS,
         ),
         "currency": program.currency,
+        "render": (
+            _ordered(
+                {
+                    "theme": program.render.theme,
+                    "showTotals": program.render.show_totals,
+                    "showPremiums": program.render.show_premiums,
+                    "cellPremiums": program.render.cell_premiums,
+                },
+                _RENDER_KEYS,
+            )
+            if program.render is not None
+            else None
+        ),
         "lines": [
             _ordered({"id": ln.id, "name": ln.name, "abbr": ln.abbr}, _LINE_KEYS)
             for ln in program.lines

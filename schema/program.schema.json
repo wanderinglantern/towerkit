@@ -39,6 +39,26 @@
       "minLength": 3,
       "maxLength": 3
     },
+    "render": {
+      "description": "Saved chart options so renders don't need re-selecting.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "theme": {
+          "type": "string",
+          "minLength": 1
+        },
+        "showTotals": {
+          "type": "boolean"
+        },
+        "showPremiums": {
+          "type": "boolean"
+        },
+        "cellPremiums": {
+          "type": "boolean"
+        }
+      }
+    },
     "lines": {
       "type": "array",
       "items": {

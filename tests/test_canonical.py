@@ -69,3 +69,21 @@ def test_unicode_survives() -> None:
     program = load_program(SAMPLE)
     program2 = loads_program(dumps_program(program))
     assert program2.insured == program.insured
+
+
+def test_render_settings_round_trip(tmp_path) -> None:
+    from towerkit.model import RenderSettings, dump_program
+
+    program = load_program(SAMPLE)
+    program.render = RenderSettings(
+        theme="themes/marsh.json", show_totals=True,
+        show_premiums=False, cell_premiums=True,
+    )
+    target = tmp_path / "p.json"
+    dump_program(program, target)
+    text = target.read_text()
+    assert '"theme": "themes/marsh.json"' in text
+    reloaded = load_program(target)
+    assert reloaded.render is not None
+    assert reloaded.render.cell_premiums is True
+    assert reloaded.render.show_premiums is False

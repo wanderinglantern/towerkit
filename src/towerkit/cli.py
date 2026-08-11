@@ -123,12 +123,16 @@ def _cmd_render(args: argparse.Namespace) -> int:
     except ProgramInvalidError as exc:
         print(exc, file=sys.stderr)
         return 1
-    theme = load_theme(args.theme)
+    stored = program.render
+    theme_path = args.theme or (Path(stored.theme) if stored and stored.theme else None)
+    theme = load_theme(theme_path)
     formats = [f.strip() for f in args.format.split(",") if f.strip()]
     written = render_program(
         program, theme, out_dir=args.out, stem=args.path.stem, formats=formats,
-        gamma=args.gamma, show_totals=not args.no_totals,
-        show_premiums=not args.no_premiums, cell_premiums=args.cell_premiums,
+        gamma=args.gamma,
+        show_totals=not args.no_totals and (stored.show_totals if stored else True),
+        show_premiums=not args.no_premiums and (stored.show_premiums if stored else True),
+        cell_premiums=args.cell_premiums or bool(stored and stored.cell_premiums),
     )
     for path in written:
         print(path)

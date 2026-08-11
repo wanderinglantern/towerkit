@@ -28,3 +28,27 @@ the session memory (`marsh-brand-colors`); the load-bearing rules:
 - Record open choices in DECISIONS.md; reference-material gaps in NOTES.md.
 - v2 goal: Schedules of Insurance generated from layer policyNumber/period
   data — capture those fields even though rendering doesn't use them yet.
+
+## Grant's chart & product preferences (flagged 2026-08-11)
+
+Rendering:
+- Primaries are quoted by limit alone — never "xs $0".
+- Layer titles are part of the cell text stack (lead carrier's cell, same
+  font/colour as the carrier label) — no bold banner labels.
+- No visible provenance footer and no scale caveat on charts (both were
+  deliberate removals; provenance lives in file metadata).
+- Totals, premiums, and per-cell premiums are toggleable (CLI flags and the
+  TUI `t` menu) — hypothetical program designs are a first-class use case.
+- All column gutters close; reference-line $ labels sit above the line; full
+  line names under columns.
+- Carrier colours: walk the palette blues-first in first-appearance order;
+  no maintained carrier list.
+
+Data / TUI:
+- Ids auto-generate from names (slug on first naming, stable afterwards).
+- Dates accept human forms (Dateparser); files stay ISO.
+- Multi-entity programs: one column per entity; shared umbrellas over
+  differing limits use `followsUnderlying` (stepped bottom, flat top).
+- Client programs go in gitignored `programs/private/` — never commit real
+  client data to this public repo.
+- v2: Schedules of Insurance from policyNumber/period data.
