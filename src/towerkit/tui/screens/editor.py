@@ -155,6 +155,10 @@ class EditorScreen(Screen):
         super().__init__()
         self.session = session
         self.selected: NodeRef = ("program", None)
+        # the node the CURRENT detail form was built for: field commits use
+        # this, never self.selected — a blur-commit racing a tree selection
+        # must not resolve against the newly selected node and drop the edit
+        self._commit_ref: NodeRef = ("program", None)
         self._detail_lock = asyncio.Lock()
         stored = session.program.render
         if theme_path is None and stored and stored.theme and Path(stored.theme).is_file():
@@ -295,6 +299,7 @@ class EditorScreen(Screen):
     async def _rebuild_detail_locked(self) -> None:
         detail = self.query_one("#detail", VerticalScroll)
         await detail.remove_children()
+        self._commit_ref = self.selected
         kind, key = self.selected
         builders: dict[str, Callable[[Any], list[Any]]] = {
             "program": self._form_program,
@@ -357,7 +362,8 @@ class EditorScreen(Screen):
             Label("Name", classes="field-label"),
             Input(value=line.name, id="f-line-name"),
             Label("Column label", classes="field-label"),
-            Input(value=line.abbr or "", id="f-line-abbr", placeholder=line.label),
+            # pre-populated with the name to speed entry; trim or replace it
+            Input(value=line.abbr or line.name, id="f-line-abbr"),
             Label(
                 "Reorder: [ moves this column left · ] moves it right",
                 classes="row-total",
@@ -534,7 +540,7 @@ class EditorScreen(Screen):
 
     def _commit_input(self, widget: Input) -> None:
         wid = widget.id or ""
-        kind, key = self.selected
+        kind, key = self._commit_ref
         handler = _FIELD_HANDLERS.get(wid)
         if handler is not None:
             handler(self, widget)
@@ -568,7 +574,7 @@ class EditorScreen(Screen):
             self._mutate_and_refresh(set_period)
 
     def _commit_line_field(self, widget: Input) -> None:
-        kind, key = self.selected
+        kind, key = self._commit_ref
         line = self._line(key)
         if line is None:
             return
@@ -597,7 +603,7 @@ class EditorScreen(Screen):
             self._mutate_and_refresh(lambda p: setattr(line, "abbr", value or None))
 
     def _commit_layer_field(self, widget: Input) -> None:
-        kind, key = self.selected
+        kind, key = self._commit_ref
         layer = self._layer(key)
         if layer is None:
             return
@@ -676,7 +682,7 @@ class EditorScreen(Screen):
             static.update(prem)
 
     def _commit_retention_field(self, widget: Input) -> None:
-        kind, index = self.selected
+        kind, index = self._commit_ref
         program = self.session.program
         if index >= len(program.retentions):
             return
@@ -698,7 +704,7 @@ class EditorScreen(Screen):
             self._mutate_and_refresh(lambda p: setattr(retention, "aggregate", amount))
 
     def _commit_sublimit_field(self, widget: Input) -> None:
-        kind, index = self.selected
+        kind, index = self._commit_ref
         program = self.session.program
         if index >= len(program.sublimits):
             return
@@ -713,7 +719,7 @@ class EditorScreen(Screen):
                 self._mutate_and_refresh(lambda p: setattr(sublimit, "amount", amount))
 
     def _commit_participant(self, widget: Input, wid: str) -> None:
-        kind, key = self.selected
+        kind, key = self._commit_ref
         layer = self._layer(key)
         if layer is None:
             return
@@ -756,7 +762,7 @@ class EditorScreen(Screen):
     def _checkbox_changed(self, event: Checkbox.Changed) -> None:
         wid = event.checkbox.id or ""
         if wid == "f-layer-follows":
-            kind, key = self.selected
+            kind, key = self._commit_ref
             layer = self._layer(key) if kind == "layer" else None
             if layer is None:
                 return
@@ -780,7 +786,7 @@ class EditorScreen(Screen):
         if not wid.startswith("applies-"):
             return
         line_id = wid.removeprefix("applies-")
-        kind, key = self.selected
+        kind, key = self._commit_ref
         target = None
         if kind == "layer":
             target = self._layer(key)
@@ -814,7 +820,7 @@ class EditorScreen(Screen):
                 lambda p: setattr(p, "placement", Placement(str(value)))
             )
         elif wid == "f-ret-type":
-            kind, index = self.selected
+            kind, index = self._commit_ref
             if kind == "retention" and index < len(self.session.program.retentions):
                 retention = self.session.program.retentions[index]
                 self._mutate_and_refresh(
@@ -826,7 +832,7 @@ class EditorScreen(Screen):
     @on(Button.Pressed)
     async def _button_pressed(self, event: Button.Pressed) -> None:
         wid = event.button.id or ""
-        kind, key = self.selected
+        kind, key = self._commit_ref
         if wid == "add-participant" and kind == "layer":
             layer = self._layer(key)
             if layer is None:

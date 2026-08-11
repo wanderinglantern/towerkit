@@ -467,3 +467,47 @@ class TestHelp:
 
             texts = [str(w.render()) for w in editor.query(Label)]
             assert any("moves this column left" in t for t in texts)
+
+
+class TestBlurCommitRace:
+    @pytest.mark.asyncio
+    async def test_edit_survives_clicking_away(self, sample_copy, monkeypatch) -> None:
+        """Type into a field, then move the tree selection WITHOUT pressing
+        enter: the blur-commit must land on the node the form was built for,
+        not the newly selected one — 'GL OpCo' must not lose its edit."""
+        monkeypatch.chdir(sample_copy.parent.parent)
+        app = TowerkitApp(path=sample_copy)
+        async with app.run_test(size=(140, 45)) as pilot:
+            editor = app.screen
+            editor.selected = ("line", "gl")
+            await editor._rebuild_detail()
+            await pilot.pause()
+            abbr = editor.query_one("#f-line-abbr")
+            abbr.focus()
+            await pilot.pause()
+            abbr.value = "GL OpCo"
+            # selection moves before the blur-commit is processed
+            editor.selected = ("layer", "umbrella")
+            editor._commit_input(abbr)
+            await pilot.pause()
+            line = editor._line("gl")
+            assert line.abbr == "GL OpCo"  # spaces intact, edit not dropped
+
+
+class TestColumnLabelPrefill:
+    @pytest.mark.asyncio
+    async def test_label_prefills_with_name(self, sample_copy, monkeypatch) -> None:
+        monkeypatch.chdir(sample_copy.parent.parent)
+        app = TowerkitApp(path=sample_copy)
+        async with app.run_test(size=(140, 45)) as pilot:
+            editor = app.screen
+            # gl has an explicit abbr in the sample: shows the abbr
+            editor.selected = ("line", "gl")
+            await editor._rebuild_detail()
+            await pilot.pause()
+            assert editor.query_one("#f-line-abbr").value == "GL"
+            # a line without abbr prefills with its name
+            editor.session.mutate(lambda p: setattr(p.lines[0], "abbr", None))
+            await editor._rebuild_detail()
+            await pilot.pause()
+            assert editor.query_one("#f-line-abbr").value == "General Liability"
