@@ -1,0 +1,47 @@
+{
+  "name": "marsh",
+  "chrome": {
+    "background": "#FFFFFF",
+    "ink": "#111C4E",
+    "muted": "#5B6577",
+    "accent": "#002C77",
+    "grid": "#D5DAE4",
+    "zeroLine": "#111C4E",
+    "noCover": "#F1F3F7",
+    "unplaced": "#98A1B3",
+    "font": "DejaVu Sans"
+  },
+  "carrierPalette": [
+    "#00539B",
+    "#E87722",
+    "#2E8540",
+    "#8E6C13",
+    "#00838F",
+    "#C6373C",
+    "#6E6259",
+    "#B5488A",
+    "#5C97BF",
+    "#8A6BBE",
+    "#3E7C59",
+    "#98999B"
+  ],
+  "carriers": {
+    "AIG": "#00539B",
+    "Chubb": "#6E6259",
+    "Zurich": "#0066CC",
+    "Swiss Re": "#8A6BBE",
+    "Munich Re": "#2E8540",
+    "AXA XL": "#00008F",
+    "Berkley": "#E87722",
+    "Liberty": "#F6A800",
+    "Beazley": "#C6373C",
+    "Sompo": "#B5488A",
+    "Travelers": "#D52B1E",
+    "FM Global": "#00838F"
+  },
+  "retentionFills": {
+    "deductible": "#E7E1D3",
+    "sir": "#D6CCB4",
+    "captive": "#BFAE8C"
+  }
+}
