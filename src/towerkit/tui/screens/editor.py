@@ -423,6 +423,11 @@ class EditorScreen(Screen):
         widgets.append(self._applies_selector(layer.applies_to))
         widgets += [
             Label("Attach", classes="field-label"),
+            Checkbox(
+                "Primary — attaches at $0",
+                value=layer.attach == 0,
+                id="f-layer-primary",
+            ),
             MoneyInput(layer.attach, id="f-layer-attach"),
             Checkbox(
                 "Follows underlying (stepped bottom on each line's stack)",
@@ -761,6 +766,36 @@ class EditorScreen(Screen):
     @on(Checkbox.Changed)
     def _checkbox_changed(self, event: Checkbox.Changed) -> None:
         wid = event.checkbox.id or ""
+        if wid == "f-layer-primary":
+            kind, key = self._commit_ref
+            layer = self._layer(key) if kind == "layer" else None
+            if layer is None:
+                return
+            target = layer  # mypy: closures don't keep the None-narrowing
+            if event.value:
+                def make_primary(p: Program) -> None:
+                    target.attach = 0
+                    target.follows_underlying = False
+
+                self._mutate_and_refresh(make_primary)
+            else:
+                # back to an excess: suggest the top of the stack beneath it
+                others = [
+                    ly.top
+                    for ly in self.session.program.layers
+                    if ly.id != layer.id
+                    and ly.limit > 0
+                    and any(lid in ly.applies_to for lid in layer.applies_to)
+                ]
+                suggestion = max(others, default=0)
+                self._mutate_and_refresh(lambda p: setattr(layer, "attach", suggestion))
+                if suggestion:
+                    self.notify(f"attach suggested at {format_money(suggestion)}")
+            try:
+                self.query_one("#f-layer-attach", MoneyInput).set_amount(layer.attach)
+            except Exception:
+                pass
+            return
         if wid == "f-layer-follows":
             kind, key = self._commit_ref
             layer = self._layer(key) if kind == "layer" else None

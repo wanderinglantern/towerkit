@@ -511,3 +511,26 @@ class TestColumnLabelPrefill:
             await editor._rebuild_detail()
             await pilot.pause()
             assert editor.query_one("#f-line-abbr").value == "General Liability"
+
+
+class TestPrimaryQuickSelect:
+    @pytest.mark.asyncio
+    async def test_checkbox_snaps_attach_to_zero_and_back(self, sample_copy, monkeypatch) -> None:
+        monkeypatch.chdir(sample_copy.parent.parent)
+        app = TowerkitApp(path=sample_copy)
+        async with app.run_test(size=(140, 45)) as pilot:
+            editor = app.screen
+            editor.selected = ("layer", "umbrella")
+            await editor._rebuild_detail()
+            await pilot.pause()
+            box = editor.query_one("#f-layer-primary")
+            assert box.value is False  # umbrella attaches at $2M
+            box.value = True
+            await pilot.pause()
+            layer = editor._layer("umbrella")
+            assert layer.attach == 0
+            assert editor.query_one("#f-layer-attach").amount == 0
+            box.value = False
+            await pilot.pause()
+            # suggested back onto the top of the gl/al/el stack beneath it
+            assert layer.attach > 0
