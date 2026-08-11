@@ -75,26 +75,28 @@ def read_rows(path: Path) -> list[dict[str, object]]:
     from openpyxl import load_workbook
 
     wb = load_workbook(path, read_only=True, data_only=True)
-    ws = wb.worksheets[0]
-    rows_iter = ws.iter_rows(values_only=True)
-    header = next(rows_iter, None)
-    if header is None:
-        return []
-    keys = [str(h or "").strip().lower() for h in header]
-    unknown = [k for k in keys if k and k not in CANONICAL_FIELDS]
-    if unknown:
-        raise ValueError(
-            f"unknown columns {unknown!r}; expected {list(CANONICAL_FIELDS)!r}"
-        )
-    out: list[dict[str, object]] = []
-    for raw in rows_iter:
-        row = {
-            # read-only sheets yield ragged rows; short rows are fine
-            k: v
-            for k, v in zip(keys, raw, strict=False)
-            if k and v is not None and v != ""
-        }
-        if row:
-            out.append(row)
-    wb.close()
-    return out
+    try:
+        ws = wb.worksheets[0]
+        rows_iter = ws.iter_rows(values_only=True)
+        header = next(rows_iter, None)
+        if header is None:
+            return []
+        keys = [str(h or "").strip().lower() for h in header]
+        unknown = [k for k in keys if k and k not in CANONICAL_FIELDS]
+        if unknown:
+            raise ValueError(
+                f"unknown columns {unknown!r}; expected {list(CANONICAL_FIELDS)!r}"
+            )
+        out: list[dict[str, object]] = []
+        for raw in rows_iter:
+            row = {
+                # read-only sheets yield ragged rows; short rows are fine
+                k: v
+                for k, v in zip(keys, raw, strict=False)
+                if k and v is not None and v != ""
+            }
+            if row:
+                out.append(row)
+        return out
+    finally:
+        wb.close()

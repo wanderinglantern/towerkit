@@ -98,6 +98,12 @@ def test_parse_tower_pipe_and_hyphen_separators() -> None:
     assert draft.layers[0].premium == 90_000
 
 
+def test_parse_tower_separator_only_line_is_diagnostic_not_crash() -> None:
+    draft = parse_tower("Primary 5M — Chubb\n|\n")
+    assert len(draft.layers) == 1
+    assert any("line 2" in d.message for d in draft.diagnostics.errors)
+
+
 # --- program_from_rows / rows_from_program -------------------------------------
 
 from towerkit.ingest import program_from_rows, rows_from_program  # noqa: E402
@@ -131,6 +137,13 @@ def test_rows_staggered_dates_become_layer_period() -> None:
     draft = program_from_rows(rows, insured="A", program="P")
     assert draft.period == Period(start=date(2026, 10, 1), end=date(2027, 10, 1))
     assert draft.layers[1].period == Period(start=date(2027, 1, 1), end=date(2028, 1, 1))
+
+
+def test_rows_line_name_matching_program_is_reused_not_duplicated() -> None:
+    rows = [dict(ROWS[0]), {**ROWS[1], "line": ""}, {**ROWS[2], "line": ""}]
+    draft = program_from_rows(rows, insured="A", program="Property")
+    assert len(draft.lines) == 1  # "Property" line reused, no duplicate column
+    assert draft.layers[1].applies_to == [draft.lines[0].id]
 
 
 def test_rows_conflicting_band_is_error() -> None:

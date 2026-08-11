@@ -134,7 +134,7 @@ def _try_retention(draft: DraftProgram, text: str, lineno: int, line_id: str) ->
 
 def _try_layer(draft: DraftProgram, text: str, lineno: int, line_id: str) -> None:
     segments = [s.strip() for s in _SEGMENT_SPLIT.split(text) if s.strip()]
-    band = _parse_band(segments[0])
+    band = _parse_band(segments[0]) if segments else None
     if band is None:
         draft.diagnostics.error(
             "paste.layer", f"line {lineno}: cannot read a layer from {text!r}"
@@ -350,14 +350,15 @@ def _line_ids_for(
     names = [n.strip() for n in str(cell or "").split(";") if n.strip()]
     if not names:
         cover_name = draft.program.strip() or "Coverage"
-        if not synthesized:
+        cover = lines_by_name.get(cover_name)  # reuse a real line of that name
+        if cover is None:
             cover = Line(id="cover", name=cover_name)
-            lines_by_name[cover.name] = cover
+            lines_by_name[cover_name] = cover
             draft.lines.append(cover)
             draft.diagnostics.warn(
                 "rows.line", "rows without a line share one synthesized line"
             )
-        return [lines_by_name[cover_name].id], True
+        return [cover.id], True
     ids: list[str] = []
     for name in names:
         line = lines_by_name.get(name)

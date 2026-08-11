@@ -106,6 +106,18 @@ class TestImport:
         assert code == 0
         assert json.loads(out.read_text())["period"]["start"] == "2026-10-01"
 
+    def test_import_csv_unknown_column_exits_nonzero(self, tmp_path, capsys) -> None:
+        bad = tmp_path / "bad.csv"
+        bad.write_text("layer,limit,wibble\nPrimary,10M,x\n")
+        code = main(
+            [
+                "import", str(bad), "-o", str(tmp_path / "x.json"),
+                "--insured", "A", "--program", "P",
+            ]
+        )
+        assert code == 1
+        assert "wibble" in capsys.readouterr().out
+
     def test_import_bad_rows_exits_nonzero(self, tmp_path, capsys) -> None:
         bad = tmp_path / "bad.csv"
         bad.write_text(

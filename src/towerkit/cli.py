@@ -246,7 +246,7 @@ def _cmd_import(args: argparse.Namespace) -> int:
     import csv
 
     from .dates import parse_flexible_date
-    from .ingest import parse_tower, program_from_rows
+    from .ingest import CANONICAL_FIELDS, parse_tower, program_from_rows
     from .model import Period, dump_program
     from .validate import ProgramInvalidError
 
@@ -264,9 +264,15 @@ def _cmd_import(args: argparse.Namespace) -> int:
             )
         elif path.suffix.lower() == ".csv":
             with path.open(newline="", encoding="utf-8") as fh:
+                reader = csv.DictReader(fh)
+                headers = [h.strip().lower() for h in reader.fieldnames or []]
+                unknown = [h for h in headers if h and h not in CANONICAL_FIELDS]
+                if unknown:  # same strictness as the xlsx reader — never drop silently
+                    print(f"unknown columns {unknown!r}; expected {list(CANONICAL_FIELDS)!r}")
+                    return 1
                 rows: list[dict[str, object]] = [
                     {k.strip().lower(): v for k, v in row.items() if v not in (None, "")}
-                    for row in csv.DictReader(fh)
+                    for row in reader
                 ]
             draft = program_from_rows(rows, insured=insured, program=program_name)
         else:
