@@ -102,6 +102,22 @@ def _build_parser() -> argparse.ArgumentParser:
     p_new.add_argument("--theme", type=Path, default=None, help="theme for preview and renders")
     p_new.set_defaults(handler=_cmd_edit)
 
+    p_tpl = sub.add_parser("template", help="write a blank import template workbook")
+    p_tpl.add_argument("out", type=Path, metavar="template.xlsx")
+    p_tpl.set_defaults(handler=_cmd_template)
+
+    p_imp = sub.add_parser(
+        "import", help="build a program file from a schedule (xlsx/csv/text/stdin)"
+    )
+    p_imp.add_argument("source", help="schedule file, or - for pasted text on stdin")
+    p_imp.add_argument("-o", "--out", type=Path, default=None)
+    p_imp.add_argument("--insured", default="")
+    p_imp.add_argument("--program", default="", dest="program_name")
+    p_imp.add_argument("--inception", default="", help="period start for pasted text")
+    p_imp.add_argument("--expiry", default="", help="period end for pasted text")
+    p_imp.add_argument("--edit", action="store_true", help="open the result in the TUI")
+    p_imp.set_defaults(handler=_cmd_import)
+
     return parser
 
 
@@ -217,6 +233,73 @@ def _cmd_edit(args: argparse.Namespace) -> int:
     app = TowerkitApp(path=path, new=args.command == "new", theme_path=args.theme)
     app.run()
     return 0
+
+
+def _cmd_template(args: argparse.Namespace) -> int:
+    from .ingest_template import write_template
+
+    print(write_template(args.out))
+    return 0
+
+
+def _cmd_import(args: argparse.Namespace) -> int:
+    import csv
+
+    from .dates import parse_flexible_date
+    from .ingest import parse_tower, program_from_rows
+    from .model import Period, dump_program
+    from .validate import ProgramInvalidError
+
+    insured, program_name = args.insured, args.program_name
+    source = args.source
+    if source == "-":
+        draft = parse_tower(sys.stdin.read(), insured=insured, program=program_name)
+    else:
+        path = Path(source)
+        if path.suffix.lower() == ".xlsx":
+            from .ingest_template import read_rows
+
+            draft = program_from_rows(
+                read_rows(path), insured=insured, program=program_name
+            )
+        elif path.suffix.lower() == ".csv":
+            with path.open(newline="", encoding="utf-8") as fh:
+                rows: list[dict[str, object]] = [
+                    {k.strip().lower(): v for k, v in row.items() if v not in (None, "")}
+                    for row in csv.DictReader(fh)
+                ]
+            draft = program_from_rows(rows, insured=insured, program=program_name)
+        else:
+            draft = parse_tower(
+                path.read_text(encoding="utf-8"), insured=insured, program=program_name
+            )
+    if draft.period is None and args.inception and args.expiry:
+        start = parse_flexible_date(args.inception)
+        end = parse_flexible_date(args.expiry)
+        if start and end:
+            draft.period = Period(start=start, end=end)
+    for diag in draft.diagnostics.items:
+        print(f"  {diag}")
+    try:
+        program = draft.to_program()
+    except ProgramInvalidError as exc:
+        for diag in exc.diagnostics.errors:
+            print(f"  {diag}")
+        return 1
+    out = args.out or Path(f"{_file_slug(insured)}-{_file_slug(program_name)}.json")
+    dump_program(program, out)
+    print(out)
+    if args.edit:
+        from .tui.app import TowerkitApp
+
+        TowerkitApp(path=out, new=False, theme_path=None).run()
+    return 0
+
+
+def _file_slug(text: str) -> str:
+    import re
+
+    return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-") or "program"
 
 
 def _maybe_open(paths: list[Path]) -> None:

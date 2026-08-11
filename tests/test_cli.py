@@ -59,6 +59,69 @@ def test_soi_default_filename_from_insured(tmp_path, monkeypatch) -> None:
     assert (tmp_path / default_filename(load_program(sample))).exists()
 
 
+class TestImport:
+    def test_template_then_import(self, tmp_path, capsys) -> None:
+        import json
+
+        template = tmp_path / "t.xlsx"
+        assert main(["template", str(template)]) == 0
+        out = tmp_path / "prog.json"
+        code = main(
+            [
+                "import", str(template), "-o", str(out),
+                "--insured", "Example Co", "--program", "Property",
+            ]
+        )
+        assert code == 0
+        data = json.loads(out.read_text())
+        assert data["insured"] == "Example Co"
+        assert len(data["layers"]) == 2
+
+    def test_import_paste_without_period_refuses(self, tmp_path) -> None:
+        paste = tmp_path / "tower.txt"
+        paste.write_text("Primary 10M — Chubb 100% — 250,000\n5M xs 10M — Sompo\n")
+        out = tmp_path / "prog.json"
+        code = main(
+            [
+                "import", str(paste), "-o", str(out),
+                "--insured", "Example Co", "--program", "Casualty",
+            ]
+        )
+        assert code == 1  # no period in pasted text → error, nothing written
+        assert not out.exists()
+
+    def test_import_paste_with_dates(self, tmp_path) -> None:
+        import json
+
+        paste = tmp_path / "tower.txt"
+        paste.write_text("Primary 10M — Chubb 100%\n")
+        out = tmp_path / "prog.json"
+        code = main(
+            [
+                "import", str(paste), "-o", str(out), "--insured", "Example Co",
+                "--program", "Casualty",
+                "--inception", "10/1/2026", "--expiry", "10/1/2027",
+            ]
+        )
+        assert code == 0
+        assert json.loads(out.read_text())["period"]["start"] == "2026-10-01"
+
+    def test_import_bad_rows_exits_nonzero(self, tmp_path, capsys) -> None:
+        bad = tmp_path / "bad.csv"
+        bad.write_text(
+            "layer,limit,attachment,carrier,inception,expiry\n"
+            "Primary,banana,0,Chubb,2026-10-01,2027-10-01\n"
+        )
+        code = main(
+            [
+                "import", str(bad), "-o", str(tmp_path / "x.json"),
+                "--insured", "A", "--program", "P",
+            ]
+        )
+        assert code == 1
+        assert "banana" in capsys.readouterr().out
+
+
 class TestParser:
     def test_no_command_shows_help(self, capsys) -> None:
         assert main([]) == 2
