@@ -1,11 +1,16 @@
-"""Small modal dialogs: confirm and text prompt."""
+"""Small modal dialogs: confirm, text prompt, render options."""
 
 from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+from pathlib import Path
 
 from textual.app import ComposeResult
 from textual.containers import Horizontal, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import Button, Input, Label
+from textual.widgets import Button, Checkbox, Input, Label, OptionList
+from textual.widgets.option_list import Option
 
 
 class ConfirmModal(ModalScreen[bool]):
@@ -68,3 +73,97 @@ class PromptModal(ModalScreen[str | None]):
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         self.dismiss(event.value.strip() or None)
+
+
+@dataclass(frozen=True)
+class RenderOptions:
+    """What the render menu controls; the CLI flags mirror these."""
+
+    theme: str  # "" = built-in default, otherwise a theme file path
+    show_totals: bool
+    show_premiums: bool
+
+
+class RenderOptionsModal(ModalScreen[RenderOptions | None]):
+    """Theme selection plus the totals/premiums toggles. None = cancelled."""
+
+    BINDINGS = [("escape", "dismiss(None)", "Cancel")]
+
+    DEFAULT_CSS = """
+    RenderOptionsModal { align: center middle; }
+    RenderOptionsModal > VerticalScroll {
+        width: 56; max-height: 80%; padding: 1 2;
+        border: thick $primary; background: $surface;
+    }
+    RenderOptionsModal OptionList { max-height: 8; }
+    RenderOptionsModal Horizontal { height: auto; align-horizontal: right; }
+    RenderOptionsModal Button { margin-left: 2; }
+    """
+
+    def __init__(
+        self,
+        current_theme: Path | None,
+        show_totals: bool,
+        show_premiums: bool,
+        themes_dir: Path | None = None,
+    ) -> None:
+        super().__init__()
+        self.current_theme = current_theme
+        self.show_totals = show_totals
+        self.show_premiums = show_premiums
+        self.themes_dir = themes_dir or Path("themes")
+
+    def compose(self) -> ComposeResult:
+        options = [Option(self._label(None, "default (built-in)"), id="")]
+        if self.themes_dir.is_dir():
+            for path in sorted(self.themes_dir.glob("*.json")):
+                name = path.stem
+                try:
+                    name = json.loads(path.read_text(encoding="utf-8")).get("name", name)
+                except (OSError, json.JSONDecodeError):
+                    pass
+                options.append(Option(self._label(path, f"{name} — {path}"), id=str(path)))
+        with VerticalScroll():
+            yield Label("Theme (preview and renders):")
+            yield OptionList(*options, id="themes")
+            yield Checkbox("Show totals in the header", self.show_totals, id="opt-totals")
+            yield Checkbox(
+                "Show premiums (uncheck for hypothetical designs)",
+                self.show_premiums,
+                id="opt-premiums",
+            )
+            with Horizontal():
+                yield Button("Cancel", id="cancel")
+                yield Button("Apply", id="apply", variant="primary")
+
+    def _label(self, path: Path | None, text: str) -> str:
+        mark = "● " if path == self.current_theme else "  "
+        return f"{mark}{text}"
+
+    def on_mount(self) -> None:
+        themes = self.query_one("#themes", OptionList)
+        current = str(self.current_theme) if self.current_theme else ""
+        for index in range(themes.option_count):
+            if themes.get_option_at_index(index).id == current:
+                themes.highlighted = index
+                break
+        themes.focus()
+
+    def _result(self) -> RenderOptions:
+        themes = self.query_one("#themes", OptionList)
+        index = themes.highlighted if themes.highlighted is not None else 0
+        theme_id = themes.get_option_at_index(index).id or ""
+        return RenderOptions(
+            theme=theme_id,
+            show_totals=self.query_one("#opt-totals", Checkbox).value,
+            show_premiums=self.query_one("#opt-premiums", Checkbox).value,
+        )
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        self.dismiss(self._result())
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "apply":
+            self.dismiss(self._result())
+        else:
+            self.dismiss(None)

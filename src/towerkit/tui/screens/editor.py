@@ -64,7 +64,7 @@ from ..widgets.inputs import (
     known_carriers,
     parse_share_pct,
 )
-from ..widgets.modals import ConfirmModal, PromptModal
+from ..widgets.modals import ConfirmModal, PromptModal, RenderOptions, RenderOptionsModal
 from ..widgets.preview import TowerPreview
 
 NodeRef = tuple[str, Any]
@@ -82,6 +82,7 @@ class EditorScreen(Screen):
         ("u", "undo", "Undo"),
         ("ctrl+r", "redo", "Redo"),
         ("r", "render", "Render"),
+        ("t", "render_options", "Options"),
         ("a", "add_node", "Add"),
         ("delete", "remove_node", "Remove"),
         ("escape", "back", "Back"),
@@ -864,7 +865,8 @@ class EditorScreen(Screen):
 
         stem = self.session.path.stem if self.session.path else "untitled"
         written = render_program(
-            self.session.program, self.tower_theme, Path("dist"), stem, ["svg", "png"]
+            self.session.program, self.tower_theme, Path("dist"), stem, ["svg", "png"],
+            show_totals=self.app.show_totals, show_premiums=self.app.show_premiums,
         )
         self.notify("rendered: " + ", ".join(str(p) for p in written))
         open_cmd = os.environ.get("OPEN_CMD")
@@ -872,6 +874,34 @@ class EditorScreen(Screen):
             subprocess.run(
                 [*shlex.split(open_cmd), str(written[0])], check=False
             )
+
+    def action_render_options(self) -> None:
+        def on_choice(options: RenderOptions | None) -> None:
+            if options is None:
+                return
+            self.app.show_totals = options.show_totals
+            self.app.show_premiums = options.show_premiums
+            self.apply_theme(Path(options.theme) if options.theme else None)
+
+        self.app.push_screen(
+            RenderOptionsModal(
+                self.theme_path, self.app.show_totals, self.app.show_premiums
+            ),
+            on_choice,
+        )
+
+    def apply_theme(self, theme_path: Path | None) -> None:
+        self.theme_path = theme_path
+        self.tower_theme = load_theme(theme_path)
+        preview = self.query_one("#preview", TowerPreview)
+        preview.tower_theme = self.tower_theme
+        self._refresh_preview()
+        parts = [f"theme: {self.tower_theme.name}"]
+        if not self.app.show_totals:
+            parts.append("totals hidden")
+        if not self.app.show_premiums:
+            parts.append("premiums hidden")
+        self.notify(" · ".join(parts))
 
     def action_back(self) -> None:
         if self.session.dirty:

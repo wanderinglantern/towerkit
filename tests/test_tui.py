@@ -285,3 +285,34 @@ class TestAppliesToLayout:
                 assert box.region.x + box.region.width <= (
                     detail.region.x + detail.region.width
                 ), f"{line_id} checkbox clipped off the detail pane"
+
+
+class TestRenderOptionsMenu:
+    @pytest.mark.asyncio
+    async def test_menu_sets_theme_and_toggles(self, sample_copy, monkeypatch) -> None:
+        # copy themes next to programs so the menu finds them
+        import shutil as sh
+
+        themes = sample_copy.parent.parent / "themes"
+        themes.mkdir(exist_ok=True)
+        sh.copy(REPO / "themes" / "marsh.json", themes / "marsh.json")
+        monkeypatch.chdir(sample_copy.parent.parent)
+        app = TowerkitApp(path=sample_copy)
+        async with app.run_test(size=(140, 45)) as pilot:
+            editor = app.screen
+            assert editor.tower_theme.name == "default"
+            assert app.show_totals and app.show_premiums
+            await pilot.press("t")
+            await pilot.pause()
+            from towerkit.tui.widgets.modals import RenderOptionsModal
+
+            assert isinstance(app.screen, RenderOptionsModal)
+            modal = app.screen
+            modal.query_one("#themes").highlighted = 1  # marsh
+            modal.query_one("#opt-premiums").value = False
+            modal.query_one("#apply").press()
+            await pilot.pause()
+            assert editor.tower_theme.name == "marsh"
+            assert editor.theme_path == Path("themes/marsh.json")
+            assert app.show_premiums is False
+            assert app.show_totals is True

@@ -162,7 +162,16 @@ def _participant_label(ax: Axes, block, theme: Theme, colours: dict[str, str]) -
         face = colours[block.carrier]
         text_colour = contrast_text(face, theme.chrome.background, theme.chrome.ink)
         share = format_share(block.share_bps)
-        candidates = [f"{block.carrier} {share}", block.carrier, block.carrier[:1], ""]
+        full = f"{block.carrier} {share}"
+        # long carrier names wrap onto several lines before degrading to an
+        # initial — "Indian Harbor Insurance Company" must not render as "I"
+        candidates = [full]
+        for width in (16, 11):
+            for text in (full, block.carrier):
+                wrapped = "\n".join(textwrap.wrap(text, width))
+                if "\n" in wrapped and wrapped not in candidates:
+                    candidates.append(wrapped)
+        candidates += [block.carrier, block.carrier[:1], ""]
     _fit_text(ax, rect, candidates, fontsize=8.5, color=text_colour, zorder=5)
 
 

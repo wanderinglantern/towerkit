@@ -12,7 +12,7 @@ from ...model import dump_program, load_program
 from ...money import format_money
 from ...validate import validate_file
 from ..session import EditSession, blank_program
-from ..widgets.modals import ConfirmModal, PromptModal
+from ..widgets.modals import ConfirmModal, PromptModal, RenderOptions, RenderOptionsModal
 from .diff import DiffScreen
 from .editor import EditorScreen
 
@@ -25,6 +25,7 @@ class ProgramBrowser(Screen):
         ("d", "delete", "Delete"),
         ("r", "render", "Render"),
         ("x", "diff", "Mark/compare"),
+        ("t", "render_options", "Options"),
         ("q", "quit", "Quit"),
     ]
 
@@ -46,7 +47,7 @@ class ProgramBrowser(Screen):
         yield DataTable(id="programs", cursor_type="row")
         yield Static(
             "enter open · n new · c clone as renewal · d delete · r render · "
-            "x mark two programs to compare",
+            "x mark two programs to compare · t render options",
             id="hint",
         )
         yield Footer()
@@ -170,7 +171,8 @@ class ProgramBrowser(Screen):
         from ...theme import load_theme
 
         written = render_program(
-            program, load_theme(self.theme_path), Path("dist"), path.stem, ["svg", "png"]
+            program, load_theme(self.theme_path), Path("dist"), path.stem, ["svg", "png"],
+            show_totals=self.app.show_totals, show_premiums=self.app.show_premiums,
         )
         self.notify("rendered: " + ", ".join(str(p) for p in written))
 
@@ -193,6 +195,24 @@ class ProgramBrowser(Screen):
             DiffScreen(expiring, proposed, self.diff_mark.name, path.name)
         )
         self.diff_mark = None
+
+    def action_render_options(self) -> None:
+        def on_choice(options: RenderOptions | None) -> None:
+            if options is None:
+                return
+            self.theme_path = Path(options.theme) if options.theme else None
+            self.app.show_totals = options.show_totals
+            self.app.show_premiums = options.show_premiums
+            from ...theme import load_theme
+
+            self.notify(f"theme: {load_theme(self.theme_path).name}")
+
+        self.app.push_screen(
+            RenderOptionsModal(
+                self.theme_path, self.app.show_totals, self.app.show_premiums
+            ),
+            on_choice,
+        )
 
     def action_quit(self) -> None:
         self.app.exit()

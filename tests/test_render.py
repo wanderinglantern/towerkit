@@ -79,3 +79,34 @@ class TestTotalsToggle:
             program, theme, tmp_path, "t", ["svg"], show_totals=False
         )[0]
         assert "Total limit" not in out.read_text()
+
+
+class TestLongCarrierNames:
+    def test_long_name_wraps_instead_of_degrading_to_initial(self, theme, tmp_path) -> None:
+        from datetime import date
+
+        from towerkit.model import Layer, Line, Participant, Period, Placement, Program
+
+        program = Program(
+            insured="X",
+            program="Y",
+            placement=Placement.BOUND,
+            period=Period(start=date(2026, 1, 1), end=date(2027, 1, 1)),
+            lines=[Line(id="gl", name="General Liability")],
+            layers=[
+                Layer(
+                    id="p",
+                    name="Primary",
+                    applies_to=["gl"],
+                    attach=0,
+                    limit=5_000_000,
+                    participants=[
+                        Participant(
+                            carrier="Indian Harbor Insurance Company", share_bps=10_000
+                        )
+                    ],
+                )
+            ],
+        )
+        out = render_program(program, theme, tmp_path, "t", ["svg"])[0]
+        assert "Indian Harbor" in out.read_text()
