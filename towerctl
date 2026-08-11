@@ -1,0 +1,3 @@
+#!/bin/sh
+# Convenience wrapper around the ./install.sh venv:  ./towerctl edit
+exec "$(dirname "$0")/.venv/bin/towerctl" "$@"

@@ -39,19 +39,19 @@ company also requires an internal package index, point uv at it:
 export UV_INDEX_URL=https://artifactory.example.com/api/pypi/pypi-remote/simple
 ```
 
-If PyPI is blocked outright, use the **offline wheelhouse** attached to each
-GitHub release — towerkit plus every runtime dependency as wheels for macOS
-(Intel and Apple Silicon, Python 3.12–3.13). No PyPI access needed:
+If PyPI is blocked outright, the repo ships a one-command offline installer —
+the only network access it needs is github.com:
 
 ```bash
-curl -fsSL -o wh.zip https://github.com/wanderinglantern/towerkit/releases/latest/download/towerkit-wheelhouse-macos.zip
-unzip -q wh.zip -d wheelhouse
-python3 -m venv .venv
-.venv/bin/pip install --no-index --find-links wheelhouse towerkit
-.venv/bin/towerctl edit          # run from the repo so programs/ and themes/ resolve
+./install.sh      # downloads the release wheelhouse once, installs into ./.venv
+./towerctl edit   # wrapper around .venv/bin/towerctl
 ```
 
-Maintainers rebuild it with `make wheelhouse` after changing dependencies.
+The wheelhouse holds towerkit plus every runtime dependency as prebuilt wheels
+for macOS (Intel and Apple Silicon, Python 3.12–3.13). `install.sh` installs
+the *current checkout* editable, so re-running it after `git pull` picks up
+code changes without a new release. Maintainers rebuild the wheelhouse with
+`make wheelhouse` after changing dependencies and attach it to the release.
 
 ## Design in one minute
 

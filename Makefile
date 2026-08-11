@@ -42,4 +42,5 @@ wheelhouse:
 	    --platform macosx_11_0_x86_64 --platform macosx_12_0_x86_64 \
 	    --platform macosx_10_9_universal2 --platform macosx_11_0_universal2 -q; \
 	done
+	python3 -m pip download hatchling editables -d wheelhouse --only-binary=:all: -q
 	cd wheelhouse && zip -q -r ../towerkit-wheelhouse-macos.zip *.whl
