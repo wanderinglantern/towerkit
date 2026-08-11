@@ -1,7 +1,18 @@
 """SOI mapping and theming: pure logic, no Excel here."""
 
+import datetime
+
 from towerkit.model import Program
-from towerkit.soi import carrier_text, coverage_text, limits_text, retention_text
+from towerkit.soi import (
+    PROGRAM_WIDE,
+    build_soi,
+    carrier_text,
+    coverage_text,
+    default_filename,
+    limits_text,
+    retention_text,
+    sheet_title,
+)
 from towerkit.theme import SoiStyle, _theme_from_jsonable, load_theme
 
 
@@ -164,3 +175,67 @@ class TestCompositionHelpers:
     def test_multi_line_layer_uses_layer_name_plus_line_labels(self) -> None:
         p = make_program()
         assert coverage_text(p.layers[4], p) == "Umbrella (GL, AL)"
+
+
+class TestBuildSoi:
+    def test_sections_named_groups_then_ungrouped_then_program_wide(self) -> None:
+        sections = build_soi(make_program())
+        assert [s.label for s in sections] == ["Casualty", None, PROGRAM_WIDE]
+
+    def test_casualty_rows_ordered_line_then_attach(self) -> None:
+        casualty = build_soi(make_program())[0]
+        assert [r.coverage for r in casualty.rows] == [
+            "General Liability — Primary",
+            "General Liability — 1st Excess",
+            "Umbrella (GL, AL)",          # same-group umbrella stays in its group
+            "Auto Liability — Primary",
+        ]
+
+    def test_cross_group_layer_lands_program_wide(self) -> None:
+        wide = build_soi(make_program())[2]
+        assert [r.coverage for r in wide.rows] == ["Program Umbrella (GL, Property)"]
+
+    def test_section_premium_totals(self) -> None:
+        sections = build_soi(make_program())
+        assert sections[0].premium_total == 100_000  # 50k + 30k + 20k, pending=0
+        assert sections[1].premium_total == 80_000
+        assert sections[2].premium_total == 40_000
+
+    def test_row_period_falls_back_to_program(self) -> None:
+        rows = build_soi(make_program())[0].rows
+        assert rows[0].effective == datetime.date(2026, 2, 1)   # layer override
+        assert rows[1].effective == datetime.date(2026, 1, 1)   # program period
+
+    def test_insured_and_policy_number(self) -> None:
+        rows = build_soi(make_program())[0].rows
+        assert rows[0].insured == "Atomic Industries, LLC"
+        assert rows[0].policy_number == "GL-123"
+        assert rows[1].policy_number == ""
+
+
+class TestNaming:
+    def test_sheet_title_years_from_period(self) -> None:
+        assert sheet_title(make_program()) == "Casualty SOI - 26-27"
+
+    def test_sheet_title_truncated_to_31_chars(self) -> None:
+        p = make_program()
+        p.program = "An Extremely Long Program Name That Overflows"
+        title = sheet_title(p)
+        assert len(title) <= 31
+        assert title.endswith(" SOI - 26-27")
+
+    def test_sheet_title_strips_illegal_chars(self) -> None:
+        p = make_program()
+        p.program = "Cas[ual]ty: Pro/gram?"
+        assert "[" not in sheet_title(p) and ":" not in sheet_title(p)
+
+    def test_default_filename(self) -> None:
+        assert (
+            default_filename(make_program())
+            == "Atomic Industries, LLC - Schedule of Insurance.xlsx"
+        )
+
+    def test_default_filename_replaces_path_hostile_chars(self) -> None:
+        p = make_program()
+        p.insured = "A/B: C"
+        assert "/" not in default_filename(p) and ":" not in default_filename(p)

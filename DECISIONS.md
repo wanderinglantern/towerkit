@@ -173,3 +173,14 @@ relitigated here.
   (a layer spanning n lines contributes covered/n of its limit and premium,
   integer division). Scattered groups draw as separate bands and warn
   ("group-scattered") suggesting a reorder.
+
+## SOI export (2026-08-11)
+
+- **No grand-total row** at the bottom of the SOI — the sample has none;
+  section roll-ups carry the sums. Revisit if a full-program total is wanted.
+- **Multi-line layers section into their lines' shared group**, else the
+  final "Program-wide" section — so section premium roll-ups never double
+  count a shared layer.
+- **Follows-underlying layers compose limits as "xs underlying"** — their
+  attachment is per-column derived state, so no single dollar figure is
+  honest; `limitsDetail` overrides where prose is wanted.

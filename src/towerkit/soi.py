@@ -7,6 +7,10 @@ rendering libraries)."""
 
 from __future__ import annotations
 
+import re
+from dataclasses import dataclass
+from datetime import date
+
 from .model import Layer, Line, Program
 from .money import BPS_SCALE, format_money, format_share
 
@@ -76,3 +80,98 @@ def coverage_text(layer: Layer, program: Program) -> str:
         return f"{line.name} — {layer.name}"
     labels = ", ".join(line.label for line in lines)
     return f"{layer.name} ({labels})"
+
+
+PROGRAM_WIDE = "Program-wide"
+
+_SHEET_ILLEGAL = re.compile(r"[\\/*?:\[\]]")
+_PATH_HOSTILE = re.compile(r"[\\/:]")
+
+
+@dataclass(frozen=True)
+class SoiRow:
+    insured: str
+    coverage: str
+    carrier: str
+    policy_number: str
+    effective: date
+    expiration: date
+    limits: str
+    retention: str
+    premium: int | None
+
+
+@dataclass(frozen=True)
+class SoiSection:
+    label: str | None
+    rows: tuple[SoiRow, ...]
+
+    @property
+    def premium_total(self) -> int:
+        return sum(row.premium or 0 for row in self.rows)
+
+
+def _section_key(layer: Layer, program: Program) -> str | None:
+    """The section a layer belongs to: its lines' shared group, None when the
+    shared group is absent, PROGRAM_WIDE when its lines span groups."""
+    groups = {line.group for line in _covered_lines(layer, program)}
+    if len(groups) == 1:
+        return groups.pop()
+    return PROGRAM_WIDE
+
+
+def _row(layer: Layer, program: Program) -> SoiRow:
+    period = layer.period or program.period
+    return SoiRow(
+        insured=program.insured,
+        coverage=coverage_text(layer, program),
+        carrier=carrier_text(layer),
+        policy_number=layer.policy_number or "",
+        effective=period.start,
+        expiration=period.end,
+        limits=limits_text(layer, program),
+        retention=retention_text(layer, program),
+        premium=layer.premium,
+    )
+
+
+def build_soi(program: Program) -> list[SoiSection]:
+    line_index = {line.id: i for i, line in enumerate(program.lines)}
+    layer_index = {layer.id: i for i, layer in enumerate(program.layers)}
+
+    def sort_key(layer: Layer) -> tuple[int, int, int]:
+        anchor = min(line_index[lid] for lid in layer.applies_to if lid in line_index)
+        return (anchor, layer.attach, layer_index[layer.id])
+
+    buckets: dict[str | None, list[Layer]] = {}
+    for layer in program.layers:
+        buckets.setdefault(_section_key(layer, program), []).append(layer)
+
+    order: list[str | None] = []
+    for line in program.lines:  # named groups by first appearance
+        if line.group is not None and line.group in buckets and line.group not in order:
+            order.append(line.group)
+    if None in buckets:
+        order.append(None)
+    if PROGRAM_WIDE in buckets:
+        order.append(PROGRAM_WIDE)
+
+    return [
+        SoiSection(
+            label=key,
+            rows=tuple(_row(layer, program) for layer in sorted(buckets[key], key=sort_key)),
+        )
+        for key in order
+    ]
+
+
+def sheet_title(program: Program) -> str:
+    suffix = (
+        f" SOI - {program.period.start.year % 100:02d}-{program.period.end.year % 100:02d}"
+    )
+    name = _SHEET_ILLEGAL.sub("", program.program).strip()
+    return name[: 31 - len(suffix)].rstrip() + suffix
+
+
+def default_filename(program: Program) -> str:
+    return f"{_PATH_HOSTILE.sub('-', program.insured)} - Schedule of Insurance.xlsx"
