@@ -144,6 +144,38 @@ def test_rows_bad_money_is_diagnostic_with_row_number() -> None:
     assert any("row 1" in d.message for d in draft.diagnostics.errors)
 
 
+# --- template workbook ----------------------------------------------------------
+
+from pathlib import Path  # noqa: E402
+
+from towerkit.ingest_template import COLUMNS, read_rows, write_template  # noqa: E402
+
+
+def test_template_round_trips_clean(tmp_path: Path) -> None:
+    out = write_template(tmp_path / "template.xlsx")
+    rows = read_rows(out)
+    draft = program_from_rows(rows, insured="Example Co", program="Property")
+    assert draft.diagnostics.ok
+    assert draft.to_program().total_limit() == 25_000_000
+
+
+def test_template_columns_match_canonical() -> None:
+    from towerkit.ingest import CANONICAL_FIELDS
+
+    assert tuple(c.key for c in COLUMNS) == CANONICAL_FIELDS
+
+
+def test_read_rows_rejects_unknown_header(tmp_path: Path) -> None:
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    wb.active.append(["layer", "limit", "wibble"])
+    path = tmp_path / "bad.xlsx"
+    wb.save(path)
+    with pytest.raises(ValueError, match="wibble"):
+        read_rows(path)
+
+
 def test_round_trip_program_rows_program() -> None:
     original = program_from_rows(ROWS, insured="Atomic", program="Property").to_program()
     again = program_from_rows(
