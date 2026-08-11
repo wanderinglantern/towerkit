@@ -141,3 +141,11 @@ class TestCellPremiums:
             show_premiums=False, cell_premiums=True,
         )[0]
         assert "$2.34M" not in out.read_text()
+
+
+class TestLayerTerms:
+    def test_primary_shows_limit_only_no_xs_zero(self) -> None:
+        from towerkit.render.mpl_program import layer_terms
+
+        assert layer_terms(0, 5_000_000) == "$5M"
+        assert layer_terms(2_000_000, 25_000_000) == "$25M xs $2M"

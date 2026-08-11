@@ -123,7 +123,7 @@ def draw_tower(
                     facecolor="none", edgecolor=chrome.ink, linewidth=1.1, zorder=3,
                 )
             )
-        terms = f"{format_money_compact(layer.limit)} xs {format_money_compact(layer.attach)}"
+        terms = layer_terms(layer.attach, layer.limit)
         mark = (note_markers or {}).get(layer.layer_id, "")
         _fit_text(
             ax,
@@ -175,6 +175,14 @@ def draw_tower(
             ha="center", va="top", fontsize=9, color=chrome.ink, weight="bold",
         )
     return tower
+
+
+def layer_terms(attach: int, limit: int) -> str:
+    """Market convention: a primary is quoted by its limit alone — 'xs $0'
+    is meaningless and reads as an error on a chart."""
+    if attach > 0:
+        return f"{format_money_compact(limit)} xs {format_money_compact(attach)}"
+    return format_money_compact(limit)
 
 
 def _participant_label(

@@ -123,3 +123,7 @@ relitigated here.
 - **Flexible date entry via Dateparser** (the mandated parsing library):
   the TUI accepts "1/15/2026", "Jan 15 2026", "April 2026" etc., echoes the
   canonical ISO form back into the field, and files on disk stay ISO.
+- **Primaries are quoted by limit alone** ("Primary D&O — $5M"): the
+  "xs $0" suffix only appears on layers that actually attach above zero —
+  "excess of nothing" reads as an error to a market audience (user-reported
+  on a real program).
