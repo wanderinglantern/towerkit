@@ -138,6 +138,16 @@ class Program(_Model):
     def total_premium(self) -> int:
         return sum(layer.premium or 0 for layer in self.layers)
 
+    def clone_as_renewal(self) -> Program:
+        """Deep-copy, bump the period by a year, mark proposed — the single
+        most common real workflow (browser: 'clone as next renewal')."""
+        clone = self.model_copy(deep=True)
+        clone.period = Period(
+            start=_plus_year(self.period.start), end=_plus_year(self.period.end)
+        )
+        clone.placement = Placement.PROPOSED
+        return clone
+
     def carriers(self) -> list[str]:
         """Every carrier, in first-appearance order (stable colour assignment)."""
         seen: dict[str, None] = {}
@@ -145,6 +155,13 @@ class Program(_Model):
             for participant in layer.participants:
                 seen.setdefault(participant.carrier, None)
         return list(seen)
+
+
+def _plus_year(d: date) -> date:
+    try:
+        return d.replace(year=d.year + 1)
+    except ValueError:  # Feb 29
+        return d.replace(year=d.year + 1, day=28)
 
 
 # --- canonical serialisation -------------------------------------------------

@@ -1,0 +1,390 @@
+{
+  "$schema": "https://towerkit.dev/schema/program.schema.json",
+  "insured": "Atomic Industries, Inc.",
+  "program": "Global Casualty & Financial Lines",
+  "placement": "proposed",
+  "period": {
+    "start": "2027-01-01",
+    "end": "2028-01-01"
+  },
+  "currency": "USD",
+  "lines": [
+    {
+      "id": "gl",
+      "name": "General Liability",
+      "abbr": "GL"
+    },
+    {
+      "id": "al",
+      "name": "Auto Liability",
+      "abbr": "AL"
+    },
+    {
+      "id": "el",
+      "name": "Employers Liability",
+      "abbr": "EL"
+    },
+    {
+      "id": "pl",
+      "name": "Professional Liability",
+      "abbr": "PL"
+    },
+    {
+      "id": "cy",
+      "name": "Cyber",
+      "abbr": "CY"
+    },
+    {
+      "id": "pr",
+      "name": "Property",
+      "abbr": "PR"
+    }
+  ],
+  "layers": [
+    {
+      "id": "primary-gl",
+      "name": "Primary GL",
+      "appliesTo": [
+        "gl"
+      ],
+      "attach": 0,
+      "limit": 2000000,
+      "premium": 1850000,
+      "participants": [
+        {
+          "carrier": "Zurich",
+          "share": 1
+        }
+      ]
+    },
+    {
+      "id": "primary-al",
+      "name": "Primary Auto",
+      "appliesTo": [
+        "al"
+      ],
+      "attach": 0,
+      "limit": 2000000,
+      "premium": 950000,
+      "participants": [
+        {
+          "carrier": "Travelers",
+          "share": 1
+        }
+      ]
+    },
+    {
+      "id": "primary-el",
+      "name": "Primary EL",
+      "appliesTo": [
+        "el"
+      ],
+      "attach": 0,
+      "limit": 2000000,
+      "premium": 400000,
+      "participants": [
+        {
+          "carrier": "Zurich",
+          "share": 1
+        }
+      ]
+    },
+    {
+      "id": "primary-pl",
+      "name": "Primary PL",
+      "appliesTo": [
+        "pl"
+      ],
+      "attach": 0,
+      "limit": 5000000,
+      "premium": 1200000,
+      "participants": [
+        {
+          "carrier": "Beazley",
+          "share": 0.7
+        },
+        {
+          "carrier": "Sompo",
+          "share": 0.3
+        }
+      ]
+    },
+    {
+      "id": "primary-cy",
+      "name": "Primary Cyber",
+      "appliesTo": [
+        "cy"
+      ],
+      "attach": 0,
+      "limit": 5000000,
+      "premium": 1600000,
+      "participants": [
+        {
+          "carrier": "Beazley",
+          "share": 0.5
+        },
+        {
+          "carrier": "Coalition",
+          "share": 0.5
+        }
+      ]
+    },
+    {
+      "id": "primary-pr",
+      "name": "Primary Property",
+      "appliesTo": [
+        "pr"
+      ],
+      "attach": 0,
+      "limit": 10000000,
+      "premium": 3100000,
+      "participants": [
+        {
+          "carrier": "FM Global",
+          "share": 1
+        }
+      ]
+    },
+    {
+      "id": "umbrella",
+      "name": "Umbrella",
+      "appliesTo": [
+        "gl",
+        "al",
+        "el"
+      ],
+      "attach": 2000000,
+      "limit": 25000000,
+      "premium": 4300000,
+      "participants": [
+        {
+          "carrier": "AIG",
+          "share": 0.6
+        },
+        {
+          "carrier": "Berkley",
+          "share": 0.4
+        }
+      ]
+    },
+    {
+      "id": "xs-1",
+      "name": "1st Excess",
+      "appliesTo": [
+        "gl",
+        "al",
+        "el"
+      ],
+      "attach": 27000000,
+      "limit": 25000000,
+      "premium": 2100000,
+      "participants": [
+        {
+          "carrier": "Chubb",
+          "share": 0.5
+        },
+        {
+          "carrier": "Zurich",
+          "share": 0.25
+        },
+        {
+          "carrier": "AXA XL",
+          "share": 0.25
+        }
+      ]
+    },
+    {
+      "id": "xs-2",
+      "name": "2nd Excess",
+      "appliesTo": [
+        "gl",
+        "al",
+        "el"
+      ],
+      "attach": 52000000,
+      "limit": 50000000,
+      "premium": 2850000,
+      "participants": [
+        {
+          "carrier": "Swiss Re",
+          "share": 0.55
+        },
+        {
+          "carrier": "Munich Re",
+          "share": 0.45
+        }
+      ]
+    },
+    {
+      "id": "xs-3",
+      "name": "3rd Excess",
+      "appliesTo": [
+        "gl",
+        "al",
+        "el"
+      ],
+      "attach": 102000000,
+      "limit": 100000000,
+      "premium": 2900000,
+      "participants": [
+        {
+          "carrier": "Berkshire Hathaway",
+          "share": 0.45
+        },
+        {
+          "carrier": "Chubb",
+          "share": 0.35
+        },
+        {
+          "carrier": "Fairfax",
+          "share": 0.2
+        }
+      ]
+    },
+    {
+      "id": "xs-pl",
+      "name": "Excess PL",
+      "appliesTo": [
+        "pl"
+      ],
+      "attach": 5000000,
+      "limit": 20000000,
+      "premium": 900000,
+      "participants": [
+        {
+          "carrier": "Sompo",
+          "share": 1
+        }
+      ]
+    },
+    {
+      "id": "xs-cy-1",
+      "name": "1st Excess Cyber",
+      "appliesTo": [
+        "cy"
+      ],
+      "attach": 5000000,
+      "limit": 20000000,
+      "premium": 1050000,
+      "participants": [
+        {
+          "carrier": "Chubb",
+          "share": 0.55
+        },
+        {
+          "carrier": "AXA XL",
+          "share": 0.45
+        }
+      ]
+    },
+    {
+      "id": "xs-cy-2",
+      "name": "2nd Excess Cyber",
+      "appliesTo": [
+        "cy"
+      ],
+      "attach": 25000000,
+      "limit": 25000000,
+      "premium": 700000,
+      "participants": [
+        {
+          "carrier": "Munich Re",
+          "share": 1
+        }
+      ]
+    },
+    {
+      "id": "xs-pr",
+      "name": "Excess Property",
+      "appliesTo": [
+        "pr"
+      ],
+      "attach": 10000000,
+      "limit": 90000000,
+      "premium": 2950000,
+      "participants": [
+        {
+          "carrier": "Swiss Re",
+          "share": 0.3334
+        },
+        {
+          "carrier": "Munich Re",
+          "share": 0.3333
+        },
+        {
+          "carrier": "AXA XL",
+          "share": 0.3333
+        }
+      ]
+    }
+  ],
+  "retentions": [
+    {
+      "appliesTo": [
+        "gl"
+      ],
+      "type": "deductible",
+      "amount": 250000
+    },
+    {
+      "appliesTo": [
+        "al"
+      ],
+      "type": "deductible",
+      "amount": 100000
+    },
+    {
+      "appliesTo": [
+        "el"
+      ],
+      "type": "deductible",
+      "amount": 250000
+    },
+    {
+      "appliesTo": [
+        "pl"
+      ],
+      "type": "sir",
+      "amount": 500000
+    },
+    {
+      "appliesTo": [
+        "cy"
+      ],
+      "type": "sir",
+      "amount": 1000000
+    },
+    {
+      "appliesTo": [
+        "pr"
+      ],
+      "type": "captive",
+      "amount": 1000000,
+      "aggregate": 5000000,
+      "vehicle": "Atomic Re Ltd."
+    }
+  ],
+  "sublimits": [
+    {
+      "name": "Flood",
+      "amount": 25000000,
+      "appliesTo": [
+        "pr"
+      ]
+    },
+    {
+      "name": "Earthquake",
+      "amount": 25000000,
+      "appliesTo": [
+        "pr"
+      ]
+    },
+    {
+      "name": "Ransomware",
+      "amount": 5000000,
+      "appliesTo": [
+        "cy"
+      ]
+    }
+  ]
+}
