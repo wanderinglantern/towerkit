@@ -17,7 +17,7 @@ from ..model import Program
 from ..money import format_money, format_money_compact
 from ..scale import DEFAULT_GAMMA
 from ..theme import Theme
-from .common import provenance, rc_params, save_figure
+from .common import rc_params, save_figure
 from .mpl_program import draw_tower
 
 MAX_TABLE_ROWS = 18
@@ -45,11 +45,6 @@ def render_renewal(
             _headline(fig, expiring, proposed, delta, theme)
             _table(fig, delta, theme)
             chrome = theme.chrome
-            fig.text(
-                0.98, 0.012,
-                f"{provenance()} · theme {theme.name}",
-                fontsize=8, ha="right", color=chrome.muted,
-            )
             caveat = (
                 f"Vertical scale compressed (γ = {gamma:g}) — NOT TO SCALE. "
                 "Each tower is scaled to its own breakpoints."

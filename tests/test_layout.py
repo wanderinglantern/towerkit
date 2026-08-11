@@ -181,6 +181,55 @@ class TestAllocation:
             self.assert_no_overlap(tower, block.layer_id)
 
 
+class TestJoinedGutters:
+    def test_same_tower_monoline_bands_meet_edge_to_edge(self) -> None:
+        # An umbrella spans a+b, so the a-b gutter closes: the two monoline
+        # primaries extend half a gutter each and share a bit-identical edge.
+        program = make_program(
+            ["a", "b", "c"],
+            [
+                layer("prim-a", ["a"], 0, 2_000_000, [("X", 10_000)]),
+                layer("prim-b", ["b"], 0, 2_000_000, [("Y", 10_000)]),
+                layer("prim-c", ["c"], 0, 2_000_000, [("Z", 10_000)]),
+                layer("umb", ["a", "b"], 2_000_000, 5_000_000, [("U", 10_000)]),
+            ],
+        )
+        tower = build_layout(program)
+        prim_a = next(b for b in tower.layers if b.layer_id == "prim-a")
+        prim_b = next(b for b in tower.layers if b.layer_id == "prim-b")
+        prim_c = next(b for b in tower.layers if b.layer_id == "prim-c")
+        assert prim_a.outlines[0].x1 == prim_b.outlines[0].x0  # gutter closed
+        # b-c gutter stays open: c is a separate tower
+        assert prim_b.outlines[0].x1 < prim_c.outlines[0].x0
+
+    def test_spanning_layer_extent_unchanged_at_tower_edges(self) -> None:
+        program = make_program(
+            ["a", "b", "c"],
+            [
+                layer("prim-a", ["a"], 0, 1, [("X", 10_000)]),
+                layer("prim-b", ["b"], 0, 1, [("Y", 10_000)]),
+                layer("umb", ["a", "b"], 1, 5, [("U", 10_000)]),
+            ],
+        )
+        tower = build_layout(program)
+        umb = next(b for b in tower.layers if b.layer_id == "umb")
+        cols = {c.line_id: c for c in tower.columns}
+        # the tower's outer silhouette is still the nominal column edges
+        assert umb.outlines[0].x0 == cols["a"].x0
+        assert umb.outlines[0].x1 == cols["b"].x1
+
+    def test_retentions_follow_the_same_rule(self) -> None:
+        tower = build_layout(load_program(SAMPLE))
+        # gl/al/el are one tower (umbrella): their retention blocks touch
+        rects = sorted(
+            (r.rects[0] for r in tower.retentions), key=lambda rect: rect.x0
+        )
+        assert rects[0].x1 == rects[1].x0
+        assert rects[1].x1 == rects[2].x0
+        # but the pl retention does not touch el's
+        assert rects[2].x1 < rects[3].x0
+
+
 class TestVertical:
     def test_same_attachment_same_height_across_layers(self) -> None:
         # The umbrella's top and the 1st excess's bottom are the same dollars,

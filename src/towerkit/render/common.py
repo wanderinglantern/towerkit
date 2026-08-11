@@ -57,21 +57,25 @@ def provenance() -> str:
         return f"towerkit {__version__} · unversioned"
 
 
-_METADATA: dict[str, dict[str, Any]] = {
-    # scrub every timestamp matplotlib would otherwise embed
-    "svg": {"Date": None},
-    "pdf": {"CreationDate": None},
-    "png": {"Software": "towerkit"},
-}
+def _metadata(fmt: str) -> dict[str, Any]:
+    """Timestamps scrubbed; provenance (version, git SHA, dirty marker) is
+    embedded here instead of drawn on the chart."""
+    stamp = provenance()
+    table: dict[str, dict[str, Any]] = {
+        "svg": {"Date": None, "Creator": stamp},
+        "pdf": {"CreationDate": None, "Creator": stamp},
+        "png": {"Software": stamp},
+    }
+    return table[fmt]
 
 
 def save_figure(fig: Figure, out_dir: Path, stem: str, formats: list[str]) -> list[Path]:
     out_dir.mkdir(parents=True, exist_ok=True)
     written = []
     for fmt in formats:
-        if fmt not in _METADATA:
+        if fmt not in ("svg", "pdf", "png"):
             raise ValueError(f"unsupported format {fmt!r} (svg, pdf, png)")
         path = out_dir / f"{stem}.{fmt}"
-        fig.savefig(path, format=fmt, metadata=_METADATA[fmt], dpi=200)
+        fig.savefig(path, format=fmt, metadata=_metadata(fmt), dpi=200)
         written.append(path)
     return written

@@ -27,6 +27,7 @@ from .scale import DEFAULT_GAMMA, YMap, build_y_map, retention_depth
 
 COL_WIDTH = 1.0
 GUTTER = 0.25
+HALF_GUTTER = GUTTER / 2  # 0.125: exact in binary, like every column edge
 RETENTION_BAND = 0.18  # height of the retention band, in tower-height units
 
 
@@ -52,8 +53,10 @@ class Column:
     label: str
     name: str
     index: int
-    x0: float
+    x0: float  # nominal column edges: labels and headers centre on these
     x1: float
+    ex0: float  # drawing extents: extended by half a gutter toward any
+    ex1: float  # adjacent column of the same tower, so bands meet edge-to-edge
 
 
 @dataclass(frozen=True)
@@ -177,9 +180,11 @@ def build_layout(program: Program, gamma: float = DEFAULT_GAMMA) -> TowerLayout:
 
 
 def _columns(program: Program) -> list[Column]:
+    joined = _joined_gutters(program)
     columns = []
     for index, line in enumerate(program.lines):
         x0 = index * (COL_WIDTH + GUTTER)
+        x1 = x0 + COL_WIDTH
         columns.append(
             Column(
                 line_id=line.id,
@@ -187,10 +192,28 @@ def _columns(program: Program) -> list[Column]:
                 name=line.name,
                 index=index,
                 x0=x0,
-                x1=x0 + COL_WIDTH,
+                x1=x1,
+                ex0=x0 - HALF_GUTTER if (index - 1) in joined else x0,
+                ex1=x1 + HALF_GUTTER if index in joined else x1,
             )
         )
     return columns
+
+
+def _joined_gutters(program: Program) -> set[int]:
+    """Gutter i (between columns i and i+1) is closed when some layer spans
+    both flanking lines — the columns belong to one tower, and white holes
+    between its monoline bands would read as breaks. Gutters between
+    unrelated towers stay open.
+    """
+    order = {line.id: idx for idx, line in enumerate(program.lines)}
+    joined: set[int] = set()
+    for layer in program.layers:
+        indices = {order[lid] for lid in layer.applies_to if lid in order}
+        for idx in indices:
+            if idx + 1 in indices:
+                joined.add(idx)
+    return joined
 
 
 def _runs(columns: list[Column], indices: list[int]) -> list[Run]:
@@ -203,7 +226,7 @@ def _runs(columns: list[Column], indices: list[int]) -> list[Run]:
         if idx is not None and idx == prev + 1:
             prev = idx
             continue
-        x0, x1 = columns[start].x0, columns[prev].x1
+        x0, x1 = columns[start].ex0, columns[prev].ex1
         width = x1 - x0
         runs.append(Run(x0=x0, x1=x1, v0=v, width=width))
         v += width

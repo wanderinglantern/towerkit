@@ -11,6 +11,7 @@ gutter, and a visible not-to-scale caveat instead of a lying axis.
 
 from __future__ import annotations
 
+import textwrap
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -24,7 +25,7 @@ from ..model import Program
 from ..money import format_money, format_money_compact, format_share
 from ..scale import DEFAULT_GAMMA
 from ..theme import Theme
-from .common import provenance, rc_params, save_figure
+from .common import rc_params, save_figure
 
 GUTTER_LEFT = 1.35  # data units reserved left of the tower for dollar labels
 
@@ -67,8 +68,8 @@ def draw_tower(
         ax.axhline(y=y, color=chrome.grid, linewidth=0.7, zorder=0)
         if dollars > 0:
             ax.text(
-                -0.12, y, format_money_compact(dollars),
-                ha="right", va="center", fontsize=8.5, color=chrome.muted,
+                -0.12, y + 0.004, format_money_compact(dollars),
+                ha="right", va="bottom", fontsize=8.5, color=chrome.muted,
             )
 
     # participant blocks
@@ -137,12 +138,13 @@ def draw_tower(
             fontsize=8, color=chrome.ink, zorder=5,
         )
 
-    # column labels under the retention band
+    # full line names under the retention band
     label_y = -tower.retention_band - 0.05
     for column in tower.columns:
         ax.text(
-            (column.x0 + column.x1) / 2, label_y, column.label,
-            ha="center", va="top", fontsize=10, color=chrome.ink, weight="bold",
+            (column.x0 + column.x1) / 2, label_y,
+            "\n".join(textwrap.wrap(column.name, 14)),
+            ha="center", va="top", fontsize=9, color=chrome.ink, weight="bold",
         )
     return tower
 
@@ -233,8 +235,3 @@ def _footer(fig, program: Program, theme: Theme, tower: TowerLayout) -> None:
             for s in program.sublimits
         )
         fig.text(0.04, 0.045, f"Sublimits: {subs}", fontsize=8.5, color=chrome.muted)
-    fig.text(
-        0.96, 0.022,
-        f"{provenance()} · theme {theme.name}",
-        fontsize=8, ha="right", color=chrome.muted,
-    )

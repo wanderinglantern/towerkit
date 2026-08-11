@@ -40,3 +40,18 @@ relitigated here.
 - **matplotlib on macOS 27 beta**: font enumeration crashes upstream
   (empty `system_profiler` output); `towerkit.render` falls back to
   matplotlib's bundled DejaVu fonts when that happens (see NOTES.md).
+
+## Review round 1 (2026-08-11)
+
+- **Same-tower gutters close** (layout rule): the gutter between two adjacent
+  columns is eliminated when some layer spans both — monoline primary bands
+  and retentions extend half a gutter each and meet, so a tower has no white
+  holes below its umbrella. Gutters between unrelated towers stay open.
+- **Reference-line dollar labels sit above the line**, not centred on it.
+- **Column footers show full line names** (wrapped), abbreviations remain in
+  the ASCII preview where width is scarce.
+- **Provenance moved from the visible chart into file metadata** (SVG/PDF
+  Creator, PNG Software) at the user's request. Noting: §5 required *visible*
+  provenance so a chart in circulation identifies its source; metadata
+  preserves traceability for anyone who inspects the file, but a printed or
+  screenshotted chart no longer carries it. Revisit if that bites.
