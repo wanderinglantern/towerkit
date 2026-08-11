@@ -101,6 +101,18 @@ class RetentionBlock:
 
 
 @dataclass(frozen=True)
+class GroupBand:
+    """A contiguous bucket of columns sharing a `group`, with pro-rata
+    roll-ups (a layer spanning n lines contributes covered/n of its numbers)."""
+
+    label: str
+    x0: float
+    x1: float
+    limit: int
+    premium: int
+
+
+@dataclass(frozen=True)
 class TowerLayout:
     columns: tuple[Column, ...]
     layers: tuple[LayerBlock, ...]
@@ -108,6 +120,7 @@ class TowerLayout:
     retentions: tuple[RetentionBlock, ...]
     ymap: YMap
     ref_lines: tuple[tuple[int, float], ...]  # (dollars, y) at real attachment points
+    groups: tuple[GroupBand, ...]
     width: float
     retention_band: float
 
@@ -208,6 +221,7 @@ def build_layout(program: Program, gamma: float = DEFAULT_GAMMA) -> TowerLayout:
         retentions=tuple(retention_blocks),
         ymap=ymap,
         ref_lines=ref_lines,
+        groups=_group_bands(program, columns),
         width=width,
         # no retentions drawn → no band, so column labels hug the towers
         retention_band=RETENTION_BAND if retention_blocks else 0.0,
@@ -215,11 +229,16 @@ def build_layout(program: Program, gamma: float = DEFAULT_GAMMA) -> TowerLayout:
 
 
 def _columns(program: Program) -> list[Column]:
+    """Interior gutters close only between columns of the same bucket
+    (both ungrouped counts as one bucket): buckets read as distinct
+    towers, columns within one stay edge-to-edge."""
     last = len(program.lines) - 1
     columns = []
     for index, line in enumerate(program.lines):
         x0 = index * (COL_WIDTH + GUTTER)
         x1 = x0 + COL_WIDTH
+        join_left = index > 0 and program.lines[index - 1].group == line.group
+        join_right = index < last and program.lines[index + 1].group == line.group
         columns.append(
             Column(
                 line_id=line.id,
@@ -228,11 +247,46 @@ def _columns(program: Program) -> list[Column]:
                 index=index,
                 x0=x0,
                 x1=x1,
-                ex0=x0 - HALF_GUTTER if index > 0 else x0,
-                ex1=x1 + HALF_GUTTER if index < last else x1,
+                ex0=x0 - HALF_GUTTER if join_left else x0,
+                ex1=x1 + HALF_GUTTER if join_right else x1,
             )
         )
     return columns
+
+
+def _group_bands(program: Program, columns: list[Column]) -> tuple[GroupBand, ...]:
+    bands: list[GroupBand] = []
+    start = 0
+    for index in range(1, len(program.lines) + 1):
+        boundary = (
+            index == len(program.lines)
+            or program.lines[index].group != program.lines[start].group
+        )
+        if not boundary:
+            continue
+        group = program.lines[start].group
+        if group is not None:
+            ids = {ln.id for ln in program.lines[start:index]}
+            limit = premium = 0
+            for layer in program.layers:
+                if layer.limit <= 0:
+                    continue
+                covered = sum(1 for lid in layer.applies_to if lid in ids)
+                if covered:
+                    n = len(layer.applies_to)
+                    limit += layer.limit * covered // n
+                    premium += (layer.premium or 0) * covered // n
+            bands.append(
+                GroupBand(
+                    label=group,
+                    x0=columns[start].x0,
+                    x1=columns[index - 1].x1,
+                    limit=limit,
+                    premium=premium,
+                )
+            )
+        start = index
+    return tuple(bands)
 
 
 def _runs(columns: list[Column], indices: list[int]) -> list[Run]:

@@ -333,3 +333,53 @@ class TestFollowsUnderlying:
         umb.attach = 1_500_000
         codes = {d.code for d in validate_program(program).errors}
         assert "layer-follows-attach" in codes
+
+
+class TestGroupBuckets:
+    def grouped_program(self):
+        program = make_program(
+            ["a", "b", "c", "d"],
+            [
+                layer("pa", ["a"], 0, 1_000_000, [("X", 10_000)]),
+                layer("pb", ["b"], 0, 2_000_000, [("Y", 10_000)]),
+                layer("pc", ["c"], 0, 1_000_000, [("Z", 10_000)]),
+                layer("pd", ["d"], 0, 1_000_000, [("W", 10_000)]),
+                Layer(id="umb", name="Alpha Umbrella", applies_to=["a", "b"],
+                      attach=2_000_000, limit=10_000_000, premium=1_000_000,
+                      follows_underlying=True,
+                      participants=[Participant(carrier="U", share_bps=10_000)]),
+            ],
+        )
+        program.lines[0].group = "Project Alpha"
+        program.lines[1].group = "Project Alpha"
+        program.lines[2].group = "Houston"
+        return program
+
+    def test_gutters_flush_within_open_between(self) -> None:
+        tower = build_layout(self.grouped_program())
+        a, b, c, d = tower.columns
+        assert a.ex1 == b.ex0          # inside Project Alpha: flush
+        assert b.ex1 == b.x1 and c.ex0 == c.x0  # Alpha → Houston: open gutter
+        assert c.ex1 == c.x1 and d.ex0 == d.x0  # Houston → ungrouped: open
+
+    def test_band_extents_and_rollups(self) -> None:
+        tower = build_layout(self.grouped_program())
+        assert [g.label for g in tower.groups] == ["Project Alpha", "Houston"]
+        alpha = tower.groups[0]
+        cols = {c.line_id: c for c in tower.columns}
+        assert alpha.x0 == cols["a"].x0 and alpha.x1 == cols["b"].x1
+        # fully-contained layers count whole; umbrella spans only group lines
+        assert alpha.limit == 1_000_000 + 2_000_000 + 10_000_000
+        assert alpha.premium == 1_000_000
+        assert tower.groups[1].limit == 1_000_000
+
+    def test_straddling_layer_allocates_pro_rata(self) -> None:
+        program = self.grouped_program()
+        umb = next(ly for ly in program.layers if ly.id == "umb")
+        umb.applies_to = ["a", "b", "c", "d"]  # 2 of 4 lines in Alpha
+        umb.follows_underlying = False
+        umb.attach = 2_000_000
+        tower = build_layout(program)
+        alpha = tower.groups[0]
+        assert alpha.limit == 3_000_000 + 10_000_000 * 2 // 4
+        assert alpha.premium == 1_000_000 * 2 // 4

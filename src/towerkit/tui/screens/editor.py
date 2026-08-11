@@ -238,8 +238,9 @@ class EditorScreen(Screen):
 
         lines = tree.root.add(f"Lines ({len(program.lines)})", data=("lines-group", None))
         for line in program.lines:
+            text = line.name if not line.group else f"{line.name} · {line.group}"
             lines.add_leaf(
-                self._tree_label(line.name, diags.for_ref(("line", line.id))),
+                self._tree_label(text, diags.for_ref(("line", line.id))),
                 data=("line", line.id),
             )
 
@@ -391,6 +392,8 @@ class EditorScreen(Screen):
             Label("Column label", classes="field-label"),
             # pre-populated with the name to speed entry; trim or replace it
             Input(value=line.abbr or line.name, id="f-line-abbr"),
+            Label("Group / bucket (project, location…)", classes="field-label"),
+            Input(value=line.group or "", id="f-line-group"),
             Label(
                 "Reorder: [ moves this column left · ] moves it right",
                 classes="row-total",
@@ -633,6 +636,8 @@ class EditorScreen(Screen):
                 self._mutate_and_refresh(lambda p: setattr(line, "name", value))
         elif widget.id == "f-line-abbr":
             self._mutate_and_refresh(lambda p: setattr(line, "abbr", value or None))
+        elif widget.id == "f-line-group":
+            self._mutate_and_refresh(lambda p: setattr(line, "group", value or None))
 
     def _commit_layer_field(self, widget: Input) -> None:
         kind, key = self._commit_ref
@@ -1198,6 +1203,7 @@ _FIELD_HANDLERS = {
     "f-period-end": EditorScreen._commit_program_field,
     "f-line-name": EditorScreen._commit_line_field,
     "f-line-abbr": EditorScreen._commit_line_field,
+    "f-line-group": EditorScreen._commit_line_field,
     "f-layer-name": EditorScreen._commit_layer_field,
     "f-layer-policy": EditorScreen._commit_layer_field,
     "f-layer-notes": EditorScreen._commit_layer_field,

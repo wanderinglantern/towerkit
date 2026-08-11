@@ -84,6 +84,8 @@ def draw_tower(
 
     ax.set_axis_off()
     bottom = -tower.retention_band - 0.10
+    if tower.groups:
+        bottom -= 0.09  # room for the bucket bands under the column labels
     ax.set_xlim(-GUTTER_LEFT, max(tower.width, 1.0) + 0.1)
     ax.set_ylim(bottom, 1.06)
 
@@ -207,6 +209,22 @@ def draw_tower(
             (column.x0 + column.x1) / 2, label_y,
             "\n".join(textwrap.wrap(column.name, 14)),
             ha="center", va="top", fontsize=9, color=chrome.ink, weight="bold",
+        )
+
+    # bucket bands: a rule spanning the group with its label and pro-rata
+    # roll-ups beneath the column names
+    band_y = label_y - 0.065
+    for band in tower.groups:
+        ax.plot(
+            [band.x0, band.x1], [band_y, band_y],
+            color=chrome.accent, linewidth=1.6, solid_capstyle="butt",
+        )
+        rollup = f"{band.label} — Limit {format_money_compact(band.limit)}"
+        if band.premium:
+            rollup += f" · Premium {format_money_compact(band.premium)}"
+        ax.text(
+            (band.x0 + band.x1) / 2, band_y - 0.012, rollup,
+            ha="center", va="top", fontsize=9, color=chrome.accent,
         )
     return tower
 

@@ -97,6 +97,8 @@ def validate_program(program: Program) -> Diagnostics:
     for index, retention in enumerate(program.retentions):
         _check_retention(retention, index, line_ids, diags)
 
+    _check_group_adjacency(program, diags)
+
     covered = {lid for r in program.retentions for lid in r.applies_to}
     for line in program.lines:
         if line.id not in covered:
@@ -115,6 +117,27 @@ def validate_program(program: Program) -> Diagnostics:
                     ("sublimit", index),
                 )
     return diags
+
+
+def _check_group_adjacency(program: Program, diags: Diagnostics) -> None:
+    """A bucket only reads as one bucket when its columns sit together."""
+    seen_done: dict[str, bool] = {}
+    previous: str | None = None
+    for line in program.lines:
+        group = line.group
+        if previous is not None and previous != group and previous in seen_done:
+            seen_done[previous] = True
+        if group is not None:
+            if seen_done.get(group):
+                diags.warn(
+                    "group-scattered",
+                    f"group {group!r}: columns are not adjacent — reorder lines "
+                    f"([ / ]) to join the bucket",
+                    ("line", line.id),
+                )
+            else:
+                seen_done.setdefault(group, False)
+        previous = group
 
 
 def _check_unique_ids(program: Program, diags: Diagnostics) -> None:

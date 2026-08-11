@@ -163,3 +163,13 @@ relitigated here.
   a layer with zero participants draws as a dashed-outline empty box with
   "To be placed" in ink — distinct from a partially-placed layer, which
   keeps the grey hatch and "% open" on its remainder.
+
+## Review round 7 (2026-08-11)
+
+- **Coverage grouping** (`Line.group`, one optional bucket per line — user
+  chose single-dimension over cross-cutting tags): adjacent same-group
+  columns render flush with an open gutter between buckets; an accent band
+  under the column names carries the bucket label and pro-rata roll-ups
+  (a layer spanning n lines contributes covered/n of its limit and premium,
+  integer division). Scattered groups draw as separate bands and warn
+  ("group-scattered") suggesting a reorder.

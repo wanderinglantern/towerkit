@@ -121,6 +121,11 @@
         "abbr": {
           "type": "string",
           "minLength": 1
+        },
+        "group": {
+          "description": "Optional bucket label (project, location, entity); adjacent lines sharing a group render flush with a band beneath.",
+          "type": "string",
+          "minLength": 1
         }
       }
     },

@@ -49,6 +49,7 @@ class Line(_Model):
     id: str = Field(min_length=1)
     name: str = Field(min_length=1)
     abbr: str | None = None
+    group: str | None = None  # bucket label: project, location, entity…
 
     @property
     def label(self) -> str:
@@ -222,7 +223,7 @@ _PROGRAM_KEYS = (
     "$schema", "insured", "program", "placement", "period", "currency",
     "render", "lines", "layers", "retentions", "sublimits", "notes",
 )
-_LINE_KEYS = ("id", "name", "abbr")
+_LINE_KEYS = ("id", "name", "abbr", "group")
 _LAYER_KEYS = (
     "id", "name", "policyNumber", "period", "followsUnderlying", "appliesTo",
     "attach", "limit", "premium", "participants", "notes",
@@ -268,7 +269,10 @@ def program_to_jsonable(program: Program) -> dict[str, Any]:
             else None
         ),
         "lines": [
-            _ordered({"id": ln.id, "name": ln.name, "abbr": ln.abbr}, _LINE_KEYS)
+            _ordered(
+                {"id": ln.id, "name": ln.name, "abbr": ln.abbr, "group": ln.group},
+                _LINE_KEYS,
+            )
             for ln in program.lines
         ],
         "layers": [
