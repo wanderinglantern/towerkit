@@ -76,4 +76,4 @@ def retention_depth(
     """Depth of a retention block as a fraction of the retention band height."""
     if max_retention <= 0 or amount <= 0:
         return 0.0
-    return (amount / max_retention) ** exponent
+    return float((amount / max_retention) ** exponent)

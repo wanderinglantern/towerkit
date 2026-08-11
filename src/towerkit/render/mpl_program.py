@@ -37,7 +37,7 @@ def render_program(
     formats: list[str] | None = None,
     gamma: float = DEFAULT_GAMMA,
 ) -> list[Path]:
-    with rc_context(rc_params(theme)):
+    with rc_context(rc_params(theme)):  # type: ignore[arg-type]
         fig = plt.figure(figsize=(13.5, 9.5))
         try:
             ax = fig.add_axes((0.02, 0.06, 0.96, 0.82))
@@ -119,12 +119,12 @@ def draw_tower(
     )
 
     # retention blocks, typed fills, never a carrier colour
-    for block in tower.retentions:
-        fill = theme.retention_fill(block.type)
-        label = f"{block.type.upper()} {format_money_compact(block.amount)}"
-        if block.vehicle:
-            label = f"{label} ({block.vehicle})"
-        for rect in block.rects:
+    for ret in tower.retentions:
+        fill = theme.retention_fill(ret.type)
+        label = f"{ret.type.upper()} {format_money_compact(ret.amount)}"
+        if ret.vehicle:
+            label = f"{label} ({ret.vehicle})"
+        for rect in ret.rects:
             ax.add_patch(
                 Rectangle(
                     (rect.x0, rect.y0), rect.width, rect.height,
@@ -132,8 +132,8 @@ def draw_tower(
                 )
             )
         _fit_text(
-            ax, block.rects[0],
-            [label, f"{block.type.upper()}", ""],
+            ax, ret.rects[0],
+            [label, f"{ret.type.upper()}", ""],
             fontsize=8, color=chrome.ink, zorder=5,
         )
 
@@ -181,7 +181,7 @@ def _fit_text(
     else:
         x, y = (rect.x0 + rect.x1) / 2, (rect.y0 + rect.y1) / 2
         ha, va = "center", "center"
-    renderer = ax.figure.canvas.get_renderer()
+    renderer = ax.figure.canvas.get_renderer()  # type: ignore[attr-defined]
     for candidate in candidates:
         if not candidate:
             return

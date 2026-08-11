@@ -114,9 +114,9 @@ def _render_layout(
         grid[zero_row][col] = _Cell(ZERO, ansi256(theme.chrome.zero_line))
 
     # retention blocks below the zero line, on their own compressed scale
-    for block in tower.retentions:
-        fill = ansi256(theme.retention_fill(block.type))
-        for rect in block.rects:
+    for ret in tower.retentions:
+        fill = ansi256(theme.retention_fill(ret.type))
+        for rect in ret.rects:
             depth_frac = min(1.0, -rect.y0 / tower.retention_band)
             rows = max(1, round(depth_frac * ret_rows))
             for row in range(zero_row + 1, min(zero_row + 1 + rows, zero_row + 1 + ret_rows)):

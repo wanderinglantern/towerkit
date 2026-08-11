@@ -31,3 +31,12 @@ relitigated here.
   adding a carrier never recolours existing ones; pinned colours in the theme
   always win.
 - **CLI uses argparse** — stdlib, no extra dependency, subcommands are simple.
+- **mypy is strict on the pure core** (model/money/scale/layout/validate/
+  compare/theme); `towerkit.tui.*` and `towerkit.render.*` relax only the
+  untyped-def/generic-parameter rules — framework callback signatures there
+  are noise, and the checks that catch real bugs stay on everywhere.
+- **The TUI preview and its render action use the built-in default theme**;
+  branded output goes through `towerctl render --theme`.
+- **matplotlib on macOS 27 beta**: font enumeration crashes upstream
+  (empty `system_profiler` output); `towerkit.render` falls back to
+  matplotlib's bundled DejaVu fonts when that happens (see NOTES.md).

@@ -8,8 +8,12 @@ import shlex
 import subprocess
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from . import __version__
+
+if TYPE_CHECKING:
+    from .model import Program
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -76,7 +80,7 @@ def _cmd_validate(args: argparse.Namespace) -> int:
     return exit_code
 
 
-def _load_for_render(path: Path) -> object:
+def _load_for_render(path: Path) -> Program:
     from .validate import ProgramInvalidError, validate_file
 
     program, diags = validate_file(path)

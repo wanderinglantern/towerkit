@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .model import Program
+from .model import Layer, Program
 from .money import BPS_SCALE
 from .scale import DEFAULT_GAMMA, YMap, build_y_map, retention_depth
 
@@ -199,7 +199,7 @@ def _runs(columns: list[Column], indices: list[int]) -> list[Run]:
     runs: list[Run] = []
     v = 0.0
     start = prev = indices[0]
-    for idx in indices[1:] + [None]:  # type: ignore[list-item]
+    for idx in [*indices[1:], None]:
         if idx is not None and idx == prev + 1:
             prev = idx
             continue
@@ -212,7 +212,7 @@ def _runs(columns: list[Column], indices: list[int]) -> list[Run]:
     return runs
 
 
-def _allocate(layer, runs: list[Run], y0: float, y1: float) -> list[ParticipantBlock]:
+def _allocate(layer: Layer, runs: list[Run], y0: float, y1: float) -> list[ParticipantBlock]:
     """Allocate shares left→right across the concatenated runs.
 
     Every boundary is computed exactly once, so neighbouring blocks share

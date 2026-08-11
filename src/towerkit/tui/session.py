@@ -65,7 +65,7 @@ class EditSession:
 
     # -- mutation ------------------------------------------------------------
 
-    def mutate(self, fn: Callable[[Program], None]) -> None:
+    def mutate(self, fn: Callable[[Program], object]) -> None:
         """Apply one user-visible edit, snapshotting for undo first."""
         before = dumps_program(self.program)
         fn(self.program)

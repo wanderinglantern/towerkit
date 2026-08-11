@@ -11,7 +11,7 @@ import json
 from dataclasses import dataclass, field
 from importlib import resources
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import jsonschema
 from pydantic import ValidationError
@@ -230,7 +230,7 @@ def _check_retention(
 
 def _schema() -> dict[str, Any]:
     text = resources.files("towerkit").joinpath("schema/program.schema.json").read_text("utf-8")
-    return json.loads(text)
+    return cast(dict[str, Any], json.loads(text))
 
 
 def validate_against_schema(data: Any) -> list[Diagnostic]:

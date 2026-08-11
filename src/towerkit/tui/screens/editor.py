@@ -11,6 +11,7 @@ import asyncio
 import os
 import shlex
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -61,6 +62,12 @@ from ..widgets.modals import ConfirmModal, PromptModal
 from ..widgets.preview import TowerPreview
 
 NodeRef = tuple[str, Any]
+
+
+class DiagItem(ListItem):
+    def __init__(self, label: Label, diag_ref: NodeRef) -> None:
+        super().__init__(label)
+        self.diag_ref: NodeRef = diag_ref
 
 
 class EditorScreen(Screen):
@@ -183,9 +190,7 @@ class EditorScreen(Screen):
         panel = self.query_one("#diagnostics", ListView)
         panel.clear()
         for diag in self.session.diagnostics().items:
-            item = ListItem(Label(str(diag)))
-            item.diag_ref = diag.ref
-            panel.append(item)
+            panel.append(DiagItem(Label(str(diag)), diag.ref))
 
     # -- selection ------------------------------------------------------------
 
@@ -226,7 +231,7 @@ class EditorScreen(Screen):
         detail = self.query_one("#detail", VerticalScroll)
         await detail.remove_children()
         kind, key = self.selected
-        builder = {
+        builders: dict[str, Callable[[Any], list[Any]]] = {
             "program": self._form_program,
             "lines-group": self._form_hint,
             "layers-group": self._form_hint,
@@ -236,7 +241,8 @@ class EditorScreen(Screen):
             "layer": self._form_layer,
             "retention": self._form_retention,
             "sublimit": self._form_sublimit,
-        }.get(kind, self._form_hint)
+        }
+        builder = builders.get(kind, self._form_hint)
         await detail.mount_all(builder(key))
 
     def _form_hint(self, _key: Any) -> list:

@@ -12,6 +12,7 @@ import json
 from dataclasses import dataclass, field
 from importlib import resources
 from pathlib import Path
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -62,7 +63,7 @@ class Theme:
         return self.retention_fills.get(retention_type, "#DDD8C9")
 
 
-def _theme_from_jsonable(data: dict) -> Theme:
+def _theme_from_jsonable(data: dict[str, Any]) -> Theme:
     chrome_raw = data.get("chrome", {})
     chrome = Chrome(
         background=chrome_raw.get("background", Chrome.background),

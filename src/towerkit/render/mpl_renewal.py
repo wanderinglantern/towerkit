@@ -33,7 +33,7 @@ def render_renewal(
     gamma: float = DEFAULT_GAMMA,
 ) -> list[Path]:
     delta = compare_programs(expiring, proposed)
-    with rc_context(rc_params(theme)):
+    with rc_context(rc_params(theme)):  # type: ignore[arg-type]
         fig = plt.figure(figsize=(16, 11.5))
         try:
             ax_old = fig.add_axes((0.02, 0.44, 0.47, 0.44))

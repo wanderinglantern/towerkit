@@ -40,9 +40,20 @@ target-version = "py311"
 select = ["E", "F", "I", "W", "UP", "B"]
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"
 strict = true
 ignore_missing_imports = true
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+# UI and plotting glue: framework generics and callbacks make full strict
+# annotation noise; the pure core (model/money/scale/layout/validate/compare)
+# stays fully strict.
+module = ["towerkit.tui.*", "towerkit.render.*"]
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+disallow_untyped_calls = false
+disable_error_code = ["type-arg"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
