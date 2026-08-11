@@ -159,3 +159,7 @@ relitigated here.
   never the slug id — auto-ids were leaking into rendered column labels.
 - **Lines reorder with shift+↑/↓** in the editor: array order is column
   order, and the move is a normal undoable edit.
+- **Pending layers render as placeholders** (user-specified formatting):
+  a layer with zero participants draws as a dashed-outline empty box with
+  "To be placed" in ink — distinct from a partially-placed layer, which
+  keeps the grey hatch and "% open" on its remainder.

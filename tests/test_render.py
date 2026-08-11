@@ -165,3 +165,31 @@ class TestCellDates:
     def test_off_by_default(self, program, theme, tmp_path) -> None:
         out = render_program(program, theme, tmp_path, "t", ["svg"])[0]
         assert "1/1/26 – 1/1/27" not in out.read_text()
+
+
+class TestPendingLayers:
+    def make_pending_program(self):
+        from datetime import date
+
+        from towerkit.model import Layer, Line, Participant, Period, Placement, Program
+
+        return Program(
+            insured="X", program="Y", placement=Placement.PROPOSED,
+            period=Period(start=date(2026, 1, 1), end=date(2027, 1, 1)),
+            lines=[Line(id="gl", name="General Liability")],
+            layers=[
+                Layer(id="p", name="Primary", applies_to=["gl"], attach=0,
+                      limit=5_000_000,
+                      participants=[Participant(carrier="Zurich", share_bps=8_000)]),
+                Layer(id="x", name="1st Excess", applies_to=["gl"],
+                      attach=5_000_000, limit=10_000_000, participants=[]),
+            ],
+        )
+
+    def test_pending_layer_says_to_be_placed_with_dashed_outline(self, theme, tmp_path) -> None:
+        out = render_program(self.make_pending_program(), theme, tmp_path, "t", ["svg"])[0]
+        text = out.read_text()
+        assert "To be placed" in text
+        assert "stroke-dasharray" in text  # the dashed pending outline
+        # the partially-open primary keeps its distinct treatment
+        assert "20% open" in text

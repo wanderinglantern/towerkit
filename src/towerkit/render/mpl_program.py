@@ -110,11 +110,18 @@ def draw_tower(
         for layer in tower.layers
     }
 
+    # a layer with no participants at all is pending: dashed outline, empty
+    # fill, "To be placed" — distinct from a partially-open remainder
+    pending = {ly.layer_id for ly in tower.layers if ly.signed_bps == 0}
+
     # participant blocks
     lead_seen: set[str] = set()
     for block in tower.participants:
         if block.carrier is None:
-            face, hatch, edge = chrome.background, "////", chrome.unplaced
+            if block.layer_id in pending:
+                face, hatch, edge = chrome.background, None, "none"
+            else:
+                face, hatch, edge = chrome.background, "////", chrome.unplaced
         else:
             face, hatch, edge = colours[block.carrier], None, chrome.background
         for rect in block.rects:
@@ -139,15 +146,22 @@ def draw_tower(
         if block.layer_id not in lead_seen:
             lead_seen.add(block.layer_id)
             heading = titles[block.layer_id]
-        _participant_label(ax, block, theme, colours, premium, heading, term)
+        _participant_label(
+            ax, block, theme, colours, premium, heading, term,
+            pending=block.layer_id in pending,
+        )
 
-    # layer outlines and layer labels
+    # layer outlines: solid for placed layers, dashed for pending ones
     for layer in tower.layers:
+        is_pending = layer.layer_id in pending
         for outline in layer.outlines:
             ax.add_patch(
                 Rectangle(
                     (outline.x0, outline.y0), outline.width, outline.height,
-                    facecolor="none", edgecolor=chrome.ink, linewidth=1.1, zorder=3,
+                    facecolor="none", edgecolor=chrome.ink,
+                    linewidth=1.2 if is_pending else 1.1,
+                    linestyle=(0, (4, 3)) if is_pending else "solid",
+                    zorder=3,
                 )
             )
 
@@ -211,16 +225,21 @@ def _participant_label(
     premium: int | None = None,
     heading: str | None = None,
     term: str | None = None,
+    pending: bool = False,
 ) -> None:
     rect = max(block.rects, key=lambda r: r.width, default=None)
     if rect is None:
         return
     if block.carrier is None:
-        text_colour = theme.chrome.muted
-        open_text = f"{format_share(block.share_bps)} open"
-        candidates = [open_text, ""]
+        if pending:
+            text_colour = theme.chrome.ink
+            body = "To be placed"
+        else:
+            text_colour = theme.chrome.muted
+            body = f"{format_share(block.share_bps)} open"
+        candidates = [body, ""]
         if heading:
-            candidates = [f"{heading}\n{open_text}", *candidates]
+            candidates = [f"{heading}\n{body}", *candidates]
     else:
         face = colours[block.carrier]
         text_colour = contrast_text(face, theme.chrome.background, theme.chrome.ink)
