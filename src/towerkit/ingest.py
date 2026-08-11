@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from datetime import date
 
+from .dates import parse_flexible_date
 from .model import (
     Layer,
     Line,
@@ -24,7 +26,13 @@ from .model import (
     Retention,
     RetentionType,
 )
-from .money import MoneyParseError, format_money_compact, parse_money, parse_share
+from .money import (
+    MoneyParseError,
+    format_money_compact,
+    format_share,
+    parse_money,
+    parse_share,
+)
 from .validate import Diagnostics, ProgramInvalidError, validate_program
 
 CANONICAL_FIELDS: tuple[str, ...] = (
@@ -197,3 +205,173 @@ def _parse_participants(
                 "paste.share", f"line {lineno}: no share for {participant.carrier!r}"
             )
     return out
+
+
+# --- canonical tabular rows ----------------------------------------------------
+
+
+def program_from_rows(
+    rows: list[dict[str, object]], *, insured: str = "", program: str = ""
+) -> DraftProgram:
+    """Canonical rows (CANONICAL_FIELDS keys, values parsed strings or native
+    ints/dates) → draft. Rows sharing a `layer` name merge participants onto
+    one layer; the first row carrying dates sets the program period, later
+    differing dates become that layer's own period (staggered effective
+    dates are per-layer, matching the model)."""
+    draft = DraftProgram(insured=insured, program=program)
+    lines_by_name: dict[str, Line] = {}
+    layers_by_name: dict[str, Layer] = {}
+    synthesized = False
+    for rownum, row in enumerate(rows, start=1):
+        try:
+            limit = _as_money(row.get("limit"))
+            attach = _as_money(row.get("attachment"))
+            premium = _as_money(row.get("premium"))
+        except MoneyParseError as exc:
+            draft.diagnostics.error("rows.money", f"row {rownum}: {exc}")
+            continue
+        if limit is None:
+            draft.diagnostics.error("rows.money", f"row {rownum}: limit is required")
+            continue
+        line_ids, synthesized = _line_ids_for(
+            draft, lines_by_name, row.get("line"), synthesized
+        )
+        period = _period_from(draft, row, rownum)
+        if draft.period is None and period is not None:
+            draft.period = period
+        layer_name = str(row.get("layer") or "").strip() or (
+            "Primary" if not attach
+            else f"{format_money_compact(limit)} xs {format_money_compact(attach)}"
+        )
+        layer = layers_by_name.get(layer_name)
+        if layer is None:
+            layer = Layer(
+                id=_slug(layer_name, taken={la.id for la in draft.layers}),
+                name=layer_name, applies_to=line_ids, attach=attach or 0, limit=limit,
+                premium=premium,
+                policy_number=str(row.get("policy_number") or "").strip() or None,
+                period=period if period is not None and period != draft.period else None,
+            )
+            layers_by_name[layer_name] = layer
+            draft.layers.append(layer)
+        elif layer.limit != limit or layer.attach != (attach or 0):
+            draft.diagnostics.error(
+                "rows.band",
+                f"row {rownum}: {layer_name!r} already has a different limit/attachment",
+            )
+            continue
+        carrier = str(row.get("carrier") or "").strip()
+        if carrier:
+            share_raw = row.get("share")
+            try:
+                share = (
+                    parse_share(str(share_raw)) if share_raw not in (None, "") else 10_000
+                )
+            except MoneyParseError as exc:
+                draft.diagnostics.error("rows.share", f"row {rownum}: {exc}")
+                continue
+            layer.participants = [
+                *layer.participants, Participant(carrier=carrier, share_bps=share)
+            ]
+    return draft
+
+
+def rows_from_program(program: Program) -> list[dict[str, object]]:
+    """The exact inverse of `program_from_rows` for tower structure — one row
+    per (layer, participant). Feeds the template's worked example and the
+    round-trip contract test."""
+    names = {line.id: line.name for line in program.lines}
+    rows: list[dict[str, object]] = []
+    for layer in program.layers:
+        period = layer.period or program.period
+        base: dict[str, object] = {
+            "layer": layer.name,
+            "line": ";".join(names[lid] for lid in layer.applies_to),
+            "limit": layer.limit, "attachment": layer.attach,
+            "inception": period.start.isoformat(), "expiry": period.end.isoformat(),
+        }
+        if layer.premium is not None:
+            base["premium"] = layer.premium
+        if layer.policy_number is not None:
+            base["policy_number"] = layer.policy_number
+        participants: list[Participant | None] = list(layer.participants) or [None]
+        for participant in participants:
+            row = dict(base)
+            if participant is not None:
+                row["carrier"] = participant.carrier
+                row["share"] = format_share(participant.share_bps)
+            rows.append(row)
+    return rows
+
+
+def _as_money(value: object) -> int | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        raise MoneyParseError(f"cannot parse money value: {value!r}")
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    return parse_money(str(value))
+
+
+def _as_date(value: object) -> date | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, date):
+        return value
+    return parse_flexible_date(str(value))
+
+
+def _period_from(
+    draft: DraftProgram, row: dict[str, object], rownum: int
+) -> Period | None:
+    start, end = _as_date(row.get("inception")), _as_date(row.get("expiry"))
+    for key, given, parsed in (
+        ("inception", row.get("inception"), start),
+        ("expiry", row.get("expiry"), end),
+    ):
+        if given not in (None, "") and parsed is None:
+            draft.diagnostics.error(
+                "rows.date", f"row {rownum}: cannot read a date from {given!r} ({key})"
+            )
+    if start is None or end is None:
+        return None
+    return Period(start=start, end=end)
+
+
+def _line_ids_for(
+    draft: DraftProgram,
+    lines_by_name: dict[str, Line],
+    cell: object,
+    synthesized: bool,
+) -> tuple[list[str], bool]:
+    names = [n.strip() for n in str(cell or "").split(";") if n.strip()]
+    if not names:
+        cover_name = draft.program.strip() or "Coverage"
+        if not synthesized:
+            cover = Line(id="cover", name=cover_name)
+            lines_by_name[cover.name] = cover
+            draft.lines.append(cover)
+            draft.diagnostics.warn(
+                "rows.line", "rows without a line share one synthesized line"
+            )
+        return [lines_by_name[cover_name].id], True
+    ids: list[str] = []
+    for name in names:
+        line = lines_by_name.get(name)
+        if line is None:
+            line = Line(id=_slug(name, taken={li.id for li in draft.lines}), name=name)
+            lines_by_name[name] = line
+            draft.lines.append(line)
+        ids.append(line.id)
+    return ids, synthesized
+
+
+def _slug(name: str, taken: set[str]) -> str:
+    base = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "item"
+    slug, n = base, 2
+    while slug in taken:
+        slug, n = f"{base}-{n}", n + 1
+    return slug
