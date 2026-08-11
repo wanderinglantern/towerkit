@@ -30,12 +30,32 @@ class Chrome:
 
 
 @dataclass(frozen=True)
+class SoiStyle:
+    """Schedule of Insurance workbook styling. Defaults mirror the reviewed
+    sample workbook, not the chart chrome — SOIs circulate as Excel files
+    with their own established look."""
+
+    header_fill: str = "#003865"
+    header_text: str = "#FFFFFF"
+    body_text: str = "#3D3C37"
+    band_fill: str = "#F7F3EE"
+    border: str = "#B9B6B1"
+    font: str = "Noto Sans"
+    size: int = 11
+
+    @property
+    def effective_header_text(self) -> str:
+        return contrast_text(self.header_fill, self.header_text, self.body_text)
+
+
+@dataclass(frozen=True)
 class Theme:
     name: str
     chrome: Chrome
     carrier_palette: tuple[str, ...]
     pinned_carriers: dict[str, str] = field(default_factory=dict)
     retention_fills: dict[str, str] = field(default_factory=dict)
+    soi: SoiStyle = field(default_factory=SoiStyle)
 
     def carrier_colours(self, carriers: list[str]) -> dict[str, str]:
         """Walk the palette in order — the brand sequence starts in the blues
@@ -98,12 +118,23 @@ def _theme_from_jsonable(data: dict[str, Any]) -> Theme:
         title_font=chrome_raw.get("titleFont"),
     )
     palette = tuple(data.get("carrierPalette") or ["#4C78A8"])
+    soi_raw = data.get("soi", {})
+    soi = SoiStyle(
+        header_fill=soi_raw.get("headerFill", SoiStyle.header_fill),
+        header_text=soi_raw.get("headerText", SoiStyle.header_text),
+        body_text=soi_raw.get("bodyText", SoiStyle.body_text),
+        band_fill=soi_raw.get("bandFill", SoiStyle.band_fill),
+        border=soi_raw.get("border", SoiStyle.border),
+        font=soi_raw.get("font", SoiStyle.font),
+        size=soi_raw.get("size", SoiStyle.size),
+    )
     return Theme(
         name=data.get("name", "unnamed"),
         chrome=chrome,
         carrier_palette=palette,
         pinned_carriers=dict(data.get("carriers", {})),
         retention_fills=dict(data.get("retentionFills", {})),
+        soi=soi,
     )
 
 
