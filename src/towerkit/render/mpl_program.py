@@ -208,7 +208,10 @@ def _fit_text(
 def _titles(fig, program: Program, theme: Theme) -> None:
     chrome = theme.chrome
     period = f"{program.period.start.isoformat()} – {program.period.end.isoformat()}"
-    fig.text(0.04, 0.965, program.insured, fontsize=17, weight="bold", color=chrome.ink)
+    fig.text(
+        0.04, 0.965, program.insured, fontsize=17, weight="bold",
+        color=chrome.ink, family=chrome.title_font or chrome.font,
+    )
     fig.text(
         0.04, 0.925,
         f"{program.program} · {period} · {program.placement.value.upper()}",

@@ -26,6 +26,7 @@ class Chrome:
     no_cover: str = "#F2F3F5"
     unplaced: str = "#9AA3AF"
     font: str = "DejaVu Sans"
+    title_font: str | None = None  # headlines; falls back to `font`
 
 
 @dataclass(frozen=True)
@@ -92,6 +93,7 @@ def _theme_from_jsonable(data: dict[str, Any]) -> Theme:
         no_cover=chrome_raw.get("noCover", Chrome.no_cover),
         unplaced=chrome_raw.get("unplaced", Chrome.unplaced),
         font=chrome_raw.get("font", Chrome.font),
+        title_font=chrome_raw.get("titleFont"),
     )
     palette = tuple(data.get("carrierPalette") or ["#4C78A8"])
     return Theme(

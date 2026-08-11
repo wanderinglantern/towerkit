@@ -70,7 +70,10 @@ def _headline(
     fig, expiring: Program, proposed: Program, delta: RenewalDelta, theme: Theme
 ) -> None:
     chrome = theme.chrome
-    fig.text(0.02, 0.955, expiring.insured, fontsize=16, weight="bold", color=chrome.ink)
+    fig.text(
+        0.02, 0.955, expiring.insured, fontsize=16, weight="bold",
+        color=chrome.ink, family=chrome.title_font or chrome.font,
+    )
     fig.text(
         0.02, 0.925,
         f"{expiring.program} — renewal comparison",

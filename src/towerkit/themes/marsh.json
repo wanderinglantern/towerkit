@@ -9,7 +9,8 @@
     "zeroLine": "#000F47",
     "noCover": "#F7F3EE",
     "unplaced": "#B9B6B1",
-    "font": "DejaVu Sans"
+    "font": "Noto Sans",
+    "titleFont": "Noto Serif"
   },
   "carrierPalette": [
     "#0B4BFF",

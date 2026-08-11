@@ -66,6 +66,8 @@ relitigated here.
 - **Participant label colour is picked by luminance** (WCAG relative
   luminance, threshold 0.40) so light ramp fills get dark text — replaces
   always-white labels.
-- **Fonts stay DejaVu Sans**, not the CSS's Noto Sans: matplotlib bundles
-  DejaVu, which keeps output byte-identical across machines — and this
-  machine cannot enumerate system fonts at all (see NOTES.md).
+- **Noto Sans/Serif are bundled in the package** (SIL OFL, `fonts/OFL.txt`)
+  and registered with matplotlib explicitly — determinism holds because the
+  exact TTFs ship with towerkit, independent of system fonts. The marsh theme
+  uses Noto Sans for body and Noto Serif for headlines (`chrome.titleFont`),
+  matching the brand CSS; the default theme stays DejaVu.

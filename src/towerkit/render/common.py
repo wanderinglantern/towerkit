@@ -8,13 +8,23 @@ TrueType (not Type 3) in PDF, and no wall-clock metadata anywhere.
 from __future__ import annotations
 
 import subprocess
+from importlib import resources
 from pathlib import Path
 from typing import Any
 
+from matplotlib import font_manager
 from matplotlib.figure import Figure
 
-from .. import __version__  # noqa: E402
-from ..theme import Theme  # noqa: E402
+from .. import __version__
+from ..theme import Theme
+
+# Bundled Noto Sans/Serif (SIL OFL, see fonts/OFL.txt): registered explicitly
+# so themed output is byte-identical on any machine, with or without system
+# font access.
+for _entry in resources.files("towerkit").joinpath("fonts").iterdir():
+    if _entry.name.endswith(".ttf"):
+        with resources.as_file(_entry) as _font_path:
+            font_manager.fontManager.addfont(str(_font_path))
 
 
 def rc_params(theme: Theme) -> dict[str, Any]:
@@ -26,6 +36,7 @@ def rc_params(theme: Theme) -> dict[str, Any]:
         "pdf.fonttype": 42,  # embed TrueType, not Type 3
         "svg.fonttype": "path",
         "font.family": theme.chrome.font,
+        "font.sans-serif": [theme.chrome.font, "DejaVu Sans"],
         "figure.facecolor": theme.chrome.background,
         "savefig.facecolor": theme.chrome.background,
     }
