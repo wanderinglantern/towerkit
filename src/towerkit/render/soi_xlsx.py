@@ -8,6 +8,7 @@ produce byte-identical files (repo rule)."""
 from __future__ import annotations
 
 import math
+import re
 import zipfile
 from datetime import datetime
 from io import BytesIO
@@ -80,7 +81,9 @@ def write_soi(
                 total.number_format = _CURRENCY
                 total.alignment = Alignment(horizontal="right", vertical="center")
             for col in range(1, ncols + 1):
-                ws.cell(row=row_ix, column=col).border = border
+                cell = ws.cell(row=row_ix, column=col)
+                cell.fill = header_fill
+                cell.border = border
             ws.row_dimensions[row_ix].height = 22.0
             row_ix += 1
         for band, row in enumerate(section.rows):
@@ -132,10 +135,17 @@ def _row_height(limits: str, retention: str) -> float:
     return 18.0 * max(lines, 2)
 
 
+_PINNED_W3CDTF = b"1980-01-01T00:00:00Z"
+_MODIFIED_RE = re.compile(rb"(<dcterms:modified[^>]*>)[^<]*(</dcterms:modified>)")
+
+
 def _normalize_zip(data: bytes, out_path: Path) -> None:
     """Rewrite the archive with epoch timestamps and fixed compression so
     identical content is identical bytes (openpyxl stamps wall-clock zip
-    entries)."""
+    entries). openpyxl's save_workbook() also unconditionally clobbers
+    workbook.properties.modified with datetime.now() right before writing
+    docProps/core.xml, ignoring our pinned assignment above — so that one
+    field has to be neutralized here, post-save, by rewriting its text."""
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(BytesIO(data)) as src, zipfile.ZipFile(
         out_path, "w", zipfile.ZIP_DEFLATED
@@ -143,4 +153,9 @@ def _normalize_zip(data: bytes, out_path: Path) -> None:
         for name in src.namelist():
             info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
             info.compress_type = zipfile.ZIP_DEFLATED
-            dst.writestr(info, src.read(name))
+            content = src.read(name)
+            if name == "docProps/core.xml":
+                content = _MODIFIED_RE.sub(
+                    lambda m: m.group(1) + _PINNED_W3CDTF + m.group(2), content
+                )
+            dst.writestr(info, content)
