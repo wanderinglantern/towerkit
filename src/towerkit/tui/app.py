@@ -29,6 +29,7 @@ class TowerkitApp(App):
         self.show_totals = True
         self.show_premiums = True
         self.cell_premiums = False
+        self.cell_dates = False
 
     def on_mount(self) -> None:
         if self._start_new:

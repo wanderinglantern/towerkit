@@ -59,6 +59,11 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="show each carrier's premium share inside its block",
     )
+    p_render.add_argument(
+        "--cell-dates",
+        action="store_true",
+        help="show the policy term inside each block",
+    )
     p_render.set_defaults(handler=_cmd_render)
 
     p_compare = sub.add_parser("compare", help="render a renewal comparison of two programs")
@@ -133,6 +138,7 @@ def _cmd_render(args: argparse.Namespace) -> int:
         show_totals=not args.no_totals and (stored.show_totals if stored else True),
         show_premiums=not args.no_premiums and (stored.show_premiums if stored else True),
         cell_premiums=args.cell_premiums or bool(stored and stored.cell_premiums),
+        cell_dates=args.cell_dates or bool(stored and stored.cell_dates),
     )
     for path in written:
         print(path)

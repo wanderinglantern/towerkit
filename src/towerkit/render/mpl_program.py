@@ -41,6 +41,7 @@ def render_program(
     show_totals: bool = True,
     show_premiums: bool = True,
     cell_premiums: bool = False,
+    cell_dates: bool = False,
 ) -> list[Path]:
     noted = [layer for layer in sorted(program.layers, key=lambda ly: ly.attach) if layer.notes]
     markers = {
@@ -55,6 +56,7 @@ def render_program(
             tower = draw_tower(
                 ax, program, theme, gamma=gamma, note_markers=markers,
                 cell_premiums=cell_premiums and show_premiums,
+                cell_dates=cell_dates,
             )
             _titles(fig, program, theme, show_totals=show_totals, show_premiums=show_premiums)
             _footer(fig, program, theme, tower, markers)
@@ -70,6 +72,7 @@ def draw_tower(
     gamma: float = DEFAULT_GAMMA,
     note_markers: dict[str, str] | None = None,
     cell_premiums: bool = False,
+    cell_dates: bool = False,
     colours: dict[str, str] | None = None,
 ) -> TowerLayout:
     """Draw one tower onto an axes. Shared verbatim with the renewal renderer,
@@ -127,11 +130,16 @@ def draw_tower(
             owner = next(ly for ly in tower.layers if ly.layer_id == block.layer_id)
             if owner.premium is not None:
                 premium = premium_share(owner.premium, block.share_bps)
+        term = None
+        if cell_dates:
+            owner_model = next(ly for ly in program.layers if ly.id == block.layer_id)
+            period = owner_model.period or program.period
+            term = _term_text(period)
         heading = None
         if block.layer_id not in lead_seen:
             lead_seen.add(block.layer_id)
             heading = titles[block.layer_id]
-        _participant_label(ax, block, theme, colours, premium, heading)
+        _participant_label(ax, block, theme, colours, premium, heading, term)
 
     # layer outlines and layer labels
     for layer in tower.layers:
@@ -188,6 +196,13 @@ def layer_terms(attach: int, limit: int) -> str:
     return format_money_compact(limit)
 
 
+def _term_text(period) -> str:
+    def us(d) -> str:
+        return f"{d.month}/{d.day}/{d.strftime('%y')}"
+
+    return f"{us(period.start)} – {us(period.end)}"
+
+
 def _participant_label(
     ax: Axes,
     block,
@@ -195,6 +210,7 @@ def _participant_label(
     colours: dict[str, str],
     premium: int | None = None,
     heading: str | None = None,
+    term: str | None = None,
 ) -> None:
     rect = max(block.rects, key=lambda r: r.width, default=None)
     if rect is None:
@@ -220,12 +236,24 @@ def _participant_label(
                     name_forms.append(wrapped)
         if block.carrier not in name_forms:
             name_forms.append(block.carrier)
-        # the premium line rides along with EVERY name form, so a wrapped
-        # name never silently drops its premium; premium-less forms follow
-        candidates = []
-        if premium is not None:
-            candidates += [f"{form}\n{format_money_compact(premium)}" for form in name_forms]
-        candidates += name_forms + [block.carrier[:1], ""]
+        # extra lines ride along with EVERY name form, richest stack first:
+        # term between the carrier/share and the premium, per the layout
+        # convention; poorer stacks follow so something always fits
+        prem_line = format_money_compact(premium) if premium is not None else None
+        suffixes: list[list[str]] = []
+        if term and prem_line:
+            suffixes.append([term, prem_line])
+        if term:
+            suffixes.append([term])
+        if prem_line:
+            suffixes.append([prem_line])
+        suffixes.append([])
+        candidates = [
+            "\n".join([form, *suffix])
+            for suffix in suffixes
+            for form in name_forms
+        ]
+        candidates += [block.carrier[:1], ""]
         if heading:
             # the layer title heads the cell stack, same font as the carrier
             headed = [f"{heading}\n{c}" for c in candidates[:3] if c]

@@ -123,6 +123,7 @@ class RenderSettings(_Model):
     show_totals: bool = Field(alias="showTotals", default=True)
     show_premiums: bool = Field(alias="showPremiums", default=True)
     cell_premiums: bool = Field(alias="cellPremiums", default=False)
+    cell_dates: bool = Field(alias="cellDates", default=False)
 
 
 class Program(_Model):
@@ -218,7 +219,7 @@ _PARTICIPANT_KEYS = ("carrier", "share")
 _RETENTION_KEYS = ("appliesTo", "type", "amount", "aggregate", "vehicle", "notes")
 _SUBLIMIT_KEYS = ("name", "amount", "appliesTo", "notes")
 _PERIOD_KEYS = ("start", "end")
-_RENDER_KEYS = ("theme", "showTotals", "showPremiums", "cellPremiums")
+_RENDER_KEYS = ("theme", "showTotals", "showPremiums", "cellPremiums", "cellDates")
 
 
 def _ordered(raw: dict[str, Any], keys: tuple[str, ...]) -> dict[str, Any]:
@@ -247,6 +248,7 @@ def program_to_jsonable(program: Program) -> dict[str, Any]:
                     "showTotals": program.render.show_totals,
                     "showPremiums": program.render.show_premiums,
                     "cellPremiums": program.render.cell_premiums,
+                    "cellDates": program.render.cell_dates,
                 },
                 _RENDER_KEYS,
             )

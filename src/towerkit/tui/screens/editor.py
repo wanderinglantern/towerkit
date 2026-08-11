@@ -146,6 +146,7 @@ class EditorScreen(Screen):
             _opts(self).show_totals = stored.show_totals
             _opts(self).show_premiums = stored.show_premiums
             _opts(self).cell_premiums = stored.cell_premiums
+            _opts(self).cell_dates = stored.cell_dates
         self.refresh_all()
         await self._rebuild_detail()
         self.query_one("#structure", Tree).focus()
@@ -988,6 +989,7 @@ class EditorScreen(Screen):
             self.session.program, self.tower_theme, Path("dist"), stem, ["svg", "png"],
             show_totals=_opts(self).show_totals, show_premiums=_opts(self).show_premiums,
             cell_premiums=getattr(_opts(self), "cell_premiums", False),
+            cell_dates=getattr(_opts(self), "cell_dates", False),
         )
         self.notify("rendered: " + ", ".join(str(p) for p in written))
         open_cmd = os.environ.get("OPEN_CMD")
@@ -1003,6 +1005,7 @@ class EditorScreen(Screen):
             _opts(self).show_totals = options.show_totals
             _opts(self).show_premiums = options.show_premiums
             _opts(self).cell_premiums = options.cell_premiums
+            _opts(self).cell_dates = options.cell_dates
             self.apply_theme(Path(options.theme) if options.theme else None)
             from ...model import RenderSettings
 
@@ -1011,6 +1014,7 @@ class EditorScreen(Screen):
                 show_totals=options.show_totals,
                 show_premiums=options.show_premiums,
                 cell_premiums=options.cell_premiums,
+                cell_dates=options.cell_dates,
             )
             # persist with the program so next session opens the same way
             self.session.mutate(lambda p: setattr(p, "render", settings))
@@ -1019,7 +1023,7 @@ class EditorScreen(Screen):
         self.app.push_screen(
             RenderOptionsModal(
                 self.theme_path, _opts(self).show_totals, _opts(self).show_premiums,
-                _opts(self).cell_premiums,
+                _opts(self).cell_premiums, getattr(_opts(self), "cell_dates", False),
             ),
             on_choice,
         )

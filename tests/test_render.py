@@ -149,3 +149,19 @@ class TestLayerTerms:
 
         assert layer_terms(0, 5_000_000) == "$5M"
         assert layer_terms(2_000_000, 25_000_000) == "$25M xs $2M"
+
+
+class TestCellDates:
+    def test_policy_term_between_share_and_premium(self, program, theme, tmp_path) -> None:
+        out = render_program(
+            program, theme, tmp_path, "t", ["svg"],
+            cell_premiums=True, cell_dates=True,
+        )[0]
+        text = out.read_text()
+        # program period on most layers; property runs on its own inception
+        assert "1/1/26 – 1/1/27" in text
+        assert "4/1/26 – 4/1/27" in text
+
+    def test_off_by_default(self, program, theme, tmp_path) -> None:
+        out = render_program(program, theme, tmp_path, "t", ["svg"])[0]
+        assert "1/1/26 – 1/1/27" not in out.read_text()

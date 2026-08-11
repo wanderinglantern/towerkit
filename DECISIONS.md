@@ -151,3 +151,6 @@ relitigated here.
   showTotals, showPremiums, cellPremiums): the options menu writes them,
   both the TUI and CLI read them as defaults, CLI flags still override —
   no re-selecting on every session.
+- **Per-cell policy term option** (`--cell-dates` / menu / `render.cellDates`):
+  renders between the carrier share and the premium, using the layer's own
+  period when set, else the program period; US short dates (m/d/yy).

@@ -83,6 +83,7 @@ class RenderOptions:
     show_totals: bool
     show_premiums: bool
     cell_premiums: bool
+    cell_dates: bool
 
 
 class RenderOptionsModal(ModalScreen[RenderOptions | None]):
@@ -107,6 +108,7 @@ class RenderOptionsModal(ModalScreen[RenderOptions | None]):
         show_totals: bool,
         show_premiums: bool,
         cell_premiums: bool = False,
+        cell_dates: bool = False,
         themes_dir: Path | None = None,
     ) -> None:
         super().__init__()
@@ -114,6 +116,7 @@ class RenderOptionsModal(ModalScreen[RenderOptions | None]):
         self.show_totals = show_totals
         self.show_premiums = show_premiums
         self.cell_premiums = cell_premiums
+        self.cell_dates = cell_dates
         self.themes_dir = themes_dir or Path("themes")
 
     def compose(self) -> ComposeResult:
@@ -139,6 +142,11 @@ class RenderOptionsModal(ModalScreen[RenderOptions | None]):
                 "Premium inside each carrier cell",
                 self.cell_premiums,
                 id="opt-cell-premiums",
+            )
+            yield Checkbox(
+                "Policy term inside each cell",
+                self.cell_dates,
+                id="opt-cell-dates",
             )
             with Horizontal():
                 yield Button("Cancel", id="cancel")
@@ -166,6 +174,7 @@ class RenderOptionsModal(ModalScreen[RenderOptions | None]):
             show_totals=self.query_one("#opt-totals", Checkbox).value,
             show_premiums=self.query_one("#opt-premiums", Checkbox).value,
             cell_premiums=self.query_one("#opt-cell-premiums", Checkbox).value,
+            cell_dates=self.query_one("#opt-cell-dates", Checkbox).value,
         )
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
