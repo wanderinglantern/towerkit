@@ -359,6 +359,28 @@ class TestLayerNotesField:
             assert editor._layer("umbrella").notes == "quota share under negotiation"
 
 
+class TestSoiDetailFields:
+    @pytest.mark.asyncio
+    async def test_detail_prose_lands_on_the_layer(self, sample_copy, monkeypatch) -> None:
+        monkeypatch.chdir(sample_copy.parent.parent)
+        app = TowerkitApp(path=sample_copy)
+        async with app.run_test(size=(140, 45)) as pilot:
+            editor = app.screen
+            editor.selected = ("layer", "umbrella")
+            await editor._rebuild_detail()
+            await pilot.pause()
+            limits = editor.query_one("#f-layer-limits-detail")
+            limits.value = "Each Occurrence $5,000,000; Aggregate $5,000,000"
+            editor._commit_input(limits)
+            retention = editor.query_one("#f-layer-retention-detail")
+            retention.value = "Retention $10,000"
+            editor._commit_input(retention)
+            await pilot.pause()
+            layer = editor._layer("umbrella")
+            assert layer.limits_detail == "Each Occurrence $5,000,000; Aggregate $5,000,000"
+            assert layer.retention_detail == "Retention $10,000"
+
+
 class TestPersistedRenderSettings:
     @pytest.mark.asyncio
     async def test_menu_choice_saves_into_the_program(self, sample_copy, monkeypatch) -> None:

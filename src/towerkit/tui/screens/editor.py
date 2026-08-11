@@ -435,6 +435,18 @@ class EditorScreen(Screen):
                 placeholder="e.g. 20% open at renewal",
                 id="f-layer-notes",
             ),
+            Label("SOI limits detail (verbatim in the schedule)", classes="field-label"),
+            Input(
+                value=layer.limits_detail or "",
+                placeholder="e.g. Each Occurrence $1,000,000; Aggregate $2,000,000",
+                id="f-layer-limits-detail",
+            ),
+            Label("SOI deductible / SIR / retention detail", classes="field-label"),
+            Input(
+                value=layer.retention_detail or "",
+                placeholder="e.g. SIR $250,000 each occurrence",
+                id="f-layer-retention-detail",
+            ),
             Label("Policy period (blank = program period)", classes="field-label"),
             HorizontalGroup(
                 Input(
@@ -664,6 +676,16 @@ class EditorScreen(Screen):
         if wid == "f-layer-notes":
             note = widget.value.strip() or None
             self._mutate_and_refresh(lambda p: setattr(layer, "notes", note))
+            return
+        if wid == "f-layer-limits-detail":
+            limits_detail = widget.value.strip() or None
+            self._mutate_and_refresh(lambda p: setattr(layer, "limits_detail", limits_detail))
+            return
+        if wid == "f-layer-retention-detail":
+            retention_detail = widget.value.strip() or None
+            self._mutate_and_refresh(
+                lambda p: setattr(layer, "retention_detail", retention_detail)
+            )
             return
         if wid in ("f-layer-period-start", "f-layer-period-end"):
             self._commit_layer_period(layer)
@@ -1207,6 +1229,8 @@ _FIELD_HANDLERS = {
     "f-layer-name": EditorScreen._commit_layer_field,
     "f-layer-policy": EditorScreen._commit_layer_field,
     "f-layer-notes": EditorScreen._commit_layer_field,
+    "f-layer-limits-detail": EditorScreen._commit_layer_field,
+    "f-layer-retention-detail": EditorScreen._commit_layer_field,
     "f-layer-period-start": EditorScreen._commit_layer_field,
     "f-layer-period-end": EditorScreen._commit_layer_field,
     "f-layer-attach": EditorScreen._commit_layer_field,

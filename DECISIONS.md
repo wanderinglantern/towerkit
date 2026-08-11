@@ -190,3 +190,7 @@ relitigated here.
   soi_xlsx.py to keep byte-identical output.
 - **SOI dates are real Excel dates** formatted mm/dd/yyyy (sample stores
   text) — sortable/filterable, visually identical.
+- **SOI detail fields are single-line `Input`s in the TUI**, not the spec's
+  "multiline" — matching the Notes field and reusing the stamped-ref commit
+  flow; a `TextArea` would need its own commit path. Long prose still fits
+  (the field scrolls); revisit if editing long schedules in place hurts.
