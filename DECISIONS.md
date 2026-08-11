@@ -154,3 +154,8 @@ relitigated here.
 - **Per-cell policy term option** (`--cell-dates` / menu / `render.cellDates`):
   renders between the carrier share and the premium, using the layer's own
   period when set, else the program period; US short dates (m/d/yy).
+- **Line ids are locked** (display-only, auto-generated); the column label
+  falls back to the NAME's initials ("Directors and Officers" → "DAO"),
+  never the slug id — auto-ids were leaking into rendered column labels.
+- **Lines reorder with shift+↑/↓** in the editor: array order is column
+  order, and the move is a normal undoable edit.

@@ -381,3 +381,59 @@ class TestPersistedRenderSettings:
             editor2 = app2.screen
             assert editor2.tower_theme.name == "marsh"
             assert app2.cell_premiums is True
+
+
+class TestLineIdLocked:
+    @pytest.mark.asyncio
+    async def test_id_field_is_locked_and_label_not_polluted(self, tmp_path, monkeypatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        app = TowerkitApp(new=True)
+        async with app.run_test(size=(140, 45)) as pilot:
+            editor = app.screen
+            editor.selected = ("lines-group", None)
+            await editor.action_add_node()
+            await pilot.pause()
+            name = editor.query_one("#f-line-name")
+            name.value = "Directors and Officers"
+            editor._commit_input(name)
+            await pilot.pause()
+            kind, line_id = editor.selected
+            assert line_id == "directors-and-officers"  # id auto-generated
+            line = editor._line(line_id)
+            assert line.abbr is None  # the label was NOT auto-created…
+            assert line.label == "DAO"  # …it derives from the name's initials
+            id_field = editor.query_one("#f-line-id")
+            assert id_field.disabled  # locked, not editable
+
+
+class TestLineReorder:
+    @pytest.mark.asyncio
+    async def test_shift_arrows_reorder_columns(self, sample_copy, monkeypatch) -> None:
+        monkeypatch.chdir(sample_copy.parent.parent)
+        app = TowerkitApp(path=sample_copy)
+        async with app.run_test(size=(140, 45)) as pilot:
+            editor = app.screen
+            assert editor.session.program.line_ids()[:3] == ["gl", "al", "el"]
+            editor.selected = ("line", "al")
+            await editor.action_move_line(-1)
+            await pilot.pause()
+            assert editor.session.program.line_ids()[:3] == ["al", "gl", "el"]
+            # geometry follows the new order
+            from towerkit.layout import build_layout
+
+            tower = build_layout(editor.session.program)
+            assert tower.columns[0].line_id == "al"
+            # and it undoes like any other edit
+            assert editor.session.undo()
+            assert editor.session.program.line_ids()[:3] == ["gl", "al", "el"]
+
+    @pytest.mark.asyncio
+    async def test_bounds_are_safe(self, sample_copy, monkeypatch) -> None:
+        monkeypatch.chdir(sample_copy.parent.parent)
+        app = TowerkitApp(path=sample_copy)
+        async with app.run_test(size=(140, 45)) as pilot:
+            editor = app.screen
+            editor.selected = ("line", "gl")
+            await editor.action_move_line(-1)  # already first: no-op
+            await pilot.pause()
+            assert editor.session.program.line_ids()[0] == "gl"

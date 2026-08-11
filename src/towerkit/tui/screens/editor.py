@@ -90,6 +90,8 @@ class EditorScreen(Screen):
         ("t", "render_options", "Options"),
         ("a", "add_node", "Add"),
         ("delete", "remove_node", "Remove"),
+        ("shift+up", "move_line(-1)", "Line ←"),
+        ("shift+down", "move_line(1)", "Line →"),
         ("escape", "back", "Back"),
     ]
 
@@ -276,6 +278,7 @@ class EditorScreen(Screen):
                 "Select a node to edit it.\n\n"
                 "a — add an item to the selected group\n"
                 "delete — remove the selected item\n"
+                "shift+↑/↓ — reorder a selected line (column order)\n"
                 "r — render · ctrl+s — save · u/ctrl+r — undo/redo"
             )
         ]
@@ -311,12 +314,12 @@ class EditorScreen(Screen):
         if line is None:
             return self._form_hint(None)
         return [
-            Label("Id", classes="field-label"),
-            Input(value=line.id, id="f-line-id"),
+            Label("Id (auto-generated)", classes="field-label"),
+            Input(value=line.id, id="f-line-id", disabled=True),
             Label("Name", classes="field-label"),
             Input(value=line.name, id="f-line-name"),
             Label("Column label", classes="field-label"),
-            Input(value=line.abbr or "", id="f-line-abbr", placeholder=line.id.upper()),
+            Input(value=line.abbr or "", id="f-line-abbr", placeholder=line.label),
         ]
 
 
@@ -550,20 +553,6 @@ class EditorScreen(Screen):
                 self._mutate_and_refresh(lambda p: setattr(line, "name", value))
         elif widget.id == "f-line-abbr":
             self._mutate_and_refresh(lambda p: setattr(line, "abbr", value or None))
-        elif widget.id == "f-line-id" and value and value != line.id:
-            old = line.id
-
-            def rename(p: Program) -> None:
-                line.id = value
-                for layer in p.layers:
-                    layer.applies_to = [value if lid == old else lid for lid in layer.applies_to]
-                for r in p.retentions:
-                    r.applies_to = [value if lid == old else lid for lid in r.applies_to]
-                for s in p.sublimits:
-                    s.applies_to = [value if lid == old else lid for lid in s.applies_to]
-
-            self.selected = ("line", value)
-            self._mutate_and_refresh(rename)
 
     def _commit_layer_field(self, widget: Input) -> None:
         kind, key = self.selected
@@ -913,6 +902,29 @@ class EditorScreen(Screen):
 
     # -- top-level actions -----------------------------------------------------
 
+    async def action_move_line(self, delta: int) -> None:
+        """Reorder coverage lines — array order is column order in the viz."""
+        kind, key = self.selected
+        if kind != "line":
+            self.notify("select a line to reorder columns")
+            return
+        lines = self.session.program.lines
+        index = next((i for i, ln in enumerate(lines) if ln.id == key), None)
+        if index is None:
+            return
+        target = index + delta
+        if not 0 <= target < len(lines):
+            return
+
+        def swap(p: Program) -> None:
+            p.lines[index], p.lines[target] = p.lines[target], p.lines[index]
+
+        self.session.mutate(swap)
+        self.refresh_all()
+        self._select_tree_node(("line", key))
+        position = target + 1
+        self.notify(f"{lines[target].name} → column {position} of {len(lines)}")
+
     async def action_undo(self) -> None:
         if self.session.undo():
             self.refresh_all()
@@ -1066,7 +1078,6 @@ _FIELD_HANDLERS = {
     "f-program": EditorScreen._commit_program_field,
     "f-period-start": EditorScreen._commit_program_field,
     "f-period-end": EditorScreen._commit_program_field,
-    "f-line-id": EditorScreen._commit_line_field,
     "f-line-name": EditorScreen._commit_line_field,
     "f-line-abbr": EditorScreen._commit_line_field,
     "f-layer-name": EditorScreen._commit_layer_field,

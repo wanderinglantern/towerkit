@@ -52,7 +52,15 @@ class Line(_Model):
 
     @property
     def label(self) -> str:
-        return self.abbr or self.id.upper()
+        """Column label: explicit abbr, else derived from the NAME (initials
+        of a multi-word name, the name itself when short) — never from the
+        id, which is a machine slug."""
+        if self.abbr:
+            return self.abbr
+        words = self.name.split()
+        if len(words) >= 2:
+            return "".join(w[0].upper() for w in words)
+        return self.name if len(self.name) <= 10 else self.name[:10]
 
 
 class Participant(_Model):
