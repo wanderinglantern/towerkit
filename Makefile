@@ -12,13 +12,13 @@ validate:
 	uv run towerctl validate programs/*.json
 
 test:
-	uv run pytest -q
+	uv run --group dev pytest -q
 
 lint:
-	uv run ruff check src tests
+	uv run --group dev ruff check src tests
 
 typecheck:
-	uv run mypy src/towerkit
+	uv run --group dev mypy src/towerkit
 
 check: lint test validate
 

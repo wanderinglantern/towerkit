@@ -14,11 +14,11 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install
-        run: uv sync
+        run: uv sync --all-groups
       - name: Lint
-        run: uv run ruff check src tests
+        run: uv run --group dev ruff check src tests
       - name: Tests
-        run: uv run pytest -q
+        run: uv run --group dev pytest -q
       - name: Validate every program against schema and semantic rules
         # A PR touching programs/*.json fails CI on invalid data.
         run: uv run towerctl validate programs/*.json

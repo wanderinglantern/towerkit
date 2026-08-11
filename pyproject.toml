@@ -17,6 +17,11 @@ dependencies = [
 [project.scripts]
 towerctl = "towerkit.cli:main"
 
+[tool.uv]
+# Runtime installs stay lean: `uv run towerctl` needs no linter/test stack.
+# Development: uv sync --group dev
+default-groups = []
+
 [dependency-groups]
 dev = [
     "pytest>=8.0",
