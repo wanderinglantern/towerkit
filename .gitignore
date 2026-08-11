@@ -9,3 +9,6 @@ dist/
 wheelhouse/
 towerkit-wheelhouse-macos.zip
 programs/private/
+handoffs/
+changelog.md
+CLAUDE.md
