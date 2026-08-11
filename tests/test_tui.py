@@ -264,3 +264,24 @@ class TestEditor:
         assert diags.ok, [str(d) for d in diags.errors]
         assert program.insured == "Scratch Built Co"
         assert program.layers[0].signed_bps == BPS_SCALE
+
+
+class TestAppliesToLayout:
+    @pytest.mark.asyncio
+    async def test_all_six_line_checkboxes_visible(self, sample_copy, monkeypatch) -> None:
+        # Regression: a single horizontal row silently clipped everything
+        # after the third checkbox in the 46-cell detail pane.
+        monkeypatch.chdir(sample_copy.parent.parent)
+        app = TowerkitApp(path=sample_copy)
+        async with app.run_test(size=(140, 45)) as pilot:
+            editor = app.screen
+            editor.selected = ("layer", "umbrella")
+            await editor._rebuild_detail()
+            await pilot.pause()
+            detail = editor.query_one("#detail")
+            for line_id in ("gl", "al", "el", "pl", "cy", "pr"):
+                box = editor.query_one(f"#applies-{line_id}")
+                assert box.region.width > 0, f"{line_id} checkbox not laid out"
+                assert box.region.x + box.region.width <= (
+                    detail.region.x + detail.region.width
+                ), f"{line_id} checkbox clipped off the detail pane"

@@ -17,7 +17,13 @@ from typing import Any
 
 from textual import on
 from textual.app import ComposeResult
-from textual.containers import Horizontal, HorizontalGroup, Vertical, VerticalScroll
+from textual.containers import (
+    Horizontal,
+    HorizontalGroup,
+    Vertical,
+    VerticalGroup,
+    VerticalScroll,
+)
 from textual.screen import Screen
 from textual.widgets import (
     Button,
@@ -93,6 +99,9 @@ class EditorScreen(Screen):
     #detail Input { width: 1fr; }
     #detail HorizontalGroup > Input { width: 1fr; }
     #detail Button { margin-top: 1; }
+    #applies-row { height: auto; }
+    .applies-line { height: auto; }
+    .applies-line Checkbox { width: 1fr; }
     .participant-row { height: 3; }
     .participant-row Input { width: 1fr; }
     .participant-row Static { width: 12; content-align: right middle; height: 3; }
@@ -294,26 +303,36 @@ class EditorScreen(Screen):
             Input(value=line.abbr or "", id="f-line-abbr", placeholder=line.id.upper()),
         ]
 
+
+    def _applies_selector(self, selected: list[str]) -> VerticalGroup:
+        """Checkbox grid for appliesTo. Wrapped into rows — a single
+        Horizontal row clips silently once there are more than ~3 lines."""
+        boxes = [
+            Checkbox(
+                line.id,
+                value=line.id in selected,
+                id=f"applies-{line.id}",
+            )
+            for line in self.session.program.lines
+        ]
+        per_row = 3
+        rows = [
+            HorizontalGroup(*boxes[i : i + per_row], classes="applies-line")
+            for i in range(0, len(boxes), per_row)
+        ]
+        return VerticalGroup(*rows, id="applies-row")
+
     def _form_layer(self, layer_id: str) -> list:
         layer = self._layer(layer_id)
         if layer is None:
             return self._form_hint(None)
-        program = self.session.program
         widgets: list = [
             Label(f"Layer: {layer.name}", classes="field-label"),
             Label("Name", classes="field-label"),
             Input(value=layer.name, id="f-layer-name"),
             Label("Applies to", classes="field-label"),
         ]
-        boxes = [
-            Checkbox(
-                line.id,
-                value=line.id in layer.applies_to,
-                id=f"applies-{line.id}",
-            )
-            for line in program.lines
-        ]
-        widgets.append(HorizontalGroup(*boxes, id="applies-row"))
+        widgets.append(self._applies_selector(layer.applies_to))
         widgets += [
             Label("Attach", classes="field-label"),
             MoneyInput(layer.attach, id="f-layer-attach"),
@@ -374,17 +393,9 @@ class EditorScreen(Screen):
         if index >= len(program.retentions):
             return self._form_hint(None)
         retention = program.retentions[index]
-        boxes = [
-            Checkbox(
-                line.id,
-                value=line.id in retention.applies_to,
-                id=f"applies-{line.id}",
-            )
-            for line in program.lines
-        ]
         return [
             Label("Applies to", classes="field-label"),
-            HorizontalGroup(*boxes, id="applies-row"),
+            self._applies_selector(retention.applies_to),
             Label("Type", classes="field-label"),
             Select(
                 [(t.value, t.value) for t in RetentionType],
@@ -405,21 +416,13 @@ class EditorScreen(Screen):
         if index >= len(program.sublimits):
             return self._form_hint(None)
         sublimit = program.sublimits[index]
-        boxes = [
-            Checkbox(
-                line.id,
-                value=line.id in sublimit.applies_to,
-                id=f"applies-{line.id}",
-            )
-            for line in program.lines
-        ]
         return [
             Label("Name", classes="field-label"),
             Input(value=sublimit.name, id="f-sub-name"),
             Label("Amount", classes="field-label"),
             MoneyInput(sublimit.amount, id="f-sub-amount"),
             Label("Applies to", classes="field-label"),
-            HorizontalGroup(*boxes, id="applies-row"),
+            self._applies_selector(sublimit.applies_to),
         ]
 
     # -- model lookups ---------------------------------------------------------
