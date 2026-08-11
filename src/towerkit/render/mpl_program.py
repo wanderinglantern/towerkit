@@ -93,7 +93,17 @@ def draw_tower(
                 ha="right", va="bottom", fontsize=8.5, color=chrome.muted,
             )
 
+    # layer titles read as the first line of the leftmost cell's text stack
+    titles = {
+        layer.layer_id: (
+            f"{layer.name}{(note_markers or {}).get(layer.layer_id, '')} — "
+            f"{layer_terms(layer.attach, layer.limit)}"
+        )
+        for layer in tower.layers
+    }
+
     # participant blocks
+    lead_seen: set[str] = set()
     for block in tower.participants:
         if block.carrier is None:
             face, hatch, edge = chrome.background, "////", chrome.unplaced
@@ -112,7 +122,11 @@ def draw_tower(
             owner = next(ly for ly in tower.layers if ly.layer_id == block.layer_id)
             if owner.premium is not None:
                 premium = premium_share(owner.premium, block.share_bps)
-        _participant_label(ax, block, theme, colours, premium)
+        heading = None
+        if block.layer_id not in lead_seen:
+            lead_seen.add(block.layer_id)
+            heading = titles[block.layer_id]
+        _participant_label(ax, block, theme, colours, premium, heading)
 
     # layer outlines and layer labels
     for layer in tower.layers:
@@ -123,22 +137,6 @@ def draw_tower(
                     facecolor="none", edgecolor=chrome.ink, linewidth=1.1, zorder=3,
                 )
             )
-        terms = layer_terms(layer.attach, layer.limit)
-        mark = (note_markers or {}).get(layer.layer_id, "")
-        _fit_text(
-            ax,
-            layer.outlines[0],
-            [f"{layer.name}{mark} — {terms}", f"{layer.name}{mark}", ""],
-            fontsize=9,
-            color=chrome.ink,
-            weight="bold",
-            va_top=True,
-            zorder=5,
-            halo=chrome.background,
-            # a title needs headroom above the centred participant label;
-            # in shallow layers the participant text carries the information
-            min_height_factor=3.0,
-        )
 
     # heavy zero line
     ax.plot(
@@ -186,32 +184,50 @@ def layer_terms(attach: int, limit: int) -> str:
 
 
 def _participant_label(
-    ax: Axes, block, theme: Theme, colours: dict[str, str], premium: int | None = None
+    ax: Axes,
+    block,
+    theme: Theme,
+    colours: dict[str, str],
+    premium: int | None = None,
+    heading: str | None = None,
 ) -> None:
     rect = max(block.rects, key=lambda r: r.width, default=None)
     if rect is None:
         return
     if block.carrier is None:
         text_colour = theme.chrome.muted
-        candidates = [f"{format_share(block.share_bps)} open", ""]
+        open_text = f"{format_share(block.share_bps)} open"
+        candidates = [open_text, ""]
+        if heading:
+            candidates = [f"{heading}\n{open_text}", *candidates]
     else:
         face = colours[block.carrier]
         text_colour = contrast_text(face, theme.chrome.background, theme.chrome.ink)
         share = format_share(block.share_bps)
         full = f"{block.carrier} {share}"
-        candidates = []
-        if premium is not None:
-            # per-cell premium: carrier and share with the premium beneath
-            candidates.append(f"{full}\n{format_money_compact(premium)}")
-        # long carrier names wrap onto several lines before degrading to an
-        # initial — "Indian Harbor Insurance Company" must not render as "I"
-        candidates.append(full)
+        # every name form, one-line and wrapped — "Indian Harbor Insurance
+        # Company" must wrap rather than degrade to an initial
+        name_forms = [full]
         for width in (16, 11):
             for text in (full, block.carrier):
                 wrapped = "\n".join(textwrap.wrap(text, width))
-                if "\n" in wrapped and wrapped not in candidates:
-                    candidates.append(wrapped)
-        candidates += [block.carrier, block.carrier[:1], ""]
+                if "\n" in wrapped and wrapped not in name_forms:
+                    name_forms.append(wrapped)
+        if block.carrier not in name_forms:
+            name_forms.append(block.carrier)
+        # the premium line rides along with EVERY name form, so a wrapped
+        # name never silently drops its premium; premium-less forms follow
+        candidates = []
+        if premium is not None:
+            candidates += [f"{form}\n{format_money_compact(premium)}" for form in name_forms]
+        candidates += name_forms + [block.carrier[:1], ""]
+        if heading:
+            # the layer title heads the cell stack, same font as the carrier
+            headed = [f"{heading}\n{c}" for c in candidates[:3] if c]
+            wrapped_heading = "\n".join(textwrap.wrap(heading, 18))
+            if wrapped_heading != heading:
+                headed.append(f"{wrapped_heading}\n{candidates[0]}")
+            candidates = [*headed, *candidates]
     _fit_text(ax, rect, candidates, fontsize=8.5, color=text_colour, zorder=5)
 
 

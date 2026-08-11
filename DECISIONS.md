@@ -127,3 +127,9 @@ relitigated here.
   "xs $0" suffix only appears on layers that actually attach above zero —
   "excess of nothing" reads as an error to a market audience (user-reported
   on a real program).
+- **Layer titles are part of the cell text stack** (user request): the
+  title heads the leftmost participant's cell in the same font and colour
+  as the carrier label, instead of a bold halo banner at the layer's top
+  left; the footnote marker rides on it. Every wrapped carrier-name form
+  keeps its premium line, so long names (Indian Harbor) never silently
+  drop the per-cell premium.
