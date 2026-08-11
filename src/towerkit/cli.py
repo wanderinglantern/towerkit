@@ -80,6 +80,19 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_compare.set_defaults(handler=_cmd_compare)
 
+    p_soi = sub.add_parser("soi", help="export a Schedule of Insurance workbook (.xlsx)")
+    p_soi.add_argument("path", type=Path, metavar="program.json")
+    p_soi.add_argument(
+        "-o", "--out", type=Path, default=None,
+        help="output file (default: '<Insured> - Schedule of Insurance.xlsx')",
+    )
+    p_soi.add_argument("--theme", type=Path, default=None)
+    p_soi.add_argument(
+        "--no-premiums", action="store_true",
+        help="omit the Premium column and section roll-ups",
+    )
+    p_soi.set_defaults(handler=_cmd_soi)
+
     p_edit = sub.add_parser("edit", help="edit a program in the TUI")
     p_edit.add_argument("path", type=Path, nargs="?", metavar="program.json")
     p_edit.add_argument("--theme", type=Path, default=None, help="theme for preview and renders")
@@ -167,6 +180,33 @@ def _cmd_compare(args: argparse.Namespace) -> int:
     for path in written:
         print(path)
     _maybe_open(written)
+    return 0
+
+
+def _cmd_soi(args: argparse.Namespace) -> int:
+    from .render.soi_xlsx import write_soi
+    from .soi import build_soi, default_filename, sheet_title
+    from .theme import load_theme
+    from .validate import ProgramInvalidError
+
+    try:
+        program = _load_for_render(args.path)
+    except ProgramInvalidError as exc:
+        print(exc, file=sys.stderr)
+        return 1
+    stored = program.render
+    theme_path = args.theme or (Path(stored.theme) if stored and stored.theme else None)
+    theme = load_theme(theme_path)
+    out_path = args.out or Path(default_filename(program))
+    written = write_soi(
+        build_soi(program),
+        title=sheet_title(program),
+        theme=theme,
+        out_path=out_path,
+        show_premiums=not args.no_premiums and (stored.show_premiums if stored else True),
+    )
+    print(written)
+    _maybe_open([written])
     return 0
 
 

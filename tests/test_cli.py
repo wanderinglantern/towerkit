@@ -42,6 +42,23 @@ class TestCompare:
         assert (tmp_path / "atomic-2026-vs-atomic-2027.svg").exists()
 
 
+def test_soi_exports_workbook(tmp_path) -> None:
+    sample = Path(__file__).parent.parent / "programs" / "atomic-2026.json"
+    out = tmp_path / "soi.xlsx"
+    assert main(["soi", str(sample), "-o", str(out)]) == 0
+    assert out.exists() and out.stat().st_size > 0
+
+
+def test_soi_default_filename_from_insured(tmp_path, monkeypatch) -> None:
+    from towerkit.model import load_program
+    from towerkit.soi import default_filename
+
+    sample = Path(__file__).parent.parent / "programs" / "atomic-2026.json"
+    monkeypatch.chdir(tmp_path)
+    assert main(["soi", str(sample)]) == 0
+    assert (tmp_path / default_filename(load_program(sample))).exists()
+
+
 class TestParser:
     def test_no_command_shows_help(self, capsys) -> None:
         assert main([]) == 2
