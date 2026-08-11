@@ -112,3 +112,14 @@ relitigated here.
   focused on deltas).
 - **The retention band collapses when a program has no retentions**, so
   column labels sit directly under the towers.
+
+## Review round 5 (2026-08-11)
+
+- **Carrier colour order follows the brand sequence, not a hash**: palette
+  walks Midnight → Sky → Active blue → Blue 500 and only then riffs into the
+  dataviz golds/purples/greens, assigned by first appearance. Cross-program
+  stability in a renewal comparison is preserved by building one colour map
+  over the union of both programs' carriers.
+- **Flexible date entry via Dateparser** (the mandated parsing library):
+  the TUI accepts "1/15/2026", "Jan 15 2026", "April 2026" etc., echoes the
+  canonical ISO form back into the field, and files on disk stay ISO.

@@ -39,8 +39,12 @@ def render_renewal(
         try:
             ax_old = fig.add_axes((0.02, 0.44, 0.47, 0.44))
             ax_new = fig.add_axes((0.51, 0.44, 0.47, 0.44))
-            draw_tower(ax_old, expiring, theme, gamma=gamma)
-            draw_tower(ax_new, proposed, theme, gamma=gamma)
+            shared: dict[str, None] = {}
+            for carrier in [*expiring.carriers(), *proposed.carriers()]:
+                shared.setdefault(carrier, None)
+            colours = theme.carrier_colours(list(shared))
+            draw_tower(ax_old, expiring, theme, gamma=gamma, colours=colours)
+            draw_tower(ax_new, proposed, theme, gamma=gamma, colours=colours)
             _tower_caption(fig, 0.255, expiring, theme)
             _tower_caption(fig, 0.745, proposed, theme)
             _headline(fig, expiring, proposed, delta, theme, show_premiums)

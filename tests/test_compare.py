@@ -97,3 +97,18 @@ class TestPremiumToggle:
         text = out.read_text()
         assert "Premium" not in text
         assert "LAPSED" in text  # the structural story is still there
+
+
+class TestSharedRenewalColours:
+    def test_carrier_keeps_colour_across_both_towers(self) -> None:
+        # the shared map is the union in first-appearance order, so a carrier
+        # new in the proposal cannot displace an incumbent's colour
+        theme = load_theme(REPO / "themes" / "marsh.json")
+        old_p, new_p = load_program(OLD), load_program(NEW_FILE)
+        union: dict[str, None] = {}
+        for carrier in [*old_p.carriers(), *new_p.carriers()]:
+            union.setdefault(carrier, None)
+        shared = theme.carrier_colours(list(union))
+        old_only = theme.carrier_colours(old_p.carriers())
+        for carrier, colour in old_only.items():
+            assert shared[carrier] == colour

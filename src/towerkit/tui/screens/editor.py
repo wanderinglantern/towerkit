@@ -285,7 +285,7 @@ class EditorScreen(Screen):
                 id="f-placement",
                 allow_blank=False,
             ),
-            Label("Period start / end (ISO)", classes="field-label"),
+            Label("Period start / end (e.g. 1/1/2026, Jan 1 2026)", classes="field-label"),
             HorizontalGroup(
                 Input(value=program.period.start.isoformat(), id="f-period-start"),
                 Input(value=program.period.end.isoformat(), id="f-period-end"),
@@ -339,7 +339,7 @@ class EditorScreen(Screen):
             Input(value=layer.name, id="f-layer-name"),
             Label("Policy number", classes="field-label"),
             Input(value=layer.policy_number or "", id="f-layer-policy"),
-            Label("Policy period (ISO; blank = program period)", classes="field-label"),
+            Label("Policy period (blank = program period)", classes="field-label"),
             HorizontalGroup(
                 Input(
                     value=layer.period.start.isoformat() if layer.period else "",
@@ -488,13 +488,13 @@ class EditorScreen(Screen):
         elif wid == "f-program" and value:
             self._mutate_and_refresh(lambda p: setattr(p, "program", value))
         elif wid in ("f-period-start", "f-period-end"):
-            from datetime import date
+            from ...dates import parse_flexible_date
 
-            try:
-                parsed = date.fromisoformat(value)
-            except ValueError:
-                self.notify("period dates are ISO: 2026-01-01", severity="error")
+            parsed = parse_flexible_date(value)
+            if parsed is None:
+                self.notify(f"can't read {value!r} as a date", severity="error")
                 return
+            widget.value = parsed.isoformat()  # echo back the canonical form
             attr = "start" if wid == "f-period-start" else "end"
 
             def set_period(p: Program) -> None:
@@ -560,23 +560,27 @@ class EditorScreen(Screen):
             self._refresh_participant_premiums(layer)
 
     def _commit_layer_period(self, layer) -> None:
-        from datetime import date
+        from ...dates import parse_flexible_date
 
-        start_text = self.query_one("#f-layer-period-start", Input).value.strip()
-        end_text = self.query_one("#f-layer-period-end", Input).value.strip()
+        start_widget = self.query_one("#f-layer-period-start", Input)
+        end_widget = self.query_one("#f-layer-period-end", Input)
+        start_text, end_text = start_widget.value.strip(), end_widget.value.strip()
         if not start_text and not end_text:
             self._mutate_and_refresh(lambda p: setattr(layer, "period", None))
             return
         if not (start_text and end_text):
             return  # half-entered; wait for the other field
+        start, end = parse_flexible_date(start_text), parse_flexible_date(end_text)
+        if start is None or end is None:
+            bad = start_text if start is None else end_text
+            self.notify(f"can't read {bad!r} as a date", severity="error")
+            return
+        start_widget.value, end_widget.value = start.isoformat(), end.isoformat()
         from ...model import Period
 
-        try:
-            period = Period(start=date.fromisoformat(start_text), end=date.fromisoformat(end_text))
-        except ValueError:
-            self.notify("policy period dates are ISO: 2026-01-01", severity="error")
-            return
-        self._mutate_and_refresh(lambda p: setattr(layer, "period", period))
+        self._mutate_and_refresh(
+            lambda p: setattr(layer, "period", Period(start=start, end=end))
+        )
 
     def _refresh_participant_premiums(self, layer) -> None:
         for idx, participant in enumerate(layer.participants):

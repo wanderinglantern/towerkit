@@ -14,6 +14,7 @@
   },
   "carrierPalette": [
     "#000F47",
+    "#CEECFF",
     "#0B4BFF",
     "#82BAFF",
     "#FFBF00",
@@ -23,10 +24,9 @@
     "#6ABF30",
     "#2F7500",
     "#5E017F",
-    "#3D3C37",
-    "#CEECFF",
     "#DEB1FF",
     "#B0DC92",
+    "#3D3C37",
     "#FFF3DA"
   ],
   "carriers": {},

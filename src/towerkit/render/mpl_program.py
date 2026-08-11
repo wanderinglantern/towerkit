@@ -70,11 +70,14 @@ def draw_tower(
     gamma: float = DEFAULT_GAMMA,
     note_markers: dict[str, str] | None = None,
     cell_premiums: bool = False,
+    colours: dict[str, str] | None = None,
 ) -> TowerLayout:
-    """Draw one tower onto an axes. Shared verbatim with the renewal renderer."""
+    """Draw one tower onto an axes. Shared verbatim with the renewal renderer,
+    which passes a `colours` map built over both programs' carriers."""
     tower = build_layout(program, gamma=gamma)
     chrome = theme.chrome
-    colours = theme.carrier_colours(program.carriers())
+    if colours is None:
+        colours = theme.carrier_colours(program.carriers())
 
     ax.set_axis_off()
     bottom = -tower.retention_band - 0.10

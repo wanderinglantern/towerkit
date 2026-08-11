@@ -8,7 +8,6 @@ Colour is three separate concerns in three separate places:
 
 from __future__ import annotations
 
-import hashlib
 import json
 from dataclasses import dataclass, field
 from importlib import resources
@@ -39,38 +38,29 @@ class Theme:
     retention_fills: dict[str, str] = field(default_factory=dict)
 
     def carrier_colours(self, carriers: list[str]) -> dict[str, str]:
-        """Assign palette colours with no carrier list to maintain.
-
-        Each carrier's name hashes to a preferred palette slot (md5 — Python's
-        hash() is salted per process), so the same carrier wears the same
-        colour in every program on every machine. Within one program,
-        collisions probe deterministically to the next free slot. Explicit
-        pins in the theme file still win when present."""
-        n = len(self.carrier_palette)
+        """Walk the palette in order — the brand sequence starts in the blues
+        and only then riffs outward — assigning by first appearance. No
+        carrier list to maintain; explicit pins in a theme still win. For a
+        renewal comparison, call once with the union of both programs'
+        carriers so a carrier keeps its colour across the two towers."""
         out: dict[str, str] = {}
-        taken: set[int] = set()
         in_use = {
             self.pinned_carriers[c] for c in carriers if c in self.pinned_carriers
         }
+        cursor = 0
         for carrier in carriers:
             pinned = self.pinned_carriers.get(carrier)
             if pinned is not None:
                 out[carrier] = pinned
                 continue
-            preferred = self._preferred_slot(carrier)
-            slot = preferred
-            for offset in range(n):
-                slot = (preferred + offset) % n
-                if slot not in taken and self.carrier_palette[slot] not in in_use:
+            for _ in range(len(self.carrier_palette)):
+                candidate = self.carrier_palette[cursor % len(self.carrier_palette)]
+                cursor += 1
+                if candidate not in in_use:
                     break
-            taken.add(slot)
-            out[carrier] = self.carrier_palette[slot]
-            in_use.add(self.carrier_palette[slot])
+            out[carrier] = candidate
+            in_use.add(candidate)
         return out
-
-    def _preferred_slot(self, carrier: str) -> int:
-        digest = hashlib.md5(carrier.encode("utf-8")).hexdigest()
-        return int(digest, 16) % len(self.carrier_palette)
 
     def retention_fill(self, retention_type: str) -> str:
         return self.retention_fills.get(retention_type, "#DDD8C9")
