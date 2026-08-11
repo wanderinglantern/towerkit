@@ -1,0 +1,3 @@
+# Corporate networks TLS-intercept HTTPS; trust the system certificate
+# store (where the corporate CA lives) instead of the bundled webpki roots.
+native-tls = true

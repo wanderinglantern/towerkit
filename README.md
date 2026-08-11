@@ -28,6 +28,17 @@ make render   # regenerate everything in dist/
 
 Set `OPEN_CMD` (e.g. `export OPEN_CMD=open`) to auto-open rendered files.
 
+### Corporate networks
+
+The repo ships a `uv.toml` with `native-tls = true`, so uv trusts the system
+certificate store — this is what makes installs work behind a TLS-inspecting
+corporate proxy (`invalid peer certificate: UnknownIssuer` otherwise). If your
+company also requires an internal package index, point uv at it:
+
+```bash
+export UV_INDEX_URL=https://artifactory.example.com/api/pypi/pypi-remote/simple
+```
+
 ## Design in one minute
 
 - **Lines are columns; layers carry `appliesTo`.** An umbrella spanning three
