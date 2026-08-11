@@ -13,6 +13,7 @@ from towerkit.money import (
     format_money_compact,
     format_share,
     parse_money,
+    parse_share,
     premium_share,
     share_to_bps,
 )
@@ -117,3 +118,17 @@ class TestFormatting:
         assert format_share(3500) == "35%"
         assert format_share(3333) == "33.33%"
         assert format_share(10_000) == "100%"
+
+
+class TestParseShare:
+    @pytest.mark.parametrize(
+        ("text", "bps"),
+        [("60%", 6000), ("60", 6000), ("12.5%", 1250), ("100", 10_000), ("0.5", 50)],
+    )
+    def test_accepts(self, text: str, bps: int) -> None:
+        assert parse_share(text) == bps
+
+    @pytest.mark.parametrize("text", ["", "sixty", "0", "101", "12.345", "-5"])
+    def test_rejects(self, text: str) -> None:
+        with pytest.raises(MoneyParseError):
+            parse_share(text)

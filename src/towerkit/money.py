@@ -134,6 +134,24 @@ def format_share(bps: int) -> str:
     return f"{pct.normalize()}%"
 
 
+def parse_share(text: str) -> int:
+    """'60%', '60', '12.5' → basis points. Everything is read as a PERCENT
+    (the % sign optional) — brokers speak percent, and one consistent rule
+    beats guessing whether 0.25 meant a quarter share."""
+    cleaned = text.strip().rstrip("%").strip()
+    try:
+        pct = Decimal(cleaned)
+    except InvalidOperation as exc:
+        raise MoneyParseError(f"cannot read a share from {text!r}") from exc
+    scaled = pct * 100  # percent → bps
+    if scaled != scaled.to_integral_value():
+        raise MoneyParseError(f"{text!r} has sub-basis-point precision")
+    bps = int(scaled)
+    if not 0 < bps <= BPS_SCALE:
+        raise MoneyParseError(f"{text!r} is not a share between 0% and 100%")
+    return bps
+
+
 def premium_share(premium: int, share_bps: int) -> int:
     """A participant's premium, floor-divided so money stays integer."""
     return premium * share_bps // BPS_SCALE
