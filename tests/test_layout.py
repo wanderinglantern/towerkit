@@ -69,9 +69,9 @@ class TestRuns:
         outlines = tower.layers[0].outlines
         assert len(outlines) == 2
         cols = {c.line_id: c for c in tower.columns}
-        # run edges are exactly the column edges — no arithmetic drift
-        assert outlines[0].x0 == cols["a"].x0 and outlines[0].x1 == cols["b"].x1
-        assert outlines[1].x0 == cols["d"].x0 and outlines[1].x1 == cols["d"].x1
+        # run edges are exactly the columns' drawing extents — no drift
+        assert outlines[0].x0 == cols["a"].ex0 and outlines[0].x1 == cols["b"].ex1
+        assert outlines[1].x0 == cols["d"].ex0 and outlines[1].x1 == cols["d"].ex1
 
     def test_applies_to_order_does_not_matter(self) -> None:
         p1 = make_program(
@@ -151,8 +151,8 @@ class TestAllocation:
         x_block = next(b for b in tower.participants if b.carrier == "X")
         y_block = next(b for b in tower.participants if b.carrier == "Y")
         cols = {c.line_id: c for c in tower.columns}
-        assert [(r.x0, r.x1) for r in x_block.rects] == [(cols["a"].x0, cols["a"].x1)]
-        assert [(r.x0, r.x1) for r in y_block.rects] == [(cols["c"].x0, cols["c"].x1)]
+        assert [(r.x0, r.x1) for r in x_block.rects] == [(cols["a"].ex0, cols["a"].ex1)]
+        assert [(r.x0, r.x1) for r in y_block.rects] == [(cols["c"].ex0, cols["c"].ex1)]
 
     def test_unplaced_capacity_gets_a_block(self) -> None:
         program = make_program(
@@ -181,53 +181,44 @@ class TestAllocation:
             self.assert_no_overlap(tower, block.layer_id)
 
 
-class TestJoinedGutters:
-    def test_same_tower_monoline_bands_meet_edge_to_edge(self) -> None:
-        # An umbrella spans a+b, so the a-b gutter closes: the two monoline
-        # primaries extend half a gutter each and share a bit-identical edge.
+class TestClosedGutters:
+    def test_adjacent_monoline_bands_meet_edge_to_edge(self) -> None:
+        # Every interior gutter is split between its neighbours, so adjacent
+        # bands share a bit-identical edge — no white holes anywhere.
         program = make_program(
             ["a", "b", "c"],
             [
                 layer("prim-a", ["a"], 0, 2_000_000, [("X", 10_000)]),
                 layer("prim-b", ["b"], 0, 2_000_000, [("Y", 10_000)]),
                 layer("prim-c", ["c"], 0, 2_000_000, [("Z", 10_000)]),
-                layer("umb", ["a", "b"], 2_000_000, 5_000_000, [("U", 10_000)]),
             ],
         )
         tower = build_layout(program)
         prim_a = next(b for b in tower.layers if b.layer_id == "prim-a")
         prim_b = next(b for b in tower.layers if b.layer_id == "prim-b")
         prim_c = next(b for b in tower.layers if b.layer_id == "prim-c")
-        assert prim_a.outlines[0].x1 == prim_b.outlines[0].x0  # gutter closed
-        # b-c gutter stays open: c is a separate tower
-        assert prim_b.outlines[0].x1 < prim_c.outlines[0].x0
+        assert prim_a.outlines[0].x1 == prim_b.outlines[0].x0
+        assert prim_b.outlines[0].x1 == prim_c.outlines[0].x0
 
-    def test_spanning_layer_extent_unchanged_at_tower_edges(self) -> None:
+    def test_program_outer_edges_stay_nominal(self) -> None:
         program = make_program(
-            ["a", "b", "c"],
-            [
-                layer("prim-a", ["a"], 0, 1, [("X", 10_000)]),
-                layer("prim-b", ["b"], 0, 1, [("Y", 10_000)]),
-                layer("umb", ["a", "b"], 1, 5, [("U", 10_000)]),
-            ],
+            ["a", "b"],
+            [layer("umb", ["a", "b"], 0, 5, [("U", 10_000)])],
         )
         tower = build_layout(program)
         umb = next(b for b in tower.layers if b.layer_id == "umb")
         cols = {c.line_id: c for c in tower.columns}
-        # the tower's outer silhouette is still the nominal column edges
+        # only interior gutters close; the chart's outer silhouette is fixed
         assert umb.outlines[0].x0 == cols["a"].x0
         assert umb.outlines[0].x1 == cols["b"].x1
 
-    def test_retentions_follow_the_same_rule(self) -> None:
+    def test_retentions_close_gutters_too(self) -> None:
         tower = build_layout(load_program(SAMPLE))
-        # gl/al/el are one tower (umbrella): their retention blocks touch
         rects = sorted(
             (r.rects[0] for r in tower.retentions), key=lambda rect: rect.x0
         )
-        assert rects[0].x1 == rects[1].x0
-        assert rects[1].x1 == rects[2].x0
-        # but the pl retention does not touch el's
-        assert rects[2].x1 < rects[3].x0
+        for left, right in zip(rects, rects[1:], strict=False):
+            assert left.x1 == right.x0
 
 
 class TestVertical:
