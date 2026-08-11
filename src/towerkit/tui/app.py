@@ -16,16 +16,25 @@ class TowerkitApp(App):
     TITLE = "towerkit"
 
     def __init__(
-        self, path: Path | str | None = None, new: bool = False, **kwargs
+        self,
+        path: Path | str | None = None,
+        new: bool = False,
+        theme_path: Path | str | None = None,
+        **kwargs,
     ) -> None:
         super().__init__(**kwargs)
         self._start_path = Path(path) if path else None
         self._start_new = new
+        self.theme_path = Path(theme_path) if theme_path else None
 
     def on_mount(self) -> None:
         if self._start_new:
-            self.push_screen(EditorScreen(EditSession(blank_program(), path=None)))
+            self.push_screen(
+                EditorScreen(EditSession(blank_program(), path=None), theme_path=self.theme_path)
+            )
         elif self._start_path is not None:
-            self.push_screen(EditorScreen(EditSession.open(self._start_path)))
+            self.push_screen(
+                EditorScreen(EditSession.open(self._start_path), theme_path=self.theme_path)
+            )
         else:
-            self.push_screen(ProgramBrowser())
+            self.push_screen(ProgramBrowser(theme_path=self.theme_path))

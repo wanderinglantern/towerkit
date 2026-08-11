@@ -44,6 +44,16 @@ def _build_parser() -> argparse.ArgumentParser:
     p_render.add_argument("--out", type=Path, default=Path("dist"))
     p_render.add_argument("--format", default="svg", help="comma-separated: svg,pdf,png")
     p_render.add_argument("--gamma", type=float, default=0.35)
+    p_render.add_argument(
+        "--no-totals",
+        action="store_true",
+        help="omit the total limit / total premium line from the chart header",
+    )
+    p_render.add_argument(
+        "--no-premiums",
+        action="store_true",
+        help="hide all premium figures (e.g. a hypothetical structure)",
+    )
     p_render.set_defaults(handler=_cmd_render)
 
     p_compare = sub.add_parser("compare", help="render a renewal comparison of two programs")
@@ -53,13 +63,20 @@ def _build_parser() -> argparse.ArgumentParser:
     p_compare.add_argument("--out", type=Path, default=Path("dist"))
     p_compare.add_argument("--format", default="svg", help="comma-separated: svg,pdf,png")
     p_compare.add_argument("--gamma", type=float, default=0.35)
+    p_compare.add_argument(
+        "--no-premiums",
+        action="store_true",
+        help="hide premium figures and deltas (e.g. comparing a hypothetical design)",
+    )
     p_compare.set_defaults(handler=_cmd_compare)
 
     p_edit = sub.add_parser("edit", help="edit a program in the TUI")
     p_edit.add_argument("path", type=Path, nargs="?", metavar="program.json")
+    p_edit.add_argument("--theme", type=Path, default=None, help="theme for preview and renders")
     p_edit.set_defaults(handler=_cmd_edit)
 
     p_new = sub.add_parser("new", help="create a blank program in the TUI")
+    p_new.add_argument("--theme", type=Path, default=None, help="theme for preview and renders")
     p_new.set_defaults(handler=_cmd_edit)
 
     return parser
@@ -104,7 +121,9 @@ def _cmd_render(args: argparse.Namespace) -> int:
     theme = load_theme(args.theme)
     formats = [f.strip() for f in args.format.split(",") if f.strip()]
     written = render_program(
-        program, theme, out_dir=args.out, stem=args.path.stem, formats=formats, gamma=args.gamma
+        program, theme, out_dir=args.out, stem=args.path.stem, formats=formats,
+        gamma=args.gamma, show_totals=not args.no_totals,
+        show_premiums=not args.no_premiums,
     )
     for path in written:
         print(path)
@@ -127,7 +146,8 @@ def _cmd_compare(args: argparse.Namespace) -> int:
     formats = [f.strip() for f in args.format.split(",") if f.strip()]
     stem = f"{args.expiring.stem}-vs-{args.proposed.stem}"
     written = render_renewal(
-        expiring, proposed, theme, out_dir=args.out, stem=stem, formats=formats, gamma=args.gamma
+        expiring, proposed, theme, out_dir=args.out, stem=stem, formats=formats,
+        gamma=args.gamma, show_premiums=not args.no_premiums,
     )
     for path in written:
         print(path)
@@ -139,7 +159,7 @@ def _cmd_edit(args: argparse.Namespace) -> int:
     from .tui.app import TowerkitApp
 
     path = getattr(args, "path", None)
-    app = TowerkitApp(path=path, new=args.command == "new")
+    app = TowerkitApp(path=path, new=args.command == "new", theme_path=args.theme)
     app.run()
     return 0
 

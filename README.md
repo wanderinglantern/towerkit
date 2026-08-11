@@ -20,8 +20,9 @@ uv run towerctl render programs/atomic-2026.json --theme themes/marsh.json --out
 # renewal comparison: two files and a mode, not a second schema
 uv run towerctl compare programs/atomic-2026.json programs/atomic-2027.json --theme themes/marsh.json --out dist
 
-# edit in the TUI (or `towerctl new` for a blank program)
-uv run towerctl edit programs/atomic-2026.json
+# edit in the TUI (or `towerctl new` for a blank program);
+# --theme drives the live preview and the in-app `r` render
+uv run towerctl edit programs/atomic-2026.json --theme themes/marsh.json
 
 make render   # regenerate everything in dist/
 ```

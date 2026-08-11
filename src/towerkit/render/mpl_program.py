@@ -37,13 +37,15 @@ def render_program(
     stem: str,
     formats: list[str] | None = None,
     gamma: float = DEFAULT_GAMMA,
+    show_totals: bool = True,
+    show_premiums: bool = True,
 ) -> list[Path]:
     with rc_context(rc_params(theme)):  # type: ignore[arg-type]
         fig = plt.figure(figsize=(13.5, 9.5))
         try:
             ax = fig.add_axes((0.02, 0.06, 0.96, 0.82))
             tower = draw_tower(ax, program, theme, gamma=gamma)
-            _titles(fig, program, theme)
+            _titles(fig, program, theme, show_totals=show_totals, show_premiums=show_premiums)
             _footer(fig, program, theme, tower)
             return save_figure(fig, Path(out_dir), stem, formats or ["svg"])
         finally:
@@ -205,37 +207,32 @@ def _fit_text(
         text.remove()
 
 
-def _titles(fig, program: Program, theme: Theme) -> None:
+def _titles(
+    fig, program: Program, theme: Theme, show_totals: bool = True, show_premiums: bool = True
+) -> None:
     chrome = theme.chrome
     period = f"{program.period.start.isoformat()} – {program.period.end.isoformat()}"
     fig.text(
         0.04, 0.965, program.insured, fontsize=17, weight="bold",
-        color=chrome.ink, family=chrome.title_font or chrome.font,
+        color=chrome.ink, family=[chrome.title_font or chrome.font, "DejaVu Serif"],
     )
     fig.text(
         0.04, 0.925,
         f"{program.program} · {period} · {program.placement.value.upper()}",
         fontsize=10.5, color=chrome.muted,
     )
-    totals = (
-        f"Total limit {format_money(program.total_limit())} · "
-        f"Total premium {format_money(program.total_premium())}"
-    )
-    fig.text(0.96, 0.965, totals, fontsize=10.5, ha="right", color=chrome.ink)
+    if show_totals:
+        totals = f"Total limit {format_money(program.total_limit())}"
+        if show_premiums:
+            totals += f" · Total premium {format_money(program.total_premium())}"
+        fig.text(0.96, 0.965, totals, fontsize=10.5, ha="right", color=chrome.ink)
 
 
 def _footer(fig, program: Program, theme: Theme, tower: TowerLayout) -> None:
     chrome = theme.chrome
-    caveat = (
-        f"Vertical scale compressed (γ = {tower.ymap.gamma:g}) — NOT TO SCALE. "
-        "Reference lines mark actual attachment points."
-        if tower.ymap.gamma != 1.0
-        else "Vertical scale is linear."
-    )
-    fig.text(0.04, 0.022, caveat, fontsize=8.5, color=chrome.muted)
     if program.sublimits:
         subs = " · ".join(
             f"{s.name} {format_money_compact(s.amount)} ({'/'.join(s.applies_to).upper()})"
             for s in program.sublimits
         )
-        fig.text(0.04, 0.045, f"Sublimits: {subs}", fontsize=8.5, color=chrome.muted)
+        fig.text(0.04, 0.022, f"Sublimits: {subs}", fontsize=8.5, color=chrome.muted)

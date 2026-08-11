@@ -71,3 +71,22 @@ relitigated here.
   exact TTFs ship with towerkit, independent of system fonts. The marsh theme
   uses Noto Sans for body and Noto Serif for headlines (`chrome.titleFont`),
   matching the brand CSS; the default theme stays DejaVu.
+
+## Review round 3 (2026-08-11)
+
+- **The visible "not to scale" caveat is removed from rendered charts** at the
+  user's request. Logging the disagreement: §1 treated the visible caveat as
+  non-negotiable — with γ = 0.35 a $2M layer draws nearly as tall as a $100M
+  one, and the footnote was the explicit guard against reading heights as
+  proportional. The dollar-labelled reference lines remain the only cue.
+  The ASCII preview keeps its small "(not to scale)" tag (working tool, not
+  a deliverable). Revisit if a chart is ever misread in circulation.
+- **`--no-totals` and `--no-premiums` render options** (review round 3):
+  totals line and all premium figures can be omitted — hypothetical program
+  designs have no meaningful premium. With premiums hidden the renewal table
+  sorts by |line Δ| instead.
+- **`towerctl edit --theme`**: the TUI preview and its `r` render now take a
+  theme; previously they always used the built-in default, which made theme
+  selection in the app impossible (user-reported confusion).
+- **Bundled Noto LGC lacks the Arrows block**: `font.family` is set as an
+  explicit list so matplotlib falls back per-glyph to DejaVu for `→`.

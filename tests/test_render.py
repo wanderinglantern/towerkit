@@ -63,10 +63,19 @@ class TestOutput:
         assert "a3f19c2" not in text  # the prototype's fake SHA must be gone
         assert "towerkit 0.1" in text
 
-    def test_not_to_scale_caveat_present(self, program, theme, tmp_path) -> None:
+    def test_no_scale_caveat_drawn(self, program, theme, tmp_path) -> None:
+        # Removed at the user's request (review round 3); see DECISIONS.md.
         out = render_program(program, theme, tmp_path, "t", ["svg"])[0]
-        assert "NOT TO SCALE" in out.read_text()
-
-    def test_linear_gamma_drops_caveat(self, program, theme, tmp_path) -> None:
-        out = render_program(program, theme, tmp_path, "t", ["svg"], gamma=1.0)[0]
         assert "NOT TO SCALE" not in out.read_text()
+
+
+class TestTotalsToggle:
+    def test_totals_shown_by_default(self, program, theme, tmp_path) -> None:
+        out = render_program(program, theme, tmp_path, "t", ["svg"])[0]
+        assert "Total limit" in out.read_text()
+
+    def test_no_totals_omits_the_header_line(self, program, theme, tmp_path) -> None:
+        out = render_program(
+            program, theme, tmp_path, "t", ["svg"], show_totals=False
+        )[0]
+        assert "Total limit" not in out.read_text()

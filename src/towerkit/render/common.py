@@ -35,8 +35,9 @@ def rc_params(theme: Theme) -> dict[str, Any]:
         "svg.hashsalt": "towerkit",  # stable SVG element ids
         "pdf.fonttype": 42,  # embed TrueType, not Type 3
         "svg.fonttype": "path",
-        "font.family": theme.chrome.font,
-        "font.sans-serif": [theme.chrome.font, "DejaVu Sans"],
+        # an explicit family list enables per-glyph fallback: the bundled
+        # Noto LGC subset has no arrows (→), DejaVu does
+        "font.family": [theme.chrome.font, "DejaVu Sans"],
         "figure.facecolor": theme.chrome.background,
         "savefig.facecolor": theme.chrome.background,
     }

@@ -33,9 +33,12 @@ class ProgramBrowser(Screen):
     #hint { height: 1; color: $text-muted; padding: 0 1; }
     """
 
-    def __init__(self, programs_dir: Path | None = None) -> None:
+    def __init__(
+        self, programs_dir: Path | None = None, theme_path: Path | None = None
+    ) -> None:
         super().__init__()
         self.programs_dir = programs_dir or Path("programs")
+        self.theme_path = theme_path
         self.diff_mark: Path | None = None
 
     def compose(self) -> ComposeResult:
@@ -103,14 +106,14 @@ class ProgramBrowser(Screen):
         except Exception as exc:
             self.notify(f"cannot open {path.name}: {exc}", severity="error")
             return
-        self.app.push_screen(EditorScreen(session))
+        self.app.push_screen(EditorScreen(session, theme_path=self.theme_path))
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         self.action_open()
 
     def action_new(self) -> None:
         session = EditSession(blank_program(), path=None)
-        self.app.push_screen(EditorScreen(session))
+        self.app.push_screen(EditorScreen(session, theme_path=self.theme_path))
 
     def action_clone(self) -> None:
         path = self._selected_path()
@@ -167,7 +170,7 @@ class ProgramBrowser(Screen):
         from ...theme import load_theme
 
         written = render_program(
-            program, load_theme(None), Path("dist"), path.stem, ["svg", "png"]
+            program, load_theme(self.theme_path), Path("dist"), path.stem, ["svg", "png"]
         )
         self.notify("rendered: " + ", ".join(str(p) for p in written))
 

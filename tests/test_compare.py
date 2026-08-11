@@ -85,3 +85,15 @@ class TestRenewalRender:
         text = a.read_text()
         assert "LAPSED" in text and "NEW" in text
         assert "renewal comparison" in text
+
+
+class TestPremiumToggle:
+    def test_no_premiums_hides_every_premium_figure(self, tmp_path) -> None:
+        expiring, proposed = load_program(OLD), load_program(NEW_FILE)
+        theme = load_theme(REPO / "themes" / "marsh.json")
+        out = render_renewal(
+            expiring, proposed, theme, tmp_path, "r", ["svg"], show_premiums=False
+        )[0]
+        text = out.read_text()
+        assert "Premium" not in text
+        assert "LAPSED" in text  # the structural story is still there

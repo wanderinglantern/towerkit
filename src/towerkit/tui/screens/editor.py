@@ -108,12 +108,13 @@ class EditorScreen(Screen):
     .participant-row Button { min-width: 5; margin-top: 0; }
     """
 
-    def __init__(self, session: EditSession) -> None:
+    def __init__(self, session: EditSession, theme_path: Path | None = None) -> None:
         super().__init__()
         self.session = session
         self.selected: NodeRef = ("program", None)
         self._detail_lock = asyncio.Lock()
-        self.tower_theme = load_theme(None)
+        self.theme_path = theme_path
+        self.tower_theme = load_theme(theme_path)
         self._carriers = known_carriers(
             Path("programs"), Path("themes"), session.program.carriers()
         )
