@@ -63,6 +63,23 @@ class Theme:
         return self.retention_fills.get(retention_type, "#DDD8C9")
 
 
+def relative_luminance(hex_colour: str) -> float:
+    """WCAG relative luminance of #RRGGBB, in [0, 1]."""
+    hex_colour = hex_colour.lstrip("#")
+    channels = []
+    for i in (0, 2, 4):
+        c = int(hex_colour[i : i + 2], 16) / 255
+        channels.append(c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4)
+    r, g, b = channels
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def contrast_text(face: str, light: str, dark: str) -> str:
+    """Pick the readable label colour for a block: light text on dark fills,
+    dark text on light fills (sky blues, golds)."""
+    return light if relative_luminance(face) < 0.40 else dark
+
+
 def _theme_from_jsonable(data: dict[str, Any]) -> Theme:
     chrome_raw = data.get("chrome", {})
     chrome = Chrome(

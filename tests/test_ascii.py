@@ -64,3 +64,18 @@ class TestAnsiQuantisation:
 
     def test_grey_hits_grey_ramp(self) -> None:
         assert 232 <= ansi256("#808080") <= 255
+
+
+class TestContrastText:
+    def test_light_text_on_dark_fills(self) -> None:
+        from towerkit.theme import contrast_text
+
+        assert contrast_text("#000F47", "#FFF", "#000") == "#FFF"  # midnight
+        assert contrast_text("#C53532", "#FFF", "#000") == "#FFF"  # danger red
+
+    def test_dark_text_on_light_fills(self) -> None:
+        from towerkit.theme import contrast_text
+
+        assert contrast_text("#82BAFF", "#FFF", "#000") == "#000"  # sky blue
+        assert contrast_text("#FFBF00", "#FFF", "#000") == "#000"  # gold
+        assert contrast_text("#CEECFF", "#FFF", "#000") == "#000"

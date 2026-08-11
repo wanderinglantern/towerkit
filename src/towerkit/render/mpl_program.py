@@ -24,7 +24,7 @@ from ..layout import Rect, TowerLayout, build_layout
 from ..model import Program
 from ..money import format_money, format_money_compact, format_share
 from ..scale import DEFAULT_GAMMA
-from ..theme import Theme
+from ..theme import Theme, contrast_text
 from .common import rc_params, save_figure
 
 GUTTER_LEFT = 1.35  # data units reserved left of the tower for dollar labels
@@ -86,7 +86,7 @@ def draw_tower(
                     linewidth=0.6, zorder=2,
                 )
             )
-        _participant_label(ax, block, theme)
+        _participant_label(ax, block, theme, colours)
 
     # layer outlines and layer labels
     for layer in tower.layers:
@@ -149,7 +149,7 @@ def draw_tower(
     return tower
 
 
-def _participant_label(ax: Axes, block, theme: Theme) -> None:
+def _participant_label(ax: Axes, block, theme: Theme, colours: dict[str, str]) -> None:
     rect = max(block.rects, key=lambda r: r.width, default=None)
     if rect is None:
         return
@@ -157,7 +157,8 @@ def _participant_label(ax: Axes, block, theme: Theme) -> None:
         text_colour = theme.chrome.muted
         candidates = [f"{format_share(block.share_bps)} open", ""]
     else:
-        text_colour = theme.chrome.background
+        face = colours[block.carrier]
+        text_colour = contrast_text(face, theme.chrome.background, theme.chrome.ink)
         share = format_share(block.share_bps)
         candidates = [f"{block.carrier} {share}", block.carrier, block.carrier[:1], ""]
     _fit_text(ax, rect, candidates, fontsize=8.5, color=text_colour, zorder=5)

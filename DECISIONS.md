@@ -56,3 +56,16 @@ relitigated here.
   provenance so a chart in circulation identifies its source; metadata
   preserves traceability for anyone who inspects the file, but a printed or
   screenshotted chart no longer carries it. Revisit if that bites.
+
+## Review round 2 (2026-08-11)
+
+- **marsh theme rebuilt on the Marsh McLennan design tokens** extracted from
+  the user's `marsh.css` (Typora theme): core midnight ink, sky-blue grid,
+  carrier colours from the blue/gold/green/purple 500–1000 ramp steps,
+  retention fills from the warm neutral→gold tints.
+- **Participant label colour is picked by luminance** (WCAG relative
+  luminance, threshold 0.40) so light ramp fills get dark text — replaces
+  always-white labels.
+- **Fonts stay DejaVu Sans**, not the CSS's Noto Sans: matplotlib bundles
+  DejaVu, which keeps output byte-identical across machines — and this
+  machine cannot enumerate system fonts at all (see NOTES.md).
