@@ -173,6 +173,7 @@ class ProgramBrowser(Screen):
         written = render_program(
             program, load_theme(self.theme_path), Path("dist"), path.stem, ["svg", "png"],
             show_totals=_opts(self).show_totals, show_premiums=_opts(self).show_premiums,
+            cell_premiums=getattr(_opts(self), "cell_premiums", False),
         )
         self.notify("rendered: " + ", ".join(str(p) for p in written))
 
@@ -203,13 +204,15 @@ class ProgramBrowser(Screen):
             self.theme_path = Path(options.theme) if options.theme else None
             _opts(self).show_totals = options.show_totals
             _opts(self).show_premiums = options.show_premiums
+            _opts(self).cell_premiums = options.cell_premiums
             from ...theme import load_theme
 
             self.notify(f"theme: {load_theme(self.theme_path).name}")
 
         self.app.push_screen(
             RenderOptionsModal(
-                self.theme_path, _opts(self).show_totals, _opts(self).show_premiums
+                self.theme_path, _opts(self).show_totals, _opts(self).show_premiums,
+                getattr(_opts(self), "cell_premiums", False),
             ),
             on_choice,
         )

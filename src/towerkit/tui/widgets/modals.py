@@ -82,6 +82,7 @@ class RenderOptions:
     theme: str  # "" = built-in default, otherwise a theme file path
     show_totals: bool
     show_premiums: bool
+    cell_premiums: bool
 
 
 class RenderOptionsModal(ModalScreen[RenderOptions | None]):
@@ -105,12 +106,14 @@ class RenderOptionsModal(ModalScreen[RenderOptions | None]):
         current_theme: Path | None,
         show_totals: bool,
         show_premiums: bool,
+        cell_premiums: bool = False,
         themes_dir: Path | None = None,
     ) -> None:
         super().__init__()
         self.current_theme = current_theme
         self.show_totals = show_totals
         self.show_premiums = show_premiums
+        self.cell_premiums = cell_premiums
         self.themes_dir = themes_dir or Path("themes")
 
     def compose(self) -> ComposeResult:
@@ -131,6 +134,11 @@ class RenderOptionsModal(ModalScreen[RenderOptions | None]):
                 "Show premiums (uncheck for hypothetical designs)",
                 self.show_premiums,
                 id="opt-premiums",
+            )
+            yield Checkbox(
+                "Premium inside each carrier cell",
+                self.cell_premiums,
+                id="opt-cell-premiums",
             )
             with Horizontal():
                 yield Button("Cancel", id="cancel")
@@ -157,6 +165,7 @@ class RenderOptionsModal(ModalScreen[RenderOptions | None]):
             theme=theme_id,
             show_totals=self.query_one("#opt-totals", Checkbox).value,
             show_premiums=self.query_one("#opt-premiums", Checkbox).value,
+            cell_premiums=self.query_one("#opt-cell-premiums", Checkbox).value,
         )
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:

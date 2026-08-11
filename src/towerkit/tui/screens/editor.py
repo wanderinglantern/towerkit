@@ -913,6 +913,7 @@ class EditorScreen(Screen):
         written = render_program(
             self.session.program, self.tower_theme, Path("dist"), stem, ["svg", "png"],
             show_totals=_opts(self).show_totals, show_premiums=_opts(self).show_premiums,
+            cell_premiums=getattr(_opts(self), "cell_premiums", False),
         )
         self.notify("rendered: " + ", ".join(str(p) for p in written))
         open_cmd = os.environ.get("OPEN_CMD")
@@ -927,11 +928,13 @@ class EditorScreen(Screen):
                 return
             _opts(self).show_totals = options.show_totals
             _opts(self).show_premiums = options.show_premiums
+            _opts(self).cell_premiums = options.cell_premiums
             self.apply_theme(Path(options.theme) if options.theme else None)
 
         self.app.push_screen(
             RenderOptionsModal(
-                self.theme_path, _opts(self).show_totals, _opts(self).show_premiums
+                self.theme_path, _opts(self).show_totals, _opts(self).show_premiums,
+                _opts(self).cell_premiums,
             ),
             on_choice,
         )

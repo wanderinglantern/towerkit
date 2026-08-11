@@ -22,7 +22,7 @@ from matplotlib.patheffects import withStroke
 
 from ..layout import Rect, TowerLayout, build_layout
 from ..model import Program
-from ..money import format_money, format_money_compact, format_share
+from ..money import format_money, format_money_compact, format_share, premium_share
 from ..scale import DEFAULT_GAMMA
 from ..theme import Theme, contrast_text
 from .common import rc_params, save_figure
@@ -40,6 +40,7 @@ def render_program(
     gamma: float = DEFAULT_GAMMA,
     show_totals: bool = True,
     show_premiums: bool = True,
+    cell_premiums: bool = False,
 ) -> list[Path]:
     noted = [layer for layer in sorted(program.layers, key=lambda ly: ly.attach) if layer.notes]
     markers = {
@@ -51,7 +52,10 @@ def render_program(
             # footnote lines need room under the chart
             extra = 0.021 * len(markers)
             ax = fig.add_axes((0.02, 0.06 + extra, 0.96, 0.82 - extra))
-            tower = draw_tower(ax, program, theme, gamma=gamma, note_markers=markers)
+            tower = draw_tower(
+                ax, program, theme, gamma=gamma, note_markers=markers,
+                cell_premiums=cell_premiums and show_premiums,
+            )
             _titles(fig, program, theme, show_totals=show_totals, show_premiums=show_premiums)
             _footer(fig, program, theme, tower, markers)
             return save_figure(fig, Path(out_dir), stem, formats or ["svg"])
@@ -65,6 +69,7 @@ def draw_tower(
     theme: Theme,
     gamma: float = DEFAULT_GAMMA,
     note_markers: dict[str, str] | None = None,
+    cell_premiums: bool = False,
 ) -> TowerLayout:
     """Draw one tower onto an axes. Shared verbatim with the renewal renderer."""
     tower = build_layout(program, gamma=gamma)
@@ -99,7 +104,12 @@ def draw_tower(
                     linewidth=0.6, zorder=2,
                 )
             )
-        _participant_label(ax, block, theme, colours)
+        premium = None
+        if cell_premiums and block.carrier is not None:
+            owner = next(ly for ly in tower.layers if ly.layer_id == block.layer_id)
+            if owner.premium is not None:
+                premium = premium_share(owner.premium, block.share_bps)
+        _participant_label(ax, block, theme, colours, premium)
 
     # layer outlines and layer labels
     for layer in tower.layers:
@@ -164,7 +174,9 @@ def draw_tower(
     return tower
 
 
-def _participant_label(ax: Axes, block, theme: Theme, colours: dict[str, str]) -> None:
+def _participant_label(
+    ax: Axes, block, theme: Theme, colours: dict[str, str], premium: int | None = None
+) -> None:
     rect = max(block.rects, key=lambda r: r.width, default=None)
     if rect is None:
         return
@@ -176,9 +188,13 @@ def _participant_label(ax: Axes, block, theme: Theme, colours: dict[str, str]) -
         text_colour = contrast_text(face, theme.chrome.background, theme.chrome.ink)
         share = format_share(block.share_bps)
         full = f"{block.carrier} {share}"
+        candidates = []
+        if premium is not None:
+            # per-cell premium: carrier and share with the premium beneath
+            candidates.append(f"{full}\n{format_money_compact(premium)}")
         # long carrier names wrap onto several lines before degrading to an
         # initial — "Indian Harbor Insurance Company" must not render as "I"
-        candidates = [full]
+        candidates.append(full)
         for width in (16, 11):
             for text in (full, block.carrier):
                 wrapped = "\n".join(textwrap.wrap(text, width))

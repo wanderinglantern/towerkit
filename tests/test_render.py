@@ -120,3 +120,24 @@ class TestLayerNoteFootnotes:
         assert "¹ 3rd Excess: 20% open at renewal" in text
         # the marked title itself renders as paths (halo path-effects), so it
         # leaves no text comment to assert on — verified visually
+
+
+class TestCellPremiums:
+    def test_cell_premiums_show_per_carrier_figures(self, program, theme, tmp_path) -> None:
+        out = render_program(
+            program, theme, tmp_path, "t", ["svg"], cell_premiums=True
+        )[0]
+        text = out.read_text()
+        # AIG 60% of the $3.9M umbrella premium
+        assert "$2.34M" in text
+
+    def test_off_by_default(self, program, theme, tmp_path) -> None:
+        out = render_program(program, theme, tmp_path, "t", ["svg"])[0]
+        assert "$2.34M" not in out.read_text()
+
+    def test_suppressed_when_premiums_hidden(self, program, theme, tmp_path) -> None:
+        out = render_program(
+            program, theme, tmp_path, "t", ["svg"],
+            show_premiums=False, cell_premiums=True,
+        )[0]
+        assert "$2.34M" not in out.read_text()

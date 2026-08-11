@@ -28,6 +28,7 @@ class TowerkitApp(App):
         self.theme_path = Path(theme_path) if theme_path else None
         self.show_totals = True
         self.show_premiums = True
+        self.cell_premiums = False
 
     def on_mount(self) -> None:
         if self._start_new:

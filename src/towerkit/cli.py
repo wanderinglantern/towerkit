@@ -54,6 +54,11 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="hide all premium figures (e.g. a hypothetical structure)",
     )
+    p_render.add_argument(
+        "--cell-premiums",
+        action="store_true",
+        help="show each carrier's premium share inside its block",
+    )
     p_render.set_defaults(handler=_cmd_render)
 
     p_compare = sub.add_parser("compare", help="render a renewal comparison of two programs")
@@ -123,7 +128,7 @@ def _cmd_render(args: argparse.Namespace) -> int:
     written = render_program(
         program, theme, out_dir=args.out, stem=args.path.stem, formats=formats,
         gamma=args.gamma, show_totals=not args.no_totals,
-        show_premiums=not args.no_premiums,
+        show_premiums=not args.no_premiums, cell_premiums=args.cell_premiums,
     )
     for path in written:
         print(path)
