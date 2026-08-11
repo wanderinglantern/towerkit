@@ -135,7 +135,7 @@ def _cmd_edit(args: argparse.Namespace) -> int:
     from .tui.app import TowerkitApp
 
     path = getattr(args, "path", None)
-    app = TowerkitApp(path=path)
+    app = TowerkitApp(path=path, new=args.command == "new")
     app.run()
     return 0
 

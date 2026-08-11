@@ -1,0 +1,266 @@
+"""TUI tests via Textual's run_test pilot.
+
+The headline gate: a valid program can be created from scratch without
+touching a text editor — and saving is canonical, blocked-but-not-silent on
+errors, with working undo/redo and over-sign protection.
+"""
+
+from __future__ import annotations
+
+import shutil
+from pathlib import Path
+
+import pytest
+
+from towerkit.model import dumps_program, load_program
+from towerkit.money import BPS_SCALE
+from towerkit.tui.app import TowerkitApp
+from towerkit.tui.screens.browser import ProgramBrowser, _bump_stem
+from towerkit.tui.screens.editor import EditorScreen
+from towerkit.tui.session import EditSession, suggested_attach
+from towerkit.tui.widgets.inputs import CarrierSuggester, parse_share_pct
+
+REPO = Path(__file__).parent.parent
+SAMPLE = REPO / "programs" / "atomic-2026.json"
+
+
+@pytest.fixture()
+def sample_copy(tmp_path):
+    target = tmp_path / "programs"
+    target.mkdir()
+    shutil.copy(SAMPLE, target / "atomic-2026.json")
+    return target / "atomic-2026.json"
+
+
+class TestSession:
+    def test_undo_redo_round_trip(self) -> None:
+        session = EditSession.open(SAMPLE)
+        original = dumps_program(session.program)
+        session.mutate(lambda p: setattr(p, "insured", "Changed Co"))
+        assert session.program.insured == "Changed Co"
+        assert session.undo()
+        assert dumps_program(session.program) == original
+        assert session.redo()
+        assert session.program.insured == "Changed Co"
+
+    def test_noop_mutation_costs_no_undo_step(self) -> None:
+        session = EditSession.open(SAMPLE)
+        session.mutate(lambda p: None)
+        assert not session.undo()
+
+    def test_save_with_no_edits_is_zero_diff(self, sample_copy) -> None:
+        before = sample_copy.read_bytes()
+        session = EditSession.open(sample_copy)
+        session.save()
+        assert sample_copy.read_bytes() == before
+
+    def test_dirty_tracking(self, sample_copy) -> None:
+        session = EditSession.open(sample_copy)
+        assert not session.dirty
+        session.mutate(lambda p: setattr(p, "insured", "X Co"))
+        assert session.dirty
+        session.save()
+        assert not session.dirty
+
+    def test_suggested_attach_is_top_of_stack(self) -> None:
+        program = load_program(SAMPLE)
+        # gl/al/el stack tops out at $202M
+        assert suggested_attach(program, ["gl"]) == 202_000_000
+        # pl tower tops out at $25M
+        assert suggested_attach(program, ["pl"]) == 25_000_000
+        assert suggested_attach(program, ["nope"]) == 0
+
+    def test_add_layer_defaults_contiguous(self) -> None:
+        session = EditSession.open(SAMPLE)
+        layer = session.add_layer(["pl"])
+        assert layer.attach == 25_000_000  # contiguity by construction
+
+
+class TestInputHelpers:
+    def test_share_parsing(self) -> None:
+        assert parse_share_pct("35") == 3_500
+        assert parse_share_pct("33.33") == 3_333
+        assert parse_share_pct("100%") == BPS_SCALE
+        assert parse_share_pct("0") == 0
+        assert parse_share_pct("101") is None
+        assert parse_share_pct("33.333") is None  # sub-bps precision rejected
+        assert parse_share_pct("abc") is None
+
+    @pytest.mark.asyncio
+    async def test_carrier_suggester_prefix_and_fuzzy(self) -> None:
+        suggester = CarrierSuggester(["Swiss Re", "Sompo", "Munich Re"])
+        assert await suggester.get_suggestion("Swi") == "Swiss Re"
+        assert await suggester.get_suggestion("swiss re corporate") == "Swiss Re"
+        assert await suggester.get_suggestion("zzz") is None
+
+
+class TestBrowser:
+    def test_bump_stem(self) -> None:
+        assert _bump_stem("atomic-2026") == "atomic-2027"
+        assert _bump_stem("prog") == "prog-renewal"
+
+    @pytest.mark.asyncio
+    async def test_browser_lists_programs_with_badges(self, tmp_path, monkeypatch) -> None:
+        programs = tmp_path / "programs"
+        programs.mkdir()
+        shutil.copy(SAMPLE, programs / "atomic-2026.json")
+        monkeypatch.chdir(tmp_path)
+        app = TowerkitApp()
+        async with app.run_test(size=(120, 40)):
+            browser = app.screen
+            assert isinstance(browser, ProgramBrowser)
+            table = browser.query_one("#programs")
+            assert table.row_count == 1
+            row = table.get_row_at(0)
+            assert row[1] == "atomic-2026.json"
+            assert row[2] == "Atomic Industries, Inc."
+            assert "⚠" in row[0]  # the deliberate 80%-placed warning
+
+    @pytest.mark.asyncio
+    async def test_open_editor_from_browser(self, tmp_path, monkeypatch) -> None:
+        programs = tmp_path / "programs"
+        programs.mkdir()
+        shutil.copy(SAMPLE, programs / "atomic-2026.json")
+        monkeypatch.chdir(tmp_path)
+        app = TowerkitApp()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.press("enter")
+            await pilot.pause()
+            assert isinstance(app.screen, EditorScreen)
+
+
+class TestEditor:
+    @pytest.mark.asyncio
+    async def test_editor_shows_structure_and_diagnostics(self, sample_copy, monkeypatch) -> None:
+        monkeypatch.chdir(sample_copy.parent.parent)
+        app = TowerkitApp(path=sample_copy)
+        async with app.run_test(size=(140, 45)):
+            editor = app.screen
+            assert isinstance(editor, EditorScreen)
+            tree = editor.query_one("#structure")
+            labels = [str(n.label) for n in editor._walk(tree.root)]
+            assert any("Layers (14)" in label for label in labels)
+            assert any("Umbrella" in label for label in labels)
+            diags = editor.query_one("#diagnostics")
+            assert len(diags.children) == 1  # the 80%-placed warning
+
+    @pytest.mark.asyncio
+    async def test_over_signing_blocked_at_input(self, sample_copy, monkeypatch) -> None:
+        monkeypatch.chdir(sample_copy.parent.parent)
+        app = TowerkitApp(path=sample_copy)
+        async with app.run_test(size=(140, 45)) as pilot:
+            editor = app.screen
+            editor.selected = ("layer", "umbrella")
+            await editor._rebuild_detail()
+            await pilot.pause()
+            share = editor.query_one("#p-share-0")
+            share.value = "90"  # AIG 60→90 with Berkley at 40 would be 130%
+            editor._commit_participant(share, "p-share-0")
+            await pilot.pause()
+            layer = editor._layer("umbrella")
+            assert layer.signed_bps == BPS_SCALE  # unchanged: block, don't flag
+            assert share.value == "60"  # display restored
+
+    @pytest.mark.asyncio
+    async def test_money_field_commit_updates_program(self, sample_copy, monkeypatch) -> None:
+        monkeypatch.chdir(sample_copy.parent.parent)
+        app = TowerkitApp(path=sample_copy)
+        async with app.run_test(size=(140, 45)) as pilot:
+            editor = app.screen
+            editor.selected = ("layer", "umbrella")
+            await editor._rebuild_detail()
+            await pilot.pause()
+            attach = editor.query_one("#f-layer-attach")
+            attach.value = "2.5m"
+            editor._commit_input(attach)
+            await pilot.pause()
+            assert editor._layer("umbrella").attach == 2_500_000
+            # the gap this creates shows up immediately in diagnostics
+            assert any(
+                d.code == "line-gap" for d in editor.session.diagnostics().errors
+            )
+
+    @pytest.mark.asyncio
+    async def test_undo_key(self, sample_copy, monkeypatch) -> None:
+        monkeypatch.chdir(sample_copy.parent.parent)
+        app = TowerkitApp(path=sample_copy)
+        async with app.run_test(size=(140, 45)) as pilot:
+            editor = app.screen
+            editor.session.mutate(lambda p: setattr(p, "insured", "Other Co"))
+            await pilot.press("u")
+            await pilot.pause()
+            assert editor.session.program.insured == "Atomic Industries, Inc."
+
+    @pytest.mark.asyncio
+    async def test_save_with_errors_prompts_not_blocks(self, sample_copy, monkeypatch) -> None:
+        monkeypatch.chdir(sample_copy.parent.parent)
+        app = TowerkitApp(path=sample_copy)
+        async with app.run_test(size=(140, 45)) as pilot:
+            editor = app.screen
+            # seed an error: umbrella attach moves, creating a gap
+            editor.session.mutate(lambda p: setattr(editor._layer("umbrella"), "attach", 3_000_000))
+            before = sample_copy.read_bytes()
+            await pilot.press("ctrl+s")
+            await pilot.pause()
+            from towerkit.tui.widgets.modals import ConfirmModal
+
+            assert isinstance(app.screen, ConfirmModal)  # asked, not silent
+            await pilot.press("escape")  # cancel
+            await pilot.pause()
+            assert sample_copy.read_bytes() == before  # cancelled → untouched
+
+    @pytest.mark.asyncio
+    async def test_create_valid_program_from_scratch(self, tmp_path, monkeypatch) -> None:
+        """The §9 gate for the TUI, in miniature: start blank, build a valid
+        program using only editor operations, save, and validate the file."""
+        monkeypatch.chdir(tmp_path)
+        app = TowerkitApp(new=True)
+        async with app.run_test(size=(140, 45)) as pilot:
+            editor = app.screen
+            # name the insured via the program form
+            editor.selected = ("program", None)
+            await editor._rebuild_detail()
+            await pilot.pause()
+            insured = editor.query_one("#f-insured")
+            insured.value = "Scratch Built Co"
+            editor._commit_input(insured)
+            # add a primary layer on the default gl line (attach suggested: 0)
+            editor.selected = ("layers-group", None)
+            await editor.action_add_node()
+            await pilot.pause()
+            kind, layer_id = editor.selected
+            assert kind == "layer"
+            layer = editor._layer(layer_id)
+            assert layer.attach == 0
+            # set its limit and fill it with one carrier at 100%
+            limit = editor.query_one("#f-layer-limit")
+            limit.value = "5m"
+            editor._commit_input(limit)
+            editor.query_one("#add-participant").press()
+            await pilot.pause()
+            carrier = editor.query_one("#p-carrier-0")
+            carrier.value = "Zurich"
+            editor._commit_input(carrier)
+            # add a retention on gl
+            editor.selected = ("retentions-group", None)
+            await editor.action_add_node()
+            await pilot.pause()
+            # save via the name prompt
+            editor.action_save()
+            await pilot.pause()
+            from towerkit.tui.widgets.modals import PromptModal
+
+            assert isinstance(app.screen, PromptModal)
+            prompt = app.screen.query_one("#prompt")
+            prompt.value = "scratch"
+            await pilot.press("enter")
+            await pilot.pause()
+        saved = tmp_path / "programs" / "scratch.json"
+        assert saved.exists()
+        from towerkit.validate import validate_file
+
+        program, diags = validate_file(saved)
+        assert program is not None
+        assert diags.ok, [str(d) for d in diags.errors]
+        assert program.insured == "Scratch Built Co"
+        assert program.layers[0].signed_bps == BPS_SCALE

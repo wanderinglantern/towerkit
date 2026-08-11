@@ -22,6 +22,7 @@ dev = [
     "pytest>=8.0",
     "ruff>=0.4",
     "mypy>=1.10",
+    "pytest-asyncio>=1.4.0",
 ]
 
 [build-system]
@@ -45,3 +46,4 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+asyncio_mode = "auto"
