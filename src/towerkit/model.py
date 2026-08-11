@@ -95,6 +95,8 @@ class Layer(_Model):
     attach: Money
     limit: int
     premium: Money | None = None
+    limits_detail: str | None = Field(alias="limitsDetail", default=None)
+    retention_detail: str | None = Field(alias="retentionDetail", default=None)
     participants: list[Participant] = Field(default_factory=list)
     notes: str | None = None
 
@@ -226,7 +228,8 @@ _PROGRAM_KEYS = (
 _LINE_KEYS = ("id", "name", "abbr", "group")
 _LAYER_KEYS = (
     "id", "name", "policyNumber", "period", "followsUnderlying", "appliesTo",
-    "attach", "limit", "premium", "participants", "notes",
+    "attach", "limit", "premium", "limitsDetail", "retentionDetail",
+    "participants", "notes",
 )
 _PARTICIPANT_KEYS = ("carrier", "share")
 _RETENTION_KEYS = ("appliesTo", "type", "amount", "aggregate", "vehicle", "notes")
@@ -297,6 +300,8 @@ def program_to_jsonable(program: Program) -> dict[str, Any]:
                     "attach": layer.attach,
                     "limit": layer.limit,
                     "premium": layer.premium,
+                    "limitsDetail": layer.limits_detail,
+                    "retentionDetail": layer.retention_detail,
                     "participants": [
                         _ordered(
                             {"carrier": p.carrier, "share": bps_to_json_number(p.share_bps)},

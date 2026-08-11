@@ -178,6 +178,16 @@
         "premium": {
           "$ref": "#/$defs/money"
         },
+        "limitsDetail": {
+          "description": "SOI Limits column prose, exported verbatim; composed from limit/attach/sublimits when absent.",
+          "type": "string",
+          "minLength": 1
+        },
+        "retentionDetail": {
+          "description": "SOI Deductible/SIR/Retention column prose, exported verbatim; composed from retentions when absent.",
+          "type": "string",
+          "minLength": 1
+        },
         "participants": {
           "type": "array",
           "items": {

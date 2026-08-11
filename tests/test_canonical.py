@@ -87,3 +87,25 @@ def test_render_settings_round_trip(tmp_path) -> None:
     assert reloaded.render is not None
     assert reloaded.render.cell_premiums is True
     assert reloaded.render.show_premiums is False
+
+
+def test_soi_detail_fields_round_trip() -> None:
+    program = load_program(SAMPLE)
+    layer = program.layers[0]
+    layer.limits_detail = "Each Occurrence $1,000,000; Med Pay $5,000"
+    layer.retention_detail = "SIR $250,000"
+    text = dumps_program(program)
+    reloaded = loads_program(text)
+    assert reloaded.layers[0].limits_detail == "Each Occurrence $1,000,000; Med Pay $5,000"
+    assert reloaded.layers[0].retention_detail == "SIR $250,000"
+
+
+def test_soi_detail_keys_sit_between_premium_and_participants() -> None:
+    program = load_program(SAMPLE)
+    program.layers[0].premium = 12_345  # ensure "premium" appears in this layer
+    program.layers[0].limits_detail = "L"
+    program.layers[0].retention_detail = "R"
+    text = dumps_program(program)
+    block = text[text.index('"layers"'):]
+    assert block.index('"limitsDetail"') < block.index('"retentionDetail"')
+    assert block.index('"premium"') < block.index('"limitsDetail"') < block.index('"participants"')
