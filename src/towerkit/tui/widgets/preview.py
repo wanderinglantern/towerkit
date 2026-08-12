@@ -8,16 +8,25 @@ from textual.widgets import Static
 from ...model import Program
 from ...render.ascii import render_ascii
 from ...theme import Theme
+from ..theme import DIM, RULE
 
 
 class TowerPreview(Static):
-    DEFAULT_CSS = """
-    TowerPreview { width: 1fr; height: 1fr; padding: 0 1; }
+    # chrome only: a quiet frame and title around the preview — the ANSI
+    # content inside keeps the render theme's colors untouched
+    DEFAULT_CSS = f"""
+    TowerPreview {{
+        width: 1fr; height: 1fr; padding: 0 1;
+        border: round {RULE};
+        border-title-color: {DIM};
+        border-title-align: left;
+    }}
     """
 
     def __init__(self, theme: Theme, **kwargs) -> None:
         super().__init__("", **kwargs)
         self.tower_theme = theme
+        self.border_title = "tower preview"
 
     def show_program(self, program: Program, diagnostics=None) -> None:
         error_layers: frozenset[str] = frozenset()

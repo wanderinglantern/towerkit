@@ -10,6 +10,7 @@ from textual.app import App
 from .screens.browser import ProgramBrowser
 from .screens.editor import EditorScreen
 from .session import EditSession, blank_program
+from .theme import TOWERKIT_THEME
 
 
 class TowerkitApp(App):
@@ -32,6 +33,10 @@ class TowerkitApp(App):
         self.cell_dates = False
 
     def on_mount(self) -> None:
+        # chrome only — rendered charts and the tower preview keep the Marsh
+        # render theme from themes/, which this must never touch
+        self.register_theme(TOWERKIT_THEME)
+        self.theme = "towerkit"
         if self._start_new:
             self.push_screen(
                 EditorScreen(EditSession(blank_program(), path=None), theme_path=self.theme_path)
