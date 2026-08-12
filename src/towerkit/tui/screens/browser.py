@@ -10,8 +10,8 @@ from textual.widgets import DataTable, Footer, Header, Static
 
 from ...model import dump_program, load_program
 from ...money import format_money
-from ...validate import validate_file
-from ..session import EditSession, blank_program
+from ...validate import ProgramInvalidError, validate_file
+from ..session import EditSession, blank_program, slugify
 from ..widgets.modals import (
     ConfirmModal,
     HelpModal,
@@ -32,6 +32,8 @@ class ProgramBrowser(Screen):
         ("r", "render", "Render"),
         ("x", "diff", "Mark/compare"),
         ("t", "render_options", "Options"),
+        ("i", "import_file", "Import"),
+        ("w", "template", "Template"),
         ("q", "quit", "Quit"),
         ("question_mark", "help", "Help"),
     ]
@@ -54,7 +56,8 @@ class ProgramBrowser(Screen):
         yield DataTable(id="programs", cursor_type="row")
         yield Static(
             "enter open · n new · c clone as renewal · d delete · r render · "
-            "x mark two programs to compare · t render options",
+            "x mark two programs to compare · t render options · "
+            "i import schedule · w write template",
             id="hint",
         )
         yield Footer()
@@ -153,6 +156,79 @@ class ProgramBrowser(Screen):
             PromptModal("New file name for the renewal:", default=default), on_name
         )
 
+    def action_template(self) -> None:
+        def on_name(name: str | None) -> None:
+            if not name:
+                return
+            from ...ingest_template import write_template
+
+            target = Path(name if name.endswith(".xlsx") else f"{name}.xlsx")
+            self.notify(f"template written: {write_template(target)}")
+
+        self.app.push_screen(
+            PromptModal("Template file name:", default="template.xlsx"), on_name
+        )
+
+    def action_import_file(self) -> None:
+        def on_source(source: str | None) -> None:
+            if not source:
+                return
+
+            def on_insured(insured: str | None) -> None:
+                if not insured:
+                    return
+
+                def on_program(program_name: str | None) -> None:
+                    if not program_name:
+                        return
+                    from ...ingest import import_schedule
+
+                    try:
+                        draft = import_schedule(
+                            Path(source), insured=insured, program=program_name
+                        )
+                    except Exception as exc:
+                        self.notify(f"import failed: {exc}", severity="error")
+                        return
+                    self._finish_import(draft)
+
+                self.app.push_screen(PromptModal("Program name:"), on_program)
+
+            self.app.push_screen(PromptModal("Insured name:"), on_insured)
+
+        self.app.push_screen(
+            PromptModal("Schedule file (xlsx/csv/text):"), on_source
+        )
+
+    def _finish_import(self, draft) -> None:
+        for diag in draft.diagnostics.items:
+            self.notify(
+                str(diag), severity="error" if diag.severity == "error" else "warning"
+            )
+        try:
+            program = draft.to_program()
+        except ProgramInvalidError as exc:
+            first = (
+                exc.diagnostics.errors[0].message
+                if exc.diagnostics.errors
+                else "invalid schedule"
+            )
+            self.notify(f"import failed: {first}", severity="error")
+            return
+        out = self.programs_dir / (
+            f"{slugify(program.insured)}-{slugify(program.program)}.json"
+        )
+        if out.exists():  # program files are the source of truth — never clobber
+            self.notify(f"{out.name} exists — not overwriting", severity="error")
+            return
+        self.programs_dir.mkdir(parents=True, exist_ok=True)
+        dump_program(program, out)
+        self.reload()
+        self.notify(f"imported {out.name}")
+        self.app.push_screen(
+            EditorScreen(EditSession.open(out), theme_path=self.theme_path)
+        )
+
     def action_delete(self) -> None:
         path = self._selected_path()
         if path is None:
@@ -242,6 +318,8 @@ class ProgramBrowser(Screen):
   r          render the selected program
   x          mark two programs to compare (renewal diff)
   t          render options (theme, totals, premiums, cell extras)
+  i          import a schedule file (xlsx/csv/text) into a new program
+  w          write a blank import template workbook
   q          quit        ?  this help
 """
             )

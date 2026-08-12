@@ -11,6 +11,7 @@ import shutil
 from pathlib import Path
 
 import pytest
+from textual.widgets import Input
 
 from towerkit.model import dumps_program, load_program
 from towerkit.money import BPS_SCALE
@@ -22,6 +23,17 @@ from towerkit.tui.widgets.inputs import CarrierSuggester, parse_share_pct
 
 REPO = Path(__file__).parent.parent
 SAMPLE = REPO / "programs" / "atomic-2026.json"
+
+
+def _filled_template(tmp_path: Path) -> Path:
+    """A ready-to-import workbook. `write_template` (see
+    towerkit.ingest_template) already writes the worked example rows that
+    the CLI round-trip test (tests/test_cli.py::TestTemplate::
+    test_template_then_import) imports as-is — no manual openpyxl filling
+    step is needed on top of it."""
+    from towerkit.ingest_template import write_template
+
+    return write_template(tmp_path / "filled.xlsx")
 
 
 @pytest.fixture()
@@ -1043,3 +1055,87 @@ class TestSendLine:
             await pilot.pause()
             assert isinstance(app.screen, EditorScreen)  # no modal
             assert any("select a line" in n.message for n in app._notifications)
+
+
+class TestBrowserImport:
+    async def _fill(self, pilot, value: str) -> None:
+        pilot.app.screen.query_one(Input).value = value
+        await pilot.press("enter")
+        await pilot.pause()
+
+    @pytest.mark.asyncio
+    async def test_w_writes_template_workbook(self, tmp_path, monkeypatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "programs").mkdir()
+        app = TowerkitApp()
+        async with app.run_test(size=(140, 45)) as pilot:
+            await pilot.press("w")
+            await pilot.pause()
+            await self._fill(pilot, "blank.xlsx")
+        assert (tmp_path / "blank.xlsx").exists()
+
+    @pytest.mark.asyncio
+    async def test_i_imports_filled_template_and_opens_editor(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "programs").mkdir()
+        # write_template's worked example rows import as-is (matching
+        # tests/test_cli.py::TestTemplate::test_template_then_import) —
+        # insured/program are supplied by the user, mirroring the CLI's
+        # required --insured/--program flags (import_schedule defaults
+        # both to "" and Program.insured/program require min_length=1,
+        # so the browser prompts for them rather than guessing).
+        src = _filled_template(tmp_path)
+        app = TowerkitApp()
+        async with app.run_test(size=(140, 45)) as pilot:
+            await pilot.press("i")
+            await pilot.pause()
+            await self._fill(pilot, str(src))
+            await self._fill(pilot, "Example Co")
+            await self._fill(pilot, "Property")
+            assert isinstance(app.screen, EditorScreen)  # opened for editing
+            new_files = list((tmp_path / "programs").glob("*.json"))
+            assert len(new_files) == 1
+
+    @pytest.mark.asyncio
+    async def test_i_refuses_existing_output(self, tmp_path, monkeypatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "programs").mkdir()
+        src = _filled_template(tmp_path)
+        app = TowerkitApp()
+        async with app.run_test(size=(140, 45)) as pilot:
+            await pilot.press("i")
+            await pilot.pause()
+            await self._fill(pilot, str(src))
+            await self._fill(pilot, "Example Co")
+            await self._fill(pilot, "Property")
+        target = next((tmp_path / "programs").glob("*.json"))
+        before = target.read_bytes()
+        app2 = TowerkitApp()
+        async with app2.run_test(size=(140, 45)) as pilot:
+            await pilot.press("i")
+            await pilot.pause()
+            await self._fill(pilot, str(src))
+            await self._fill(pilot, "Example Co")
+            await self._fill(pilot, "Property")
+            assert any(
+                "not overwriting" in n.message for n in app2._notifications
+            )
+        assert target.read_bytes() == before
+
+    @pytest.mark.asyncio
+    async def test_i_bad_source_notifies(self, tmp_path, monkeypatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "programs").mkdir()
+        app = TowerkitApp()
+        async with app.run_test(size=(140, 45)) as pilot:
+            await pilot.press("i")
+            await pilot.pause()
+            await self._fill(pilot, str(tmp_path / "nope.txt"))
+            await self._fill(pilot, "Example Co")
+            await self._fill(pilot, "Property")
+            assert any(
+                "import failed" in n.message for n in app._notifications
+            )
+        assert not list((tmp_path / "programs").glob("*.json"))
