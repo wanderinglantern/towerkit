@@ -327,6 +327,11 @@ class TestLayerPolicyData:
         )
         assert "layer-period" in {d.code for d in validate_program(program).errors}
 
+    def test_backwards_program_period_is_error(self) -> None:
+        program = make_program()
+        program.period = Period(start=date(2027, 1, 1), end=date(2026, 1, 1))
+        assert "program-period" in error_codes(program)
+
     def test_policy_number_and_period_round_trip(self) -> None:
         program = load_program(SAMPLE)
         umbrella = next(ly for ly in program.layers if ly.id == "umbrella")

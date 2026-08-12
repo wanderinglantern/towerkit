@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from textual.app import ComposeResult
 from textual.screen import Screen
@@ -15,6 +16,7 @@ from ..session import EditSession, blank_program, slugify
 from ..widgets.modals import (
     ConfirmModal,
     HelpModal,
+    ImportFileModal,
     PasteImportModal,
     PromptModal,
     RenderOptions,
@@ -22,6 +24,9 @@ from ..widgets.modals import (
 )
 from .diff import DiffScreen
 from .editor import EditorScreen, _opts
+
+if TYPE_CHECKING:
+    from ...ingest import DraftProgram
 
 
 class ProgramBrowser(Screen):
@@ -162,45 +167,50 @@ class ProgramBrowser(Screen):
         def on_name(name: str | None) -> None:
             if not name:
                 return
-            from ...ingest_template import write_template
+            target = Path(name if name.lower().endswith(".xlsx") else f"{name}.xlsx")
 
-            target = Path(name if name.endswith(".xlsx") else f"{name}.xlsx")
-            self.notify(f"template written: {write_template(target)}")
+            def write_it() -> None:
+                from ...ingest_template import write_template
+
+                self.notify(f"template written: {write_template(target)}")
+
+            if target.exists():  # a filled template is keyed-in user data — confirm first
+
+                def on_confirm(confirmed: bool | None) -> None:
+                    if confirmed:
+                        write_it()
+
+                self.app.push_screen(
+                    ConfirmModal(f"{target.name} exists — overwrite?", yes_label="Overwrite"),
+                    on_confirm,
+                )
+                return
+            write_it()
 
         self.app.push_screen(
             PromptModal("Template file name:", default="template.xlsx"), on_name
         )
 
     def action_import_file(self) -> None:
-        def on_source(source: str | None) -> None:
-            if not source:
+        def on_fields(fields: dict | None) -> None:
+            if not fields or not fields["path"].strip():
                 return
+            from ...ingest import import_schedule
 
-            def on_insured(insured: str | None) -> None:
-                if not insured:
-                    return
+            try:
+                draft = import_schedule(
+                    Path(fields["path"]).expanduser(),
+                    insured=fields["insured"],
+                    program=fields["program"],
+                    inception=fields["inception"],
+                    expiry=fields["expiry"],
+                )
+            except Exception as exc:
+                self.notify(f"import failed: {exc}", severity="error")
+                return
+            self._finish_import(draft)
 
-                def on_program(program_name: str | None) -> None:
-                    if not program_name:
-                        return
-                    from ...ingest import import_schedule
-
-                    try:
-                        draft = import_schedule(
-                            Path(source), insured=insured, program=program_name
-                        )
-                    except Exception as exc:
-                        self.notify(f"import failed: {exc}", severity="error")
-                        return
-                    self._finish_import(draft)
-
-                self.app.push_screen(PromptModal("Program name:"), on_program)
-
-            self.app.push_screen(PromptModal("Insured name:"), on_insured)
-
-        self.app.push_screen(
-            PromptModal("Schedule file (xlsx/csv/text):"), on_source
-        )
+        self.app.push_screen(ImportFileModal(), on_fields)
 
     def action_paste_import(self) -> None:
         def on_fields(fields: dict | None) -> None:
@@ -224,7 +234,7 @@ class ProgramBrowser(Screen):
 
         self.app.push_screen(PasteImportModal(), on_fields)
 
-    def _finish_import(self, draft) -> None:
+    def _finish_import(self, draft: DraftProgram) -> None:
         for diag in draft.diagnostics.items:
             self.notify(
                 str(diag), severity="error" if diag.severity == "error" else "warning"

@@ -85,6 +85,7 @@ def validate_program(program: Program) -> Diagnostics:
     line_ids = program.line_ids()
 
     _check_unique_ids(program, diags)
+    _check_program_period(program, diags)
 
     for layer in program.layers:
         _check_layer(layer, line_ids, diags)
@@ -117,6 +118,15 @@ def validate_program(program: Program) -> Diagnostics:
                     ("sublimit", index),
                 )
     return diags
+
+
+def _check_program_period(program: Program, diags: Diagnostics) -> None:
+    if program.period.end <= program.period.start:
+        diags.error(
+            "program-period",
+            f"program period ends {program.period.end.isoformat()} "
+            f"on or before it starts {program.period.start.isoformat()}",
+        )
 
 
 def _check_group_adjacency(program: Program, diags: Diagnostics) -> None:

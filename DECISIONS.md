@@ -232,3 +232,27 @@ relitigated here.
   recomputed from `dst_after.underlying_tops(layer)` rather than carrying
   whatever attach it had in the source. A stale attach is derived-state
   rot, not data worth preserving verbatim.
+
+## TUI import (2026-08-12)
+
+- **`ImportFileModal` replaces `i`'s three chained `PromptModal`s.** The
+  original design (docs/superpowers/specs/2026-08-12-tui-import-design.md)
+  chained schedule-path/insured/program prompts, which is a dead end for
+  text/csv sources: `parse_tower` has no date syntax, so a source with no
+  built-in period could never become an importable program through text
+  prompts alone. `ImportFileModal` is `PasteImportModal`'s structural twin
+  (a path `Input` instead of a `TextArea`, same insured/program plus the
+  SAME optional inception/expiry `Input`s) — one multi-field modal instead
+  of a fourth chained prompt, and text-file schedules become importable
+  for the first time.
+- **Program-period inversion is now a validation error** (`program-period`
+  in validate.py, mirroring the existing `layer-period` message/diagnostic
+  shape). An inverted whole-program `period.end <= period.start` was
+  previously accepted silently. Living in `validate_program` closes the
+  gap for `towerctl validate` and the TUI browser's error badge at once —
+  one rule serves both surfaces.
+- **`w`'s template overwrite now confirms**, deliberately diverging from
+  `towerctl template`'s silent overwrite: a filled `.xlsx` template is
+  keyed-in user data, and the repo's data-safety rule (CLAUDE.md — never
+  run an irreversible data operation without surfacing the risk first)
+  applies to the TUI even where the CLI doesn't enforce it.

@@ -295,6 +295,52 @@ class SendLineModal(ModalScreen[tuple[Path, bool] | None]):
         self.dismiss((self.targets[idx], move))
 
 
+class ImportFileModal(ModalScreen[dict | None]):
+    """Import a schedule file plus the meta the source can't carry.
+
+    `PasteImportModal`'s structural twin: a path `Input` instead of a
+    `TextArea`, same insured/program/inception/expiry fields. The optional
+    dates matter here specifically for text/csv sources — `parse_tower`
+    has no date syntax, so without them a text-file schedule can never
+    pick up a policy period.
+    """
+
+    BINDINGS = [("escape", "dismiss(None)", "Cancel")]
+
+    DEFAULT_CSS = """
+    ImportFileModal { align: center middle; }
+    #import-box { width: 90; height: auto; max-height: 32; padding: 1 2;
+                  background: $surface; border: thick $primary; }
+    """
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="import-box"):
+            yield Label("Schedule file (xlsx/csv/text):")
+            yield Input(id="import-path")
+            yield Label("Insured")
+            yield Input(id="import-insured")
+            yield Label("Program")
+            yield Input(id="import-program")
+            yield Label("Inception / Expiry (any date form)")
+            yield Input(id="import-inception", placeholder="Jan 1 2026")
+            yield Input(id="import-expiry", placeholder="Jan 1 2027")
+            with Horizontal():
+                yield Button("Import", variant="primary", id="import-confirm")
+                yield Button("Cancel", id="import-cancel")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "import-confirm":
+            self.dismiss({
+                "path": self.query_one("#import-path", Input).value.strip(),
+                "insured": self.query_one("#import-insured", Input).value.strip(),
+                "program": self.query_one("#import-program", Input).value.strip(),
+                "inception": self.query_one("#import-inception", Input).value.strip(),
+                "expiry": self.query_one("#import-expiry", Input).value.strip(),
+            })
+        else:
+            self.dismiss(None)
+
+
 class PasteImportModal(ModalScreen[dict | None]):
     """Paste a schedule as text plus the meta the text can't carry."""
 
