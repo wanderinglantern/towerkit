@@ -9,7 +9,7 @@ from pathlib import Path
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import Button, Checkbox, Input, Label, OptionList
+from textual.widgets import Button, Checkbox, Input, Label, OptionList, TextArea
 from textual.widgets.option_list import Option
 
 
@@ -21,9 +21,10 @@ class ConfirmModal(ModalScreen[bool]):
     DEFAULT_CSS = """
     ConfirmModal { align: center middle; }
     ConfirmModal > VerticalScroll {
-        width: 60; max-height: 80%; padding: 1 2;
+        width: 60; height: auto; max-height: 80%; padding: 1 2;
         border: thick $primary; background: $surface;
     }
+    ConfirmModal .modal-hint { color: $text-muted; margin-top: 1; }
     ConfirmModal Horizontal { height: auto; align-horizontal: right; }
     ConfirmModal Button { margin-left: 2; }
     """
@@ -37,9 +38,16 @@ class ConfirmModal(ModalScreen[bool]):
     def compose(self) -> ComposeResult:
         with VerticalScroll():
             yield Label(self.question)
+            yield Label(
+                "[b]tab[/b] switch · [b]enter[/b] choose · [b]esc[/b] cancel",
+                classes="modal-hint",
+            )
             with Horizontal():
                 yield Button(self.no_label, id="no")
                 yield Button(self.yes_label, id="yes", variant="warning")
+
+    def on_mount(self) -> None:
+        self.query_one("#no", Button).focus()  # the safe choice is one enter away
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         self.dismiss(event.button.id == "yes")
@@ -53,9 +61,11 @@ class PromptModal(ModalScreen[str | None]):
     DEFAULT_CSS = """
     PromptModal { align: center middle; }
     PromptModal > VerticalScroll {
-        width: 60; max-height: 80%; padding: 1 2;
+        width: 60; height: auto; max-height: 80%; padding: 1 2;
         border: thick $primary; background: $surface;
     }
+    PromptModal .field-label { color: $text-muted; }
+    PromptModal .modal-hint { color: $text-muted; margin-top: 1; }
     """
 
     def __init__(self, label: str, default: str = "") -> None:
@@ -65,13 +75,16 @@ class PromptModal(ModalScreen[str | None]):
 
     def compose(self) -> ComposeResult:
         with VerticalScroll():
-            yield Label(self.label)
+            yield Label(self.label, classes="field-label")
             yield Input(value=self.default, id="prompt")
+            yield Label("[b]enter[/b] save · [b]esc[/b] cancel", classes="modal-hint")
 
     def on_mount(self) -> None:
         self.query_one("#prompt", Input).focus()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
+        # enter is the only save gesture here (no button), so Submitted is
+        # the drain point — event.value IS the input's current text
         self.dismiss(event.value.strip() or None)
 
 
@@ -94,10 +107,12 @@ class RenderOptionsModal(ModalScreen[RenderOptions | None]):
     DEFAULT_CSS = """
     RenderOptionsModal { align: center middle; }
     RenderOptionsModal > VerticalScroll {
-        width: 56; max-height: 80%; padding: 1 2;
+        width: 56; height: auto; max-height: 80%; padding: 1 2;
         border: thick $primary; background: $surface;
     }
     RenderOptionsModal OptionList { max-height: 8; }
+    RenderOptionsModal .field-label { color: $text-muted; }
+    RenderOptionsModal .modal-hint { color: $text-muted; margin-top: 1; }
     RenderOptionsModal Horizontal { height: auto; align-horizontal: right; }
     RenderOptionsModal Button { margin-left: 2; }
     """
@@ -131,11 +146,11 @@ class RenderOptionsModal(ModalScreen[RenderOptions | None]):
                 pass
             options.append(Option(self._label(path, f"{name} — {path}"), id=str(path)))
         with VerticalScroll():
-            yield Label("Theme (preview and renders):")
+            yield Label("Theme (preview and renders):", classes="field-label")
             yield OptionList(*options, id="themes")
             yield Checkbox("Show totals in the header", self.show_totals, id="opt-totals")
             yield Checkbox(
-                "Show premiums (uncheck for hypothetical designs)",
+                "Show premiums (uncheck for hypotheticals)",
                 self.show_premiums,
                 id="opt-premiums",
             )
@@ -149,6 +164,7 @@ class RenderOptionsModal(ModalScreen[RenderOptions | None]):
                 self.cell_dates,
                 id="opt-cell-dates",
             )
+            yield Label("[b]enter[/b] apply · [b]esc[/b] cancel", classes="modal-hint")
             with Horizontal():
                 yield Button("Cancel", id="cancel")
                 yield Button("Apply", id="apply", variant="primary")
@@ -196,9 +212,10 @@ class HelpModal(ModalScreen[None]):
     DEFAULT_CSS = """
     HelpModal { align: center middle; }
     HelpModal > VerticalScroll {
-        width: 62; max-height: 85%; padding: 1 2;
+        width: 62; height: auto; max-height: 85%; padding: 1 2;
         border: thick $primary; background: $surface;
     }
+    HelpModal .modal-hint { color: $text-muted; margin-top: 1; }
     """
 
     def __init__(self, text: str) -> None:
@@ -208,6 +225,7 @@ class HelpModal(ModalScreen[None]):
     def compose(self) -> ComposeResult:
         with VerticalScroll():
             yield Label(self.help_text)
+            yield Label("[b]esc[/b] or [b]?[/b] close", classes="modal-hint")
 
 
 class ExitChoiceModal(ModalScreen[str]):
@@ -223,9 +241,10 @@ class ExitChoiceModal(ModalScreen[str]):
     DEFAULT_CSS = """
     ExitChoiceModal { align: center middle; }
     ExitChoiceModal > VerticalScroll {
-        width: 64; max-height: 80%; padding: 1 2;
+        width: 64; height: auto; max-height: 80%; padding: 1 2;
         border: thick $primary; background: $surface;
     }
+    ExitChoiceModal .modal-hint { color: $text-muted; margin-top: 1; }
     ExitChoiceModal Horizontal { height: auto; align-horizontal: right; }
     ExitChoiceModal Button { margin-left: 2; }
     """
@@ -233,11 +252,17 @@ class ExitChoiceModal(ModalScreen[str]):
     def compose(self) -> ComposeResult:
         with VerticalScroll():
             yield Label("Unsaved changes.")
-            yield Label("[dim]s save & exit · d discard · esc keep editing[/dim]")
+            yield Label(
+                "[b]s[/b] save & exit · [b]d[/b] discard · [b]esc[/b] keep editing",
+                classes="modal-hint",
+            )
             with Horizontal():
                 yield Button("Keep editing", id="keep")
                 yield Button("Discard", id="discard", variant="warning")
                 yield Button("Save & exit", id="save", variant="primary")
+
+    def on_mount(self) -> None:
+        self.query_one("#save", Button).focus()  # enter takes the primary path
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         self.dismiss(event.button.id or "keep")
@@ -255,6 +280,8 @@ class SendLineModal(ModalScreen[tuple[Path, bool] | None]):
         background: $surface; border: thick $primary;
     }
     SendLineModal OptionList { height: auto; max-height: 12; }
+    SendLineModal .field-label { color: $text-muted; }
+    SendLineModal .modal-hint { color: $text-muted; margin-top: 1; }
     SendLineModal Horizontal { height: auto; align-horizontal: right; }
     SendLineModal Button { margin-left: 2; }
     """
@@ -273,9 +300,13 @@ class SendLineModal(ModalScreen[tuple[Path, bool] | None]):
             yield Checkbox(
                 "Move (remove from this program)", value=False, id="send-move"
             )
+            yield Label("[b]enter[/b] send · [b]esc[/b] cancel", classes="modal-hint")
             with Horizontal():
                 yield Button("Cancel", id="send-cancel")
                 yield Button("Send", variant="primary", id="send-confirm")
+
+    def on_mount(self) -> None:
+        self.query_one("#send-targets", OptionList).focus()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "send-confirm":
@@ -293,3 +324,128 @@ class SendLineModal(ModalScreen[tuple[Path, bool] | None]):
             return
         move = self.query_one("#send-move", Checkbox).value
         self.dismiss((self.targets[idx], move))
+
+
+class ImportFileModal(ModalScreen[dict | None]):
+    """Import a schedule file plus the meta no schedule file carries.
+
+    Dismisses with {"source", "insured", "program", "inception", "expiry"}
+    (the CLI import flags as form fields) or None on cancel."""
+
+    BINDINGS = [("escape", "dismiss(None)", "Cancel")]
+
+    DEFAULT_CSS = """
+    ImportFileModal { align: center middle; }
+    ImportFileModal > Vertical {
+        width: 70; height: auto; max-height: 34; padding: 1 2;
+        background: $surface; border: thick $primary;
+    }
+    ImportFileModal .field-label { color: $text-muted; }
+    ImportFileModal .modal-hint { color: $text-muted; margin-top: 1; }
+    ImportFileModal Horizontal { height: auto; align-horizontal: right; }
+    ImportFileModal Button { margin-left: 2; }
+    """
+
+    def compose(self) -> ComposeResult:
+        with Vertical():
+            yield Label("Schedule file (xlsx/csv/text):", classes="field-label")
+            yield Input(id="import-path", placeholder="schedule.xlsx")
+            yield Label("Insured", classes="field-label")
+            yield Input(id="import-insured")
+            yield Label("Program", classes="field-label")
+            yield Input(id="import-program")
+            yield Label(
+                "Inception / Expiry (any date form; used when the file has none)",
+                classes="field-label",
+            )
+            yield Input(id="import-inception", placeholder="Jan 1 2026")
+            yield Input(id="import-expiry", placeholder="Jan 1 2027")
+            yield Label(
+                "[b]enter[/b] import · [b]tab[/b] next field · [b]esc[/b] cancel",
+                classes="modal-hint",
+            )
+            with Horizontal():
+                yield Button("Cancel", id="import-cancel")
+                yield Button("Import", variant="primary", id="import-confirm")
+
+    def on_mount(self) -> None:
+        self.query_one("#import-path", Input).focus()
+
+    def _confirm(self) -> None:
+        self.dismiss({
+            "source": self.query_one("#import-path", Input).value.strip(),
+            "insured": self.query_one("#import-insured", Input).value.strip(),
+            "program": self.query_one("#import-program", Input).value.strip(),
+            "inception": self.query_one("#import-inception", Input).value.strip(),
+            "expiry": self.query_one("#import-expiry", Input).value.strip(),
+        })
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        self._confirm()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "import-confirm":
+            self._confirm()
+        else:
+            self.dismiss(None)
+
+
+class PasteImportModal(ModalScreen[dict | None]):
+    """Paste a schedule as text plus the meta the text can't carry.
+
+    Dismisses with {"text", "insured", "program", "inception", "expiry"}
+    or None on cancel."""
+
+    BINDINGS = [("escape", "dismiss(None)", "Cancel")]
+
+    DEFAULT_CSS = """
+    PasteImportModal { align: center middle; }
+    #paste-box { width: 90; height: auto; max-height: 38; padding: 1 2;
+                 background: $surface; border: thick $primary; }
+    #paste-text { height: 10; }
+    PasteImportModal .field-label { color: $text-muted; }
+    PasteImportModal .modal-hint { color: $text-muted; margin-top: 1; }
+    PasteImportModal Horizontal { height: auto; align-horizontal: right; }
+    PasteImportModal Button { margin-left: 2; }
+    """
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="paste-box"):
+            yield Label("Paste the schedule (one layer per line):", classes="field-label")
+            yield TextArea(id="paste-text")
+            yield Label("Insured", classes="field-label")
+            yield Input(id="paste-insured")
+            yield Label("Program", classes="field-label")
+            yield Input(id="paste-program")
+            yield Label("Inception / Expiry (any date form)", classes="field-label")
+            yield Input(id="paste-inception", placeholder="Jan 1 2026")
+            yield Input(id="paste-expiry", placeholder="Jan 1 2027")
+            yield Label(
+                "[b]tab[/b] next field · [b]enter[/b] in a field imports · "
+                "[b]esc[/b] cancel",
+                classes="modal-hint",
+            )
+            with Horizontal():
+                yield Button("Cancel", id="paste-cancel")
+                yield Button("Import", variant="primary", id="paste-confirm")
+
+    def on_mount(self) -> None:
+        self.query_one("#paste-text", TextArea).focus()
+
+    def _confirm(self) -> None:
+        self.dismiss({
+            "text": self.query_one("#paste-text", TextArea).text,
+            "insured": self.query_one("#paste-insured", Input).value.strip(),
+            "program": self.query_one("#paste-program", Input).value.strip(),
+            "inception": self.query_one("#paste-inception", Input).value.strip(),
+            "expiry": self.query_one("#paste-expiry", Input).value.strip(),
+        })
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        self._confirm()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "paste-confirm":
+            self._confirm()
+        else:
+            self.dismiss(None)

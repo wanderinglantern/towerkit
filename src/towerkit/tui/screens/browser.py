@@ -3,24 +3,32 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
+from rich.text import Text
 from textual.app import ComposeResult
+from textual.binding import Binding
 from textual.screen import Screen
 from textual.widgets import DataTable, Footer, Header, Static
 
 from ...model import dump_program, load_program
-from ...money import format_money
-from ...validate import validate_file
-from ..session import EditSession, blank_program
+from ...validate import ProgramInvalidError, validate_file
+from ..session import EditSession, blank_program, slugify
+from ..theme import AMBER, DIM, GREEN, RED, dash, money_text, right, status_text
 from ..widgets.modals import (
     ConfirmModal,
     HelpModal,
+    ImportFileModal,
+    PasteImportModal,
     PromptModal,
     RenderOptions,
     RenderOptionsModal,
 )
 from .diff import DiffScreen
 from .editor import EditorScreen, _opts
+
+if TYPE_CHECKING:
+    from ...ingest import DraftProgram
 
 
 class ProgramBrowser(Screen):
@@ -32,12 +40,21 @@ class ProgramBrowser(Screen):
         ("r", "render", "Render"),
         ("x", "diff", "Mark/compare"),
         ("t", "render_options", "Options"),
+        ("i", "import_file", "Import"),
+        ("p", "paste_import", "Paste"),
+        ("w", "template", "Template"),
         ("q", "quit", "Quit"),
         ("question_mark", "help", "Help"),
+        Binding("j", "cursor_down", "Down", show=False),
+        Binding("k", "cursor_up", "Up", show=False),
     ]
 
     CSS = """
     #programs { height: 1fr; }
+    #empty {
+        display: none; height: 1fr; padding: 2 4;
+        content-align: center middle; text-align: center;
+    }
     #hint { height: 1; color: $text-muted; padding: 0 1; }
     """
 
@@ -52,9 +69,12 @@ class ProgramBrowser(Screen):
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
         yield DataTable(id="programs", cursor_type="row")
+        yield Static(id="empty")
         yield Static(
-            "enter open · n new · c clone as renewal · d delete · r render · "
-            "x mark two programs to compare · t render options",
+            f"[{DIM}][b]j/k[/b] move · [b]enter[/b] open · [b]n[/b] new · "
+            "[b]c[/b] clone · [b]d[/b] delete · [b]r[/b] render · "
+            "[b]x[/b] mark/compare · [b]t[/b] options · [b]i[/b] import · "
+            "[b]p[/b] paste · [b]w[/b] template · [b]?[/b] help[/]",
             id="hint",
         )
         yield Footer()
@@ -63,10 +83,10 @@ class ProgramBrowser(Screen):
         table = self.query_one("#programs", DataTable)
         table.add_columns(
             "", "File", "Insured", "Program", "Placement", "Period",
-            "Total limit", "Total premium",
+            right("Total limit"), right("Total premium"),
         )
         self.reload()
-        table.focus()
+        table.focus()  # j/k works immediately
 
     def reload(self) -> None:
         table = self.query_one("#programs", DataTable)
@@ -78,13 +98,16 @@ class ProgramBrowser(Screen):
         for path in paths:
             program, diags = validate_file(path)
             if not diags.ok:
-                badge = f"✗ {len(diags.errors)}"
+                badge = Text(f"✗ {len(diags.errors)}", style=f"bold {RED}")
             elif diags.warnings:
-                badge = f"⚠ {len(diags.warnings)}"
+                badge = Text(f"⚠ {len(diags.warnings)}", style=AMBER)
             else:
-                badge = "✓"
+                badge = Text("✓", style=GREEN)
             if program is None:
-                table.add_row(badge, path.name, "(unreadable)", "", "", "", "", "", key=str(path))
+                table.add_row(
+                    badge, path.name, Text("(unreadable)", style=RED),
+                    dash(), dash(), dash(), dash(), dash(), key=str(path),
+                )
                 continue
             period = f"{program.period.start.year}–{program.period.end.year}"
             table.add_row(
@@ -92,12 +115,23 @@ class ProgramBrowser(Screen):
                 path.name,
                 program.insured,
                 program.program,
-                program.placement.value,
-                period,
-                format_money(program.total_limit()),
-                format_money(program.total_premium()),
+                status_text(program.placement.value),
+                Text(period, style=DIM),
+                money_text(program.total_limit()),
+                money_text(program.total_premium()),
                 key=str(path),
             )
+        empty = self.query_one("#empty", Static)
+        empty.display = table.row_count == 0
+        table.display = not empty.display
+        if empty.display:
+            empty.update(
+                f"No programs in {self.programs_dir}/ yet.\n\n"
+                f"[{DIM}]Press [b]n[/b] to create your first program, or drop "
+                "program *.json files into that folder and they appear here.[/]"
+            )
+        elif not table.has_focus:
+            table.focus()
 
     def _selected_path(self) -> Path | None:
         table = self.query_one("#programs", DataTable)
@@ -107,6 +141,12 @@ class ProgramBrowser(Screen):
         return Path(row_key.value) if row_key and row_key.value else None
 
     # -- actions ---------------------------------------------------------------
+
+    def action_cursor_down(self) -> None:
+        self.query_one("#programs", DataTable).action_cursor_down()
+
+    def action_cursor_up(self) -> None:
+        self.query_one("#programs", DataTable).action_cursor_up()
 
     def action_open(self) -> None:
         path = self._selected_path()
@@ -151,6 +191,88 @@ class ProgramBrowser(Screen):
 
         self.app.push_screen(
             PromptModal("New file name for the renewal:", default=default), on_name
+        )
+
+    def action_template(self) -> None:
+        def on_name(name: str | None) -> None:
+            if not name:
+                return
+            from ...ingest_template import write_template
+
+            target = Path(name if name.endswith(".xlsx") else f"{name}.xlsx")
+            self.notify(f"template written: {write_template(target)}")
+
+        self.app.push_screen(
+            PromptModal("Template file name:", default="template.xlsx"), on_name
+        )
+
+    def action_import_file(self) -> None:
+        def on_fields(fields: dict | None) -> None:
+            if not fields or not fields["source"]:
+                return
+            from ...ingest import import_schedule
+
+            try:
+                draft = import_schedule(
+                    Path(fields["source"]),
+                    insured=fields["insured"],
+                    program=fields["program"],
+                    inception=fields["inception"],
+                    expiry=fields["expiry"],
+                )
+            except Exception as exc:
+                self.notify(f"import failed: {exc}", severity="error")
+                return
+            self._finish_import(draft)
+
+        self.app.push_screen(ImportFileModal(), on_fields)
+
+    def action_paste_import(self) -> None:
+        def on_fields(fields: dict | None) -> None:
+            if not fields or not fields["text"].strip():
+                return
+            from ...ingest import import_schedule
+
+            try:
+                draft = import_schedule(
+                    None,
+                    text=fields["text"],
+                    insured=fields["insured"],
+                    program=fields["program"],
+                    inception=fields["inception"],
+                    expiry=fields["expiry"],
+                )
+            except Exception as exc:
+                self.notify(f"import failed: {exc}", severity="error")
+                return
+            self._finish_import(draft)
+
+        self.app.push_screen(PasteImportModal(), on_fields)
+
+    def _finish_import(self, draft: DraftProgram) -> None:
+        for diag in draft.diagnostics.items:
+            self.notify(str(diag), severity="warning")
+        try:
+            program = draft.to_program()
+        except ProgramInvalidError as exc:
+            first = (
+                exc.diagnostics.errors[0].message
+                if exc.diagnostics.errors
+                else "invalid schedule"
+            )
+            self.notify(f"import failed: {first}", severity="error")
+            return
+        out = self.programs_dir / (
+            f"{slugify(program.insured)}-{slugify(program.program)}.json"
+        )
+        if out.exists():  # program files are the source of truth — never clobber
+            self.notify(f"{out.name} exists — not overwriting", severity="error")
+            return
+        dump_program(program, out)
+        self.reload()
+        self.notify(f"imported {out.name}")
+        self.app.push_screen(
+            EditorScreen(EditSession.open(out), theme_path=self.theme_path)
         )
 
     def action_delete(self) -> None:
@@ -235,13 +357,19 @@ class ProgramBrowser(Screen):
             HelpModal(
                 """towerkit browser — keys
 
+  j/k        move up and down the list
   enter      open the selected program in the editor
   n          new blank program
-  c          clone as next renewal (bumps period, marks proposed)
+  c          clone as next renewal (period bumped,
+             marked proposed)
   d          delete (confirms first)
   r          render the selected program
-  x          mark two programs to compare (renewal diff)
-  t          render options (theme, totals, premiums, cell extras)
+  x          mark two programs to compare (diff)
+  t          render options (theme, totals,
+             premiums, cell extras)
+  i          import a schedule file (xlsx/csv/text)
+  p          paste a schedule as text
+  w          write a blank import template (.xlsx)
   q          quit        ?  this help
 """
             )

@@ -11,6 +11,7 @@ import shutil
 from pathlib import Path
 
 import pytest
+from textual.widgets import Input
 
 from towerkit.model import dumps_program, load_program
 from towerkit.money import BPS_SCALE
@@ -1045,3 +1046,133 @@ class TestSendLine:
             await pilot.pause()
             assert isinstance(app.screen, EditorScreen)  # no modal
             assert any("select a line" in n.message for n in app._notifications)
+
+
+def _filled_template(tmp_path: Path) -> Path:
+    """A ready-to-import workbook — same as the CLI round-trip test: the
+    blank template ships worked example rows that import cleanly."""
+    from towerkit.ingest_template import write_template
+
+    return write_template(tmp_path / "sched.xlsx")
+
+
+class TestBrowserImport:
+    PASTE = (
+        "Primary 10M — Chubb 100% — 250,000\n"
+        "15M xs 10M — AXA XL 60%, Sompo 40% — 180k\n"
+        "SIR 500k\n"
+    )
+
+    @pytest.mark.asyncio
+    async def test_p_pastes_schedule_with_fields(self, tmp_path, monkeypatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "programs").mkdir()
+        app = TowerkitApp()
+        async with app.run_test(size=(140, 45)) as pilot:
+            await pilot.press("p")
+            await pilot.pause()
+            from towerkit.tui.widgets.modals import PasteImportModal
+
+            modal = app.screen
+            assert isinstance(modal, PasteImportModal)
+            modal.query_one("#paste-text").text = self.PASTE
+            modal.query_one("#paste-insured", Input).value = "Atomic Industries"
+            modal.query_one("#paste-program", Input).value = "Property"
+            modal.query_one("#paste-inception", Input).value = "Jan 1 2026"
+            modal.query_one("#paste-expiry", Input).value = "1/1/2027"
+            modal.query_one("#paste-confirm").press()
+            await pilot.pause()
+            await pilot.pause()
+            assert isinstance(app.screen, EditorScreen)
+            files = list((tmp_path / "programs").glob("*.json"))
+            assert len(files) == 1
+            program = load_program(files[0])
+            assert program.insured == "Atomic Industries"
+            assert len(program.layers) == 2
+
+    @pytest.mark.asyncio
+    async def test_w_writes_template_workbook(self, tmp_path, monkeypatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "programs").mkdir()
+        app = TowerkitApp()
+        async with app.run_test(size=(140, 45)) as pilot:
+            await pilot.press("w")
+            await pilot.pause()
+            prompt = app.screen
+            prompt.query_one(Input).value = "blank.xlsx"
+            await pilot.press("enter")
+            await pilot.pause()
+        assert (tmp_path / "blank.xlsx").exists()
+
+    @pytest.mark.asyncio
+    async def test_i_imports_filled_template_and_opens_editor(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "programs").mkdir()
+        src = _filled_template(tmp_path)
+        app = TowerkitApp()
+        async with app.run_test(size=(140, 45)) as pilot:
+            await pilot.press("i")
+            await pilot.pause()
+            from towerkit.tui.widgets.modals import ImportFileModal
+
+            modal = app.screen
+            assert isinstance(modal, ImportFileModal)
+            modal.query_one("#import-path", Input).value = str(src)
+            modal.query_one("#import-insured", Input).value = "Example Co"
+            modal.query_one("#import-program", Input).value = "Property"
+            modal.query_one("#import-confirm").press()
+            await pilot.pause()
+            await pilot.pause()
+            assert isinstance(app.screen, EditorScreen)  # opened for editing
+            new_files = list((tmp_path / "programs").glob("*.json"))
+            assert len(new_files) == 1
+
+    @pytest.mark.asyncio
+    async def test_i_refuses_existing_output(self, tmp_path, monkeypatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "programs").mkdir()
+        src = _filled_template(tmp_path)
+
+        app = TowerkitApp()
+        async with app.run_test(size=(140, 45)) as pilot:
+            await pilot.press("i")
+            await pilot.pause()
+            app.screen.query_one("#import-path", Input).value = str(src)
+            app.screen.query_one("#import-insured", Input).value = "Example Co"
+            app.screen.query_one("#import-program", Input).value = "Property"
+            app.screen.query_one("#import-confirm").press()
+            await pilot.pause()
+            await pilot.pause()
+        target = next((tmp_path / "programs").glob("*.json"))
+        before = target.read_bytes()
+        app2 = TowerkitApp()
+        async with app2.run_test(size=(140, 45)) as pilot:
+            await pilot.press("i")
+            await pilot.pause()
+            app2.screen.query_one("#import-path", Input).value = str(src)
+            app2.screen.query_one("#import-insured", Input).value = "Example Co"
+            app2.screen.query_one("#import-program", Input).value = "Property"
+            app2.screen.query_one("#import-confirm").press()
+            await pilot.pause()
+            assert any(
+                "not overwriting" in n.message for n in app2._notifications
+            )
+        assert target.read_bytes() == before
+
+    @pytest.mark.asyncio
+    async def test_i_bad_source_notifies(self, tmp_path, monkeypatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "programs").mkdir()
+        app = TowerkitApp()
+        async with app.run_test(size=(140, 45)) as pilot:
+            await pilot.press("i")
+            await pilot.pause()
+            app.screen.query_one("#import-path", Input).value = str(tmp_path / "nope.txt")
+            app.screen.query_one("#import-confirm").press()
+            await pilot.pause()
+            assert any(
+                "import failed" in n.message for n in app._notifications
+            )
+        assert not list((tmp_path / "programs").glob("*.json"))

@@ -55,10 +55,14 @@ def parse_share_pct(text: str) -> int | None:
 
 
 class MoneyInput(Input):
-    """An Input holding integer dollars, displayed formatted."""
+    """An Input holding integer dollars, displayed formatted.
+
+    The placeholder teaches the shorthand the parser actually accepts:
+    suffixes k/m/bn or grouped digits — never fractional dollars."""
 
     def __init__(self, amount: int | None = None, **kwargs) -> None:
         value = format_money(amount) if amount is not None else ""
+        kwargs.setdefault("placeholder", "25m · 1,500,000")
         super().__init__(value=value, validators=[MoneyValidator()], **kwargs)
 
     @property
@@ -140,6 +144,23 @@ def known_insureds(programs_dir: Path, extra: list[str]) -> list[str]:
             continue
         if isinstance(data, dict) and data.get("insured"):
             seen.setdefault(str(data["insured"]), None)
+    for name in extra:
+        seen.setdefault(name, None)
+    return list(seen)
+
+
+def known_layer_names(programs_dir: Path, extra: list[str]) -> list[str]:
+    """Layer names across every program on disk plus the current program's
+    own — 'Umbrella' / '1st Excess' keep one house spelling everywhere."""
+    seen: dict[str, None] = {}
+    for program_path in sorted(programs_dir.glob("*.json")) if programs_dir.is_dir() else []:
+        try:
+            data = json.loads(program_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        for layer in data.get("layers", []) if isinstance(data, dict) else []:
+            if isinstance(layer, dict) and layer.get("name"):
+                seen.setdefault(str(layer["name"]), None)
     for name in extra:
         seen.setdefault(name, None)
     return list(seen)

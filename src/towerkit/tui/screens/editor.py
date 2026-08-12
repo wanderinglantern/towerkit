@@ -26,12 +26,12 @@ from textual.containers import (
     VerticalGroup,
     VerticalScroll,
 )
+from textual.coordinate import Coordinate
 from textual.screen import Screen
 from textual.widgets import (
     Button,
     Checkbox,
     Footer,
-    Header,
     Input,
     Label,
     ListItem,
@@ -53,18 +53,32 @@ from ...model import (
 from ...money import (
     BPS_SCALE,
     format_money,
+    format_money_compact,
     format_share,
     premium_share,
 )
 from ...theme import load_theme
 from ...validate import Diagnostic
 from ..session import PLACEHOLDER_ID, EditSession, slugify
+from ..theme import (
+    AMBER,
+    DIM,
+    GOLD,
+    GREEN,
+    RED,
+    RULE,
+    money_text,
+    right,
+    severity_text,
+    status_text,
+)
 from ..widgets.inputs import (
     CarrierSuggester,
     MoneyInput,
     ShareValidator,
     known_carriers,
     known_insureds,
+    known_layer_names,
     known_line_names,
     parse_share_pct,
 )
@@ -78,6 +92,7 @@ from ..widgets.modals import (
     SendLineModal,
 )
 from ..widgets.preview import TowerPreview
+from ..widgets.sheet import SheetField, SheetTable
 
 EDITOR_HELP = """towerkit editor — keys
 
@@ -95,6 +110,20 @@ Editing
   enter      commit the field you are typing in
   u          undo        ctrl+r  redo
 
+Data sheets
+  v          layers sheet: every layer in one grid — name, attach,
+             limit and premium edit in place; enter opens the
+             selected layer's form; v or esc returns to the form
+  i          edit the cell under the cursor, spreadsheet style
+             (layers sheet, and the participants grid in a
+             layer form)
+  tab        commit + hop to the next editable cell
+             (shift+tab hops back)
+  enter      commit and close the cell editor · esc cancels
+  a / del    add / remove the selected row — a participant in
+             the participants grid (share defaults to the open
+             remainder), a layer in the layers sheet
+
 Output
   r          render (SVG+PNG to dist/)
   t          render options: theme, totals, premiums,
@@ -106,9 +135,37 @@ Files
   escape     back / close
 
 ?            this help
+
+The dim line above the footer always shows the keys that
+apply to the node selected in the structure tree.
 """
 
 NodeRef = tuple[str, Any]
+
+# the visible home for the demoted footer keys: one dim line above the
+# footer naming exactly the keys valid for the SELECTED node kind (help
+# lists them all — every hidden binding keeps two homes)
+NODE_HINTS: dict[str, str] = {
+    "program": (
+        "[b]t[/b] render options · [b]x[/b] SOI export · [b]=[/b] restack · "
+        "[b]v[/b] layers sheet"
+    ),
+    "lines-group": "[b]a[/b] add line",
+    "line": (
+        "[b]a[/b] add line · [b]del[/b] remove · [b]\\[ ][/b] move column · "
+        "[b]>[/b] send to program"
+    ),
+    "layers-group": "[b]a[/b] add layer · [b]=[/b] restack · [b]v[/b] layers sheet",
+    "layer": (
+        "[b]a[/b] add layer · [b]del[/b] remove · [b]=[/b] restack · "
+        "[b]v[/b] layers sheet · participants: [b]i[/b] edit cell · "
+        "[b]a[/b]/[b]del[/b] row"
+    ),
+    "retentions-group": "[b]a[/b] add retention",
+    "retention": "[b]a[/b] add retention · [b]del[/b] remove",
+    "sublimits-group": "[b]a[/b] add sublimit",
+    "sublimit": "[b]a[/b] add sublimit · [b]del[/b] remove",
+}
 
 
 def _opts(screen: Screen) -> Any:
@@ -124,31 +181,36 @@ class DiagItem(ListItem):
 
 class EditorScreen(Screen):
     BINDINGS = [
+        # visible: the everyday keys. Everything demoted below keeps two
+        # homes — the per-node hint line above the footer, and ? help.
         ("ctrl+s", "save", "Save"),
         ("u", "undo", "Undo"),
-        ("ctrl+r", "redo", "Redo"),
         ("r", "render", "Render"),
-        ("t", "render_options", "Options"),
-        ("x", "export_soi", "SOI"),
-        ("a", "add_node", "Add"),
-        ("delete", "remove_node", "Remove"),
-        ("left_square_bracket", "move_line(-1)", "[ line left"),
-        ("right_square_bracket", "move_line(1)", "] line right"),
+        ("escape", "back", "Back"),
+        Binding("question_mark", "help", "Help", key_display="?"),
+        Binding("ctrl+r", "redo", "Redo", show=False),
+        Binding("t", "render_options", "Options", show=False),
+        Binding("x", "export_soi", "SOI", show=False),
+        Binding("a", "add_node", "Add", show=False),
+        Binding("delete", "remove_node", "Remove", show=False),
+        Binding("left_square_bracket", "move_line(-1)", "line left", show=False),
+        Binding("right_square_bracket", "move_line(1)", "line right", show=False),
         # kept for terminals that actually transmit shift+arrows; many do not
         Binding("shift+up", "move_line(-1)", show=False),
         Binding("shift+down", "move_line(1)", show=False),
-        ("escape", "back", "Back"),
-        ("question_mark", "help", "Help"),
-        ("equals_sign", "restack", "= restack"),
-        ("greater_than_sign", "send_line", "> send"),
+        Binding("equals_sign", "restack", "restack", show=False),
+        Binding("greater_than_sign", "send_line", "send", show=False),
+        Binding("v", "layers_sheet", "Layers sheet", show=False),
     ]
 
-    CSS = """
+    DEFAULT_CSS = """
+    #context-bar { height: 1; padding: 0 1; background: $panel; color: $text-muted; }
     #panes { height: 1fr; }
     #structure { width: 30; border-right: solid $panel; }
     #detail { width: 46; border-right: solid $panel; padding: 0 1; }
     #preview-pane { width: 1fr; }
-    #diagnostics { height: 6; border-top: solid $panel; }
+    #diagnostics { height: auto; max-height: 6; border-top: solid $panel; }
+    #key-hint { height: 1; padding: 0 1; color: $text-muted; }
     .field-label { color: $text-muted; margin-top: 1; }
     .node-diag { margin-top: 1; }
     .row-total { color: $text-muted; }
@@ -159,10 +221,13 @@ class EditorScreen(Screen):
     #applies-row { height: auto; }
     .applies-line { height: auto; }
     .applies-line Checkbox { width: 1fr; }
-    .participant-row { height: 3; }
-    .participant-row Input { width: 1fr; }
-    .participant-row Static { width: 12; content-align: right middle; height: 3; }
-    .participant-row Button { min-width: 5; margin-top: 0; }
+    /* legacy participant inputs: kept mounted (hidden) so the historical
+       commit path and its ids (#p-carrier-N, #p-share-N) stay reachable —
+       the visible UI is the participants SheetTable */
+    .compat-row { display: none; }
+    #participants-sheet { height: auto; max-height: 14; }
+    #layers-sheet { height: 1fr; }
+    .sheet-hint { height: auto; color: $text-muted; margin-top: 1; }
     """
 
     def __init__(self, session: EditSession, theme_path: Path | None = None) -> None:
@@ -174,6 +239,11 @@ class EditorScreen(Screen):
         # must not resolve against the newly selected node and drop the edit
         self._commit_ref: NodeRef = ("program", None)
         self._detail_lock = asyncio.Lock()
+        # the layers data sheet replaces the detail form while open (v toggles)
+        self._layers_sheet_open = False
+        # a sheet cell commit while its editor is still up (tab-hopping)
+        # defers the detail rebuild until the editor closes
+        self._sheet_refresh_pending = False
         stored = session.program.render
         if theme_path is None and stored and stored.theme and Path(stored.theme).is_file():
             theme_path = Path(stored.theme)
@@ -187,13 +257,14 @@ class EditorScreen(Screen):
     # -- layout ---------------------------------------------------------------
 
     def compose(self) -> ComposeResult:
-        yield Header(show_clock=False)
+        yield Static(id="context-bar")
         with Horizontal(id="panes"):
             yield Tree("Program", id="structure")
             yield VerticalScroll(id="detail")
             with Vertical(id="preview-pane"):
                 yield TowerPreview(self.tower_theme, id="preview")
         yield ListView(id="diagnostics")
+        yield Static(id="key-hint")
         yield Footer()
 
     async def on_mount(self) -> None:
@@ -219,10 +290,27 @@ class EditorScreen(Screen):
         self._refresh_title()
 
     def _refresh_title(self) -> None:
+        """The 1-line context bar that replaced the stock Header: insured,
+        file, placement status, totals, and the unsaved indicator."""
         program = self.session.program
-        star = "*" if self.session.dirty else ""
-        name = self.session.path.name if self.session.path else "unsaved"
-        self.app.sub_title = f"{program.insured} — {name}{star}"
+        name = self.session.path.name if self.session.path else "unsaved file"
+        sep = Text("  ·  ", style=RULE)
+        bar = Text()
+        bar.append(program.insured, style=f"bold {GOLD}")
+        bar.append("  ")
+        bar.append(name, style=DIM)
+        bar.append_text(sep)
+        bar.append_text(status_text(program.placement.value))
+        bar.append_text(sep)
+        bar.append(f"limit {format_money_compact(program.total_limit())}")
+        bar.append(" · ", style=RULE)
+        bar.append(f"premium {format_money_compact(program.total_premium())}")
+        bar.append_text(sep)
+        if self.session.dirty:
+            bar.append("● unsaved", style=f"bold {AMBER}")
+        else:
+            bar.append("saved", style=DIM)
+        self.query_one("#context-bar", Static).update(bar)
 
     def _refresh_preview(self) -> None:
         self.query_one("#preview", TowerPreview).show_program(
@@ -230,13 +318,19 @@ class EditorScreen(Screen):
         )
 
     def _tree_label(self, text: str, diags: list[Diagnostic]) -> Text:
-        """Nodes needing review are highlighted, not just marked: errors in
-        the brand danger red, warnings in gold."""
+        """Nodes needing review are highlighted, not just marked: ◆ red for
+        errors (over-signed, gaps), △ for warnings (under-placed). The
+        warning hex is pinned by test_editor_shows_structure_and_diagnostics;
+        it sits close enough to the theme AMBER to read as one family."""
         if any(d.severity == "error" for d in diags):
-            return Text(f"{text} ✗", style="bold #C53532")
+            return Text(f"◆ {text}", style=f"bold {RED}")
         if diags:
-            return Text(f"{text} ⚠", style="#CB7E03")
+            return Text(f"△ {text}", style="#CB7E03")
         return Text(text)
+
+    def _group_label(self, label: str, count: int) -> Text:
+        """A tree section header: quiet dim bold, count in dim."""
+        return Text.assemble((label, f"bold {DIM}"), (f" ({count})", DIM))
 
     def _refresh_tree(self) -> None:
         tree = self.query_one("#structure", Tree)
@@ -246,7 +340,9 @@ class EditorScreen(Screen):
         tree.root.data = ("program", None)
         tree.root.label = self._tree_label(program.insured, diags.for_ref(("program", None)))
 
-        lines = tree.root.add(f"Lines ({len(program.lines)})", data=("lines-group", None))
+        lines = tree.root.add(
+            self._group_label("Lines", len(program.lines)), data=("lines-group", None)
+        )
         for line in program.lines:
             text = line.name if not line.group else f"{line.name} · {line.group}"
             lines.add_leaf(
@@ -254,7 +350,9 @@ class EditorScreen(Screen):
                 data=("line", line.id),
             )
 
-        layers = tree.root.add(f"Layers ({len(program.layers)})", data=("layers-group", None))
+        layers = tree.root.add(
+            self._group_label("Layers", len(program.layers)), data=("layers-group", None)
+        )
         for layer in sorted(program.layers, key=lambda ly: (ly.attach, ly.id)):
             spans = "/".join(layer.applies_to)
             layers.add_leaf(
@@ -265,7 +363,8 @@ class EditorScreen(Screen):
             )
 
         rets = tree.root.add(
-            f"Retentions ({len(program.retentions)})", data=("retentions-group", None)
+            self._group_label("Retentions", len(program.retentions)),
+            data=("retentions-group", None),
         )
         for idx, retention in enumerate(program.retentions):
             rets.add_leaf(
@@ -277,7 +376,8 @@ class EditorScreen(Screen):
             )
 
         subs = tree.root.add(
-            f"Sublimits ({len(program.sublimits)})", data=("sublimits-group", None)
+            self._group_label("Sublimits", len(program.sublimits)),
+            data=("sublimits-group", None),
         )
         for idx, sublimit in enumerate(program.sublimits):
             subs.add_leaf(
@@ -291,7 +391,9 @@ class EditorScreen(Screen):
         panel = self.query_one("#diagnostics", ListView)
         panel.clear()
         for diag in self.session.diagnostics().items:
-            panel.append(DiagItem(Label(str(diag)), diag.ref))
+            panel.append(
+                DiagItem(Label(severity_text(diag.message, diag.severity)), diag.ref)
+            )
 
     # -- selection ------------------------------------------------------------
 
@@ -330,15 +432,36 @@ class EditorScreen(Screen):
 
     async def _rebuild_detail_locked(self) -> None:
         detail = self.query_one("#detail", VerticalScroll)
+        # a floating cell editor is mounted on the SCREEN — removing its
+        # sheet must not orphan it (close = cancel, never a surprise write)
+        for sheet in detail.query(SheetTable):
+            sheet._close_editor(notify_screen=False)
+        self._sheet_refresh_pending = False
         await detail.remove_children()
+        if self._layers_sheet_open:
+            # the whole-program layers sheet takes over the form pane,
+            # widened so seven columns don't clip in the 46-cell form width
+            # (2fr against the preview's 1fr keeps `signed` on screen)
+            detail.styles.width = "2fr"
+            self.query_one("#key-hint", Static).update(
+                f"[{DIM}][b]i[/b] edit cell · [b]tab[/b] next cell · "
+                "[b]enter[/b] open layer form · [b]a[/b] add layer · "
+                "[b]del[/b] remove · [b]v[/b]/[b]esc[/b] back to form · "
+                "[b]?[/b] all keys[/]"
+            )
+            await detail.mount_all(self._layers_sheet_widgets())
+            return
+        detail.styles.width = 46
         self._commit_ref = self.selected
         # drill-through: the selected node's own issues sit at the top of
         # its form, so a flagged line explains itself when you open it
         node_diags = self.session.diagnostics().for_ref(self.selected)
         for diag in node_diags:
-            style = "bold #C53532" if diag.severity == "error" else "#CB7E03"
-            await detail.mount(Label(Text(str(diag), style=style), classes="node-diag"))
+            await detail.mount(
+                Label(severity_text(diag.message, diag.severity), classes="node-diag")
+            )
         kind, key = self.selected
+        self._refresh_hint(kind)
         builders: dict[str, Callable[[Any], list[Any]]] = {
             "program": self._form_program,
             "lines-group": self._form_hint,
@@ -353,6 +476,14 @@ class EditorScreen(Screen):
         builder = builders.get(kind, self._form_hint)
         await detail.mount_all(builder(key))
         await self._mount_autocompletes(detail, kind)
+
+    def _refresh_hint(self, kind: str) -> None:
+        """The hint line above the footer — the visible home for the hidden
+        keys that act on the SELECTED node kind."""
+        actions = NODE_HINTS.get(kind, NODE_HINTS["program"])
+        self.query_one("#key-hint", Static).update(
+            f"[{DIM}]{actions} · [b]?[/b] all keys[/]"
+        )
 
     async def _mount_autocompletes(self, detail: VerticalScroll, kind: str) -> None:
         """Dropdown completion from existing records (data consistency):
@@ -369,6 +500,10 @@ class EditorScreen(Screen):
             )
             mounts.append(("f-line-name", names))
         elif kind == "layer":
+            layer_names = known_layer_names(
+                Path("programs"), [ly.name for ly in self.session.program.layers]
+            )
+            mounts.append(("f-layer-name", layer_names))
             for widget in detail.query(Input):
                 if widget.id and widget.id.startswith("p-carrier-"):
                     mounts.append((widget.id, self._carriers))
@@ -382,10 +517,11 @@ class EditorScreen(Screen):
         return [
             Static(
                 "Select a node to edit it.\n\n"
-                "a — add an item to the selected group\n"
-                "delete — remove the selected item\n"
-                "[ / ] — move a selected line left/right (column order)\n"
-                "r — render · ctrl+s — save · u/ctrl+r — undo/redo"
+                f"[{DIM}][b]a[/b] add an item to the selected group\n"
+                "[b]del[/b] remove the selected item\n"
+                "[b]\\[ ][/b] move a selected line left/right (column order)\n"
+                "[b]r[/b] render · [b]ctrl+s[/b] save · "
+                "[b]u[/b]/[b]ctrl+r[/b] undo/redo[/]"
             )
         ]
 
@@ -403,14 +539,23 @@ class EditorScreen(Screen):
                 id="f-placement",
                 allow_blank=False,
             ),
-            Label("Period start / end (e.g. 1/1/2026, Jan 1 2026)", classes="field-label"),
+            Label("Period start / end", classes="field-label"),
             HorizontalGroup(
-                Input(value=program.period.start.isoformat(), id="f-period-start"),
-                Input(value=program.period.end.isoformat(), id="f-period-end"),
+                Input(
+                    value=program.period.start.isoformat(),
+                    placeholder="1/1/2026 · Jan 1 2026",
+                    id="f-period-start",
+                ),
+                Input(
+                    value=program.period.end.isoformat(),
+                    placeholder="1/1/2027 · Jan 1 2027",
+                    id="f-period-end",
+                ),
             ),
             Label(
-                f"Total limit {format_money(program.total_limit())} · "
-                f"premium {format_money(program.total_premium())}",
+                # compact so the line survives the 46-cell pane untruncated
+                f"Total limit {format_money_compact(program.total_limit())} · "
+                f"premium {format_money_compact(program.total_premium())}",
                 classes="row-total",
             ),
         ]
@@ -458,10 +603,17 @@ class EditorScreen(Screen):
         layer = self._layer(layer_id)
         if layer is None:
             return self._form_hint(None)
+        layer_names = known_layer_names(
+            Path("programs"), [ly.name for ly in self.session.program.layers]
+        )
         widgets: list = [
             Label(f"Layer: {layer.name}", classes="field-label"),
             Label("Name", classes="field-label"),
-            Input(value=layer.name, id="f-layer-name"),
+            Input(
+                value=layer.name,
+                suggester=CarrierSuggester(layer_names) if layer_names else None,
+                id="f-layer-name",
+            ),
             Label("Policy number", classes="field-label"),
             Input(value=layer.policy_number or "", id="f-layer-policy"),
             Label("Notes (renders as a chart footnote)", classes="field-label"),
@@ -486,12 +638,12 @@ class EditorScreen(Screen):
             HorizontalGroup(
                 Input(
                     value=layer.period.start.isoformat() if layer.period else "",
-                    placeholder="start",
+                    placeholder="start · 1/1/2026",
                     id="f-layer-period-start",
                 ),
                 Input(
                     value=layer.period.end.isoformat() if layer.period else "",
-                    placeholder="end",
+                    placeholder="end · Jan 1 2027",
                     id="f-layer-period-end",
                 ),
             ),
@@ -505,26 +657,104 @@ class EditorScreen(Screen):
                 value=layer.attach == 0,
                 id="f-layer-primary",
             ),
-            MoneyInput(layer.attach, id="f-layer-attach"),
+            MoneyInput(layer.attach, placeholder="2m · 250k · 2,000,000", id="f-layer-attach"),
             Checkbox(
                 "Follows underlying (stepped bottom on each line's stack)",
                 value=layer.follows_underlying,
                 id="f-layer-follows",
             ),
             Label("Limit", classes="field-label"),
-            MoneyInput(layer.limit if layer.limit > 0 else None, id="f-layer-limit"),
+            MoneyInput(
+                layer.limit if layer.limit > 0 else None,
+                placeholder="5m · 25m · 1.5bn",
+                id="f-layer-limit",
+            ),
             Label("Premium", classes="field-label"),
-            MoneyInput(layer.premium, id="f-layer-premium"),
+            MoneyInput(layer.premium, placeholder="125k · $1.2m", id="f-layer-premium"),
             Label("— Participants —", classes="field-label"),
+            self._participants_sheet(layer),
+            Static(
+                f"[{DIM}][b]i[/b] edit cell · [b]a[/b] add · [b]del[/b] remove · "
+                "[b]tab[/b] next cell[/]",
+                classes="sheet-hint",
+            ),
+            Static(self._signed_summary(layer), id="signed-summary", classes="row-total"),
         ]
         widgets += self._participant_rows(layer)
-        widgets += [
-            Static(self._signed_summary(layer), id="signed-summary", classes="row-total"),
-            Button("Add participant", id="add-participant"),
-        ]
+        widgets.append(Button("Add participant", id="add-participant"))
         return widgets
 
+    # -- participants sheet ----------------------------------------------------
+
+    def _participants_sheet(self, layer) -> SheetTable:
+        """The editable participants grid: carrier · share % · premium share."""
+        sheet = SheetTable(id="participants-sheet")
+        sheet.cursor_type = "cell"
+        sheet.can_insert = True
+        sheet.can_delete = True
+        sheet.add_column("carrier", key="carrier")
+        sheet.add_column(right("share"), key="share")
+        sheet.add_column(right("premium"), key="premium")
+
+        def check_share(row_key: str, value) -> str | None:
+            # the existing over-sign guard, verbatim semantics: block at the
+            # input (editor stays open), never flag after the fact
+            if value is None:
+                return None  # required-ness already rejected empties
+            idx = int(row_key)
+            others = sum(
+                p.share_bps for i, p in enumerate(layer.participants) if i != idx
+            )
+            if others + int(value) > BPS_SCALE:
+                return f"over-signed: {format_share(others + int(value))} > 100%"
+            return None
+
+        sheet.fields = {
+            0: SheetField(
+                "carrier",
+                "carrier",
+                required=True,
+                suggester=CarrierSuggester(self._carriers),
+                dropdown=list(self._carriers) or None,
+            ),
+            1: SheetField("share", "share", "share", required=True, validate=check_share),
+        }
+        sheet.initial_text = self._participant_cell_text
+        for idx, participant in enumerate(layer.participants):
+            sheet.add_row(*self._participant_cells(layer, participant), key=str(idx))
+        return sheet
+
+    def _participant_cells(self, layer, participant) -> tuple:
+        prem = (
+            money_text(premium_share(layer.premium, participant.share_bps))
+            if layer.premium is not None
+            else Text("—", style=DIM, justify="right")
+        )
+        return (
+            participant.carrier,
+            Text(format_share(participant.share_bps), justify="right"),
+            prem,
+        )
+
+    def _participant_cell_text(self, row_key: str, field_key: str) -> str:
+        """Editor prefill for a participants-sheet cell."""
+        kind, key = self._commit_ref
+        layer = self._layer(key) if kind == "layer" else None
+        if layer is None:
+            return ""
+        idx = int(row_key)
+        if idx >= len(layer.participants):
+            return ""
+        participant = layer.participants[idx]
+        if field_key == "carrier":
+            return str(participant.carrier)
+        return f"{participant.share_bps / 100:g}"
+
     def _participant_rows(self, layer) -> list:
+        """Hidden legacy inputs (#p-carrier-N / #p-share-N / #p-prem-N): the
+        visible UI is the SheetTable, but the historical commit path stays
+        mounted and functional — it is pinned by existing tests and keeps the
+        blur-commit machinery reachable for tooling."""
         rows = []
         suggester = CarrierSuggester(self._carriers)
         for idx, participant in enumerate(layer.participants):
@@ -538,30 +768,308 @@ class EditorScreen(Screen):
                     Input(
                         value=participant.carrier,
                         suggester=suggester,
+                        placeholder="carrier",
                         id=f"p-carrier-{idx}",
                     ),
                     Input(
                         value=f"{participant.share_bps / 100:g}",
                         validators=[ShareValidator()],
+                        placeholder="% · 35 or 33.33",
                         id=f"p-share-{idx}",
                     ),
                     Static(prem, id=f"p-prem-{idx}"),
-                    Button("✕", id=f"p-del-{idx}"),
-                    classes="participant-row",
+                    classes="compat-row",
                 )
             )
         return rows
 
-    def _signed_summary(self, layer) -> str:
+    def _signed_summary(self, layer) -> Text:
+        """The signed-total line: green when fully signed, amber with the open
+        remainder, red when over-signed — glyph+word so it survives
+        monochrome terminals."""
         signed = layer.signed_bps
-        open_bps = max(0, BPS_SCALE - signed)
-        open_dollars = layer.limit * open_bps // BPS_SCALE if layer.limit > 0 else 0
-        if signed >= BPS_SCALE:
-            return f"{format_share(signed)} signed"
-        return (
-            f"{format_share(signed)} signed · {format_share(open_bps)} open · "
-            f"{format_money(open_dollars)}"
+        if signed == BPS_SCALE:
+            return Text(f"signed {format_share(signed)}", style=GREEN)
+        if signed > BPS_SCALE:
+            return Text(f"◆ over-signed {format_share(signed)}", style=f"bold {RED}")
+        open_bps = BPS_SCALE - signed
+        return Text(
+            f"signed {format_share(signed)} — {format_share(open_bps)} open",
+            style=AMBER,
         )
+
+    # -- layers sheet ----------------------------------------------------------
+
+    def _layers_sheet_widgets(self) -> list:
+        """The whole-program grid: one row per layer, in model order."""
+        program = self.session.program
+        sheet = SheetTable(id="layers-sheet")
+        sheet.cursor_type = "row"
+        # a adds a layer, del removes the cursor row — session-backed, u undoes;
+        # consuming the keys here keeps them from acting on the tree selection
+        sheet.can_insert = True
+        sheet.can_delete = True
+        sheet.add_column("layer", key="name")
+        sheet.add_column("lines", key="lines")
+        sheet.add_column(right("attach"), key="attach")
+        sheet.add_column(right("limit"), key="limit")
+        sheet.add_column(right("top"), key="top")
+        sheet.add_column(right("premium"), key="premium")
+        sheet.add_column(right("signed"), key="signed")
+        layer_names = known_layer_names(
+            Path("programs"), [ly.name for ly in program.layers]
+        )
+        name_suggester = CarrierSuggester(layer_names) if layer_names else None
+        sheet.fields = {
+            0: SheetField("name", "name", required=True, suggester=name_suggester),
+            2: SheetField("attach", "attach", "money", required=True),
+            3: SheetField("limit", "limit", "money", required=True),
+            5: SheetField("premium", "premium", "money"),
+        }
+        sheet.initial_text = self._layer_cell_text
+        for layer in program.layers:
+            sheet.add_row(*self._layer_cells(layer), key=layer.id)
+        return [
+            sheet,
+            Static(
+                f"[{DIM}]lines · top · signed are derived — edit them through "
+                "the layer form and participants[/]",
+                classes="sheet-hint",
+            ),
+        ]
+
+    def _layer_cells(self, layer) -> tuple:
+        return (
+            layer.name,
+            Text("/".join(layer.applies_to), style=DIM),
+            # attach prints even at $0 — a primary's attachment is data, not absence
+            Text(format_money_compact(layer.attach), justify="right"),
+            money_text(layer.limit),
+            money_text(layer.top),
+            money_text(layer.premium),
+            self._signed_cell(layer),
+        )
+
+    def _signed_cell(self, layer) -> Text:
+        signed = layer.signed_bps
+        if signed == BPS_SCALE:
+            return Text(format_share(signed), style=GREEN, justify="right")
+        if signed > BPS_SCALE:
+            return Text(f"◆ {format_share(signed)}", style=f"bold {RED}", justify="right")
+        return Text(f"△ {format_share(signed)}", style=AMBER, justify="right")
+
+    def _layer_cell_text(self, row_key: str, field_key: str) -> str:
+        """Editor prefill for a layers-sheet cell."""
+        layer = self._layer(row_key)
+        if layer is None:
+            return ""
+        if field_key == "name":
+            return str(layer.name)
+        if field_key == "attach":
+            return format_money(layer.attach)
+        if field_key == "limit":
+            return format_money(layer.limit) if layer.limit else ""
+        if field_key == "premium":
+            return format_money(layer.premium) if layer.premium is not None else ""
+        return ""
+
+    async def action_layers_sheet(self) -> None:
+        self._drain_focused_input()
+        self._layers_sheet_open = not self._layers_sheet_open
+        await self._rebuild_detail()
+        if self._layers_sheet_open:
+            try:
+                self.query_one("#layers-sheet", SheetTable).focus()
+            except Exception:
+                pass
+        else:
+            self.query_one("#structure", Tree).focus()
+
+    # -- sheet message plumbing ------------------------------------------------
+
+    async def _flush_sheet_rebuild(self, table_id: str, cursor=None) -> None:
+        """Rebuild the detail pane and put the cursor (and focus) back on the
+        sheet the user was working in."""
+        if cursor is None:
+            try:
+                cursor = self.query_one(f"#{table_id}", SheetTable).cursor_coordinate
+            except Exception:
+                cursor = None
+        await self._rebuild_detail()
+        try:
+            sheet = self.query_one(f"#{table_id}", SheetTable)
+        except Exception:
+            return
+        if cursor is not None and sheet.row_count:
+            sheet.move_cursor(
+                row=min(cursor.row, sheet.row_count - 1), column=cursor.column
+            )
+        sheet.focus()
+
+    @on(SheetTable.EditorClosed)
+    async def _sheet_editor_closed(self, event: SheetTable.EditorClosed) -> None:
+        if self._sheet_refresh_pending:
+            self._sheet_refresh_pending = False
+            await self._flush_sheet_rebuild(event.table.id or "")
+
+    def _sync_participants_sheet(self, layer) -> None:
+        """Refresh the sheet's cells in place (no rebuild — an open editor
+        must keep its anchor row)."""
+        try:
+            sheet = self.query_one("#participants-sheet", SheetTable)
+        except Exception:
+            return
+        if sheet.row_count != len(layer.participants):
+            return  # structure changed: a rebuild is coming, don't guess
+        for idx, participant in enumerate(layer.participants):
+            carrier, share, prem = self._participant_cells(layer, participant)
+            try:
+                sheet.update_cell(str(idx), "carrier", carrier)
+                sheet.update_cell(str(idx), "share", share)
+                sheet.update_cell(str(idx), "premium", prem)
+            except Exception:
+                return
+        try:
+            self.query_one("#signed-summary", Static).update(self._signed_summary(layer))
+        except Exception:
+            pass
+
+    @on(SheetTable.CellEdited, "#participants-sheet")
+    async def _participant_cell_edited(self, event: SheetTable.CellEdited) -> None:
+        kind, key = self._commit_ref
+        layer = self._layer(key) if kind == "layer" else None
+        if layer is None:
+            return
+        idx = int(event.row_key)
+        if idx >= len(layer.participants):
+            return
+        participant = layer.participants[idx]
+        if event.field.key == "carrier":
+            value = str(event.value)
+            if value != participant.carrier:
+                self._mutate_and_refresh(lambda p: setattr(participant, "carrier", value))
+                if value not in self._carriers:
+                    self._carriers.append(value)
+        elif event.field.key == "share" and isinstance(event.value, int):
+            bps = event.value  # over-signing was vetoed before the post
+            if bps != participant.share_bps:
+                self._mutate_and_refresh(
+                    lambda p: setattr(participant, "share_bps", bps)
+                )
+        if event.table.editing:
+            # tab is walking the row — rebuild when the editor closes
+            self._sheet_refresh_pending = True
+            self._sync_participants_sheet(layer)
+        else:
+            await self._flush_sheet_rebuild("participants-sheet")
+
+    @on(SheetTable.InsertRequested, "#participants-sheet")
+    async def _participant_insert(self, event: SheetTable.InsertRequested) -> None:
+        kind, key = self._commit_ref
+        layer = self._layer(key) if kind == "layer" else None
+        if layer is None:
+            return
+        open_bps = max(0, BPS_SCALE - layer.signed_bps)
+        self._mutate_and_refresh(
+            lambda p: layer.participants.append(
+                Participant(carrier="New Carrier", share_bps=open_bps)
+            )
+        )
+        await self._flush_sheet_rebuild(
+            "participants-sheet",
+            cursor=Coordinate(len(layer.participants) - 1, 0),
+        )
+
+    @on(SheetTable.DeleteRequested, "#participants-sheet")
+    async def _participant_delete(self, event: SheetTable.DeleteRequested) -> None:
+        kind, key = self._commit_ref
+        layer = self._layer(key) if kind == "layer" else None
+        if layer is None:
+            return
+        idx = int(event.row_key)
+        if idx >= len(layer.participants):
+            return
+        self._mutate_and_refresh(lambda p: layer.participants.pop(idx))
+        await self._flush_sheet_rebuild("participants-sheet")
+
+    @on(SheetTable.CellEdited, "#layers-sheet")
+    async def _layer_cell_edited(self, event: SheetTable.CellEdited) -> None:
+        layer = self._layer(event.row_key)
+        if layer is None:
+            return
+        field_key = event.field.key
+        if field_key == "name":
+            value = str(event.value)
+            if value != layer.name:
+
+                def rename(p: Program) -> None:
+                    layer.name = value
+                    if PLACEHOLDER_ID.match(layer.id):
+                        layer.id = self.session.unique_id(slugify(value))
+
+                self._mutate_and_refresh(rename)
+                if self.selected == ("layer", event.row_key):
+                    self.selected = ("layer", layer.id)
+        elif field_key == "attach" and event.value is not None:
+            amount = int(event.value)
+            self._mutate_and_refresh(lambda p: setattr(layer, "attach", amount))
+        elif field_key == "limit" and event.value is not None:
+            amount = int(event.value)
+            self._mutate_and_refresh(lambda p: setattr(layer, "limit", amount))
+        elif field_key == "premium":
+            premium = int(event.value) if event.value is not None else None
+            self._mutate_and_refresh(lambda p: setattr(layer, "premium", premium))
+        if event.table.editing:
+            self._sheet_refresh_pending = True
+            # refresh this row in place; a renamed placeholder id makes the
+            # row key stale, in which case the pending rebuild reconciles
+            try:
+                for column_key, cell in zip(
+                    ("name", "lines", "attach", "limit", "top", "premium", "signed"),
+                    self._layer_cells(layer),
+                    strict=True,
+                ):
+                    event.table.update_cell(event.row_key, column_key, cell)
+            except Exception:
+                pass
+        else:
+            await self._flush_sheet_rebuild("layers-sheet")
+
+    @on(SheetTable.InsertRequested, "#layers-sheet")
+    async def _layers_sheet_insert(self, event: SheetTable.InsertRequested) -> None:
+        layer = self.session.add_layer(None)
+        self.refresh_all()
+        await self._flush_sheet_rebuild(
+            "layers-sheet",
+            cursor=Coordinate(len(self.session.program.layers) - 1, 0),
+        )
+        self.notify(
+            f"attach suggested at {format_money(layer.attach)} "
+            f"(top of stack for {'/'.join(layer.applies_to)})"
+        )
+
+    @on(SheetTable.DeleteRequested, "#layers-sheet")
+    async def _layers_sheet_delete(self, event: SheetTable.DeleteRequested) -> None:
+        layer_id = event.row_key
+        if self._layer(layer_id) is None:
+            return
+        if self.selected == ("layer", layer_id):
+            self.selected = ("program", None)
+        self._mutate_and_refresh(
+            lambda p: setattr(p, "layers", [ly for ly in p.layers if ly.id != layer_id])
+        )
+        await self._flush_sheet_rebuild("layers-sheet")
+
+    @on(SheetTable.RowSelected, "#layers-sheet")
+    async def _layers_sheet_row_selected(self, event) -> None:
+        """Enter on a layer row: jump the outline there and reopen the form."""
+        layer_id = str(event.row_key.value) if event.row_key else ""
+        if self._layer(layer_id) is None:
+            return
+        self._layers_sheet_open = False
+        self.selected = ("layer", layer_id)
+        await self._rebuild_detail()
+        self._select_tree_node(self.selected)
 
     def _form_retention(self, index: int) -> list:
         program = self.session.program
@@ -579,9 +1087,11 @@ class EditorScreen(Screen):
                 allow_blank=False,
             ),
             Label("Amount (per occurrence)", classes="field-label"),
-            MoneyInput(retention.amount, id="f-ret-amount"),
+            MoneyInput(retention.amount, placeholder="250k · 1m", id="f-ret-amount"),
             Label("Aggregate (optional)", classes="field-label"),
-            MoneyInput(retention.aggregate, id="f-ret-aggregate"),
+            MoneyInput(
+                retention.aggregate, placeholder="blank = none · 2m", id="f-ret-aggregate"
+            ),
             Label("Captive vehicle", classes="field-label"),
             Input(value=retention.vehicle or "", id="f-ret-vehicle"),
         ]
@@ -595,7 +1105,7 @@ class EditorScreen(Screen):
             Label("Name", classes="field-label"),
             Input(value=sublimit.name, id="f-sub-name"),
             Label("Amount", classes="field-label"),
-            MoneyInput(sublimit.amount, id="f-sub-amount"),
+            MoneyInput(sublimit.amount, placeholder="1m · 500k", id="f-sub-amount"),
             Label("Applies to", classes="field-label"),
             self._applies_selector(sublimit.applies_to),
         ]
@@ -774,6 +1284,7 @@ class EditorScreen(Screen):
                 else "—"
             )
             static.update(prem)
+        self._sync_participants_sheet(layer)
 
     def _commit_retention_field(self, widget: Input) -> None:
         kind, index = self._commit_ref
@@ -825,6 +1336,7 @@ class EditorScreen(Screen):
             value = widget.value.strip()
             if value and value != participant.carrier:
                 self._mutate_and_refresh(lambda p: setattr(participant, "carrier", value))
+                self._sync_participants_sheet(layer)
                 if value not in self._carriers:
                     self._carriers.append(value)
         else:
@@ -968,14 +1480,6 @@ class EditorScreen(Screen):
                 )
             )
             await self._rebuild_detail()
-        elif wid.startswith("p-del-") and kind == "layer":
-            layer = self._layer(key)
-            if layer is None:
-                return
-            idx = int(wid.rsplit("-", 1)[1])
-            if idx < len(layer.participants):
-                self._mutate_and_refresh(lambda p: layer.participants.pop(idx))
-                await self._rebuild_detail()
 
     # -- structural actions ----------------------------------------------------
 
@@ -1363,7 +1867,11 @@ class EditorScreen(Screen):
     def action_help(self) -> None:
         self.app.push_screen(HelpModal(EDITOR_HELP))
 
-    def action_back(self) -> None:
+    async def action_back(self) -> None:
+        if self._layers_sheet_open:
+            # esc from the layers sheet returns to the form, never exits
+            await self.action_layers_sheet()
+            return
         if not self.session.dirty:
             self.dismiss_editor()
             return
