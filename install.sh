@@ -20,6 +20,7 @@ cd "$(dirname "$0")"
 
 WHEELHOUSE_URL="https://github.com/wanderinglantern/towerkit/releases/download/v0.1.0/towerkit-wheelhouse-macos.zip"
 PY="${PYTHON:-python3}"
+WHEELHOUSE_SHA256="6b665030ed828d14c9cfa3bee0cdb3defaf1b423ae36842687f4b5eb4fae6bde"
 
 version=$("$PY" -c 'import sys; print("%d.%d" % sys.version_info[:2])')
 
@@ -30,6 +31,14 @@ rm -rf .venv
 fetch_wheelhouse() {
     echo "→ downloading wheelhouse (~160MB) …"
     curl -fSL --progress-bar -o wheelhouse.zip "$WHEELHOUSE_URL"
+    # the corporate proxy has been caught altering pip downloads —
+    # verify this artifact against the hash pinned in git
+    echo "$WHEELHOUSE_SHA256  wheelhouse.zip" | shasum -a 256 -c - || {
+        echo "error: wheelhouse.zip hash mismatch — the download was altered in transit." >&2
+        echo "Do NOT bypass this. Re-try on a trusted network, or copy the zip manually." >&2
+        rm -f wheelhouse.zip
+        exit 1
+    }
     rm -rf wheelhouse
     mkdir wheelhouse
     unzip -q wheelhouse.zip -d wheelhouse
@@ -40,8 +49,16 @@ offline_install() {
     ./.venv/bin/pip install -q --no-index --find-links wheelhouse hatchling editables         && ./.venv/bin/pip install -q --no-index --find-links wheelhouse --no-build-isolation -e .
 }
 
-echo "→ trying PyPI …"
-if ./.venv/bin/pip install -q -e . >.install-pypi.log 2>&1; then
+if [ "${OFFLINE:-0}" = "1" ]; then
+    echo "→ OFFLINE=1 — skipping PyPI, using the wheelhouse …"
+    [ -d wheelhouse ] || fetch_wheelhouse
+    if ! offline_install; then
+        echo "→ cached wheelhouse could not satisfy the install — refreshing it …"
+        fetch_wheelhouse
+        offline_install
+    fi
+    echo "✓ installed from the wheelhouse"
+elif ./.venv/bin/pip install -q -e . >.install-pypi.log 2>&1; then
     echo "✓ installed from PyPI"
     rm -f .install-pypi.log
 else
