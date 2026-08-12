@@ -14,6 +14,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from datetime import date
+from pathlib import Path
 
 from .dates import parse_flexible_date
 from .model import (
@@ -376,3 +377,58 @@ def _slug(name: str, taken: set[str]) -> str:
     while slug in taken:
         slug, n = f"{base}-{n}", n + 1
     return slug
+
+
+# --- one entry point for every schedule source ---------------------------------
+
+
+def import_schedule(
+    source: str | Path | None,
+    *,
+    text: str | None = None,
+    insured: str = "",
+    program: str = "",
+    inception: str = "",
+    expiry: str = "",
+) -> DraftProgram:
+    """One entry point for every schedule source: pasted text, xlsx
+    template, strict-header csv, or free text file. Returns the draft so
+    callers surface draft.diagnostics their own way (print vs notify)
+    before draft.to_program()."""
+    if text is not None:
+        draft = parse_tower(text, insured=insured, program=program)
+    else:
+        if source is None:
+            raise ValueError("a schedule file or pasted text is required")
+        path = Path(source)
+        suffix = path.suffix.lower()
+        if suffix == ".xlsx":
+            from .ingest_template import read_rows
+
+            draft = program_from_rows(read_rows(path), insured=insured, program=program)
+        elif suffix == ".csv":
+            import csv
+
+            with path.open(newline="", encoding="utf-8") as fh:
+                reader = csv.DictReader(fh)
+                headers = [h.strip().lower() for h in reader.fieldnames or []]
+                unknown = [h for h in headers if h and h not in CANONICAL_FIELDS]
+                if unknown:  # same strictness as the xlsx reader — never drop silently
+                    raise ValueError(
+                        f"unknown columns {unknown!r}; expected {list(CANONICAL_FIELDS)!r}"
+                    )
+                rows: list[dict[str, object]] = [
+                    {k.strip().lower(): v for k, v in row.items() if v not in (None, "")}
+                    for row in reader
+                ]
+            draft = program_from_rows(rows, insured=insured, program=program)
+        else:
+            draft = parse_tower(
+                path.read_text(encoding="utf-8"), insured=insured, program=program
+            )
+    if draft.period is None and inception and expiry:
+        start = parse_flexible_date(inception)
+        end = parse_flexible_date(expiry)
+        if start and end:
+            draft.period = Period(start=start, end=end)
+    return draft
