@@ -71,6 +71,13 @@ class TestCopy:
         with pytest.raises(KeyError):
             transfer_line(make_src(), make_dst(), "nope", move=False)
 
+    def test_copy_shares_no_objects_between_results(self) -> None:
+        r = transfer_line(make_src(), make_dst(), "gl", move=False)
+        grafted_line = r.dst_after.lines[-1]
+        assert all(grafted_line is not ln for ln in r.src_after.lines)
+        grafted_line.name = "Mutated"
+        assert all(ln.name != "Mutated" for ln in r.src_after.lines)
+
 
 class TestMove:
     def test_move_removes_line_and_exclusives_and_narrows_shared(self) -> None:

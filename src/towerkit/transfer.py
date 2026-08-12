@@ -61,10 +61,10 @@ def transfer_line(
         return ", ".join(line_names[i] for i in applies_to if i != line_id)
 
     # -- what travels (read from the src copy) --------------------------------
-    line = next(ln for ln in src_after.lines if ln.id == line_id)
-    layers = [ly for ly in src_after.layers if exclusive(ly.applies_to)]
-    retentions = [r for r in src_after.retentions if exclusive(r.applies_to)]
-    sublimits = [s for s in src_after.sublimits if exclusive(s.applies_to)]
+    line = next(ln for ln in src_after.lines if ln.id == line_id).model_copy(deep=True)
+    layers = [ly.model_copy(deep=True) for ly in src_after.layers if exclusive(ly.applies_to)]
+    retentions = [r.model_copy(deep=True) for r in src_after.retentions if exclusive(r.applies_to)]
+    sublimits = [s.model_copy(deep=True) for s in src_after.sublimits if exclusive(s.applies_to)]
 
     summary.travels.append(f"Line: {line.name}")
     summary.travels += [f"Layer: {ly.name}" for ly in layers]
