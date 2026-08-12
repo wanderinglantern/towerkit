@@ -293,6 +293,9 @@ def _cmd_import(args: argparse.Namespace) -> int:
             print(f"  {diag}")
         return 1
     out = args.out or Path(f"{_file_slug(insured)}-{_file_slug(program_name)}.json")
+    if out.exists():  # program files are the source of truth — never clobber one
+        print(f"{out} already exists — refusing to overwrite (pass a different -o)")
+        return 1
     dump_program(program, out)
     print(out)
     if args.edit:

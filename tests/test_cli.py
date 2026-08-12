@@ -118,6 +118,20 @@ class TestImport:
         assert code == 1
         assert "wibble" in capsys.readouterr().out
 
+    def test_import_refuses_existing_output(self, tmp_path, capsys) -> None:
+        out = tmp_path / "existing.json"
+        out.write_text("{}")  # a program file is the source of truth
+        paste = tmp_path / "tower.txt"
+        paste.write_text("Primary 10M — Chubb 100%\n")
+        code = main(
+            [
+                "import", str(paste), "-o", str(out), "--insured", "A",
+                "--program", "P", "--inception", "2026-10-01", "--expiry", "2027-10-01",
+            ]
+        )
+        assert code == 1
+        assert out.read_text() == "{}"  # untouched
+
     def test_import_bad_rows_exits_nonzero(self, tmp_path, capsys) -> None:
         bad = tmp_path / "bad.csv"
         bad.write_text(
