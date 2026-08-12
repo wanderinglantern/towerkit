@@ -197,10 +197,25 @@ class ProgramBrowser(Screen):
         def on_name(name: str | None) -> None:
             if not name:
                 return
-            from ...ingest_template import write_template
+            target = Path(name if name.lower().endswith(".xlsx") else f"{name}.xlsx")
 
-            target = Path(name if name.endswith(".xlsx") else f"{name}.xlsx")
-            self.notify(f"template written: {write_template(target)}")
+            def write_it() -> None:
+                from ...ingest_template import write_template
+
+                self.notify(f"template written: {write_template(target)}")
+
+            if target.exists():  # a filled template is keyed-in user data — confirm first
+
+                def on_confirm(confirmed: bool | None) -> None:
+                    if confirmed:
+                        write_it()
+
+                self.app.push_screen(
+                    ConfirmModal(f"{target.name} exists — overwrite?", yes_label="Overwrite"),
+                    on_confirm,
+                )
+                return
+            write_it()
 
         self.app.push_screen(
             PromptModal("Template file name:", default="template.xlsx"), on_name
@@ -208,13 +223,13 @@ class ProgramBrowser(Screen):
 
     def action_import_file(self) -> None:
         def on_fields(fields: dict | None) -> None:
-            if not fields or not fields["source"]:
+            if not fields or not fields["path"].strip():
                 return
             from ...ingest import import_schedule
 
             try:
                 draft = import_schedule(
-                    Path(fields["source"]),
+                    Path(fields["path"]).expanduser(),
                     insured=fields["insured"],
                     program=fields["program"],
                     inception=fields["inception"],
@@ -251,7 +266,9 @@ class ProgramBrowser(Screen):
 
     def _finish_import(self, draft: DraftProgram) -> None:
         for diag in draft.diagnostics.items:
-            self.notify(str(diag), severity="warning")
+            self.notify(
+                str(diag), severity="error" if diag.severity == "error" else "warning"
+            )
         try:
             program = draft.to_program()
         except ProgramInvalidError as exc:
@@ -268,6 +285,7 @@ class ProgramBrowser(Screen):
         if out.exists():  # program files are the source of truth — never clobber
             self.notify(f"{out.name} exists — not overwriting", severity="error")
             return
+        self.programs_dir.mkdir(parents=True, exist_ok=True)
         dump_program(program, out)
         self.reload()
         self.notify(f"imported {out.name}")

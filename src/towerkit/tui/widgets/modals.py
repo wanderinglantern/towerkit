@@ -327,10 +327,14 @@ class SendLineModal(ModalScreen[tuple[Path, bool] | None]):
 
 
 class ImportFileModal(ModalScreen[dict | None]):
-    """Import a schedule file plus the meta no schedule file carries.
+    """Import a schedule file plus the meta the source can't carry.
 
-    Dismisses with {"source", "insured", "program", "inception", "expiry"}
-    (the CLI import flags as form fields) or None on cancel."""
+    `PasteImportModal`'s structural twin: a path `Input` instead of a
+    `TextArea`, same insured/program/inception/expiry fields. The optional
+    dates matter here specifically for text/csv sources — `parse_tower`
+    has no date syntax, so without them a text-file schedule can never
+    pick up a policy period.
+    """
 
     BINDINGS = [("escape", "dismiss(None)", "Cancel")]
 
@@ -373,7 +377,7 @@ class ImportFileModal(ModalScreen[dict | None]):
 
     def _confirm(self) -> None:
         self.dismiss({
-            "source": self.query_one("#import-path", Input).value.strip(),
+            "path": self.query_one("#import-path", Input).value.strip(),
             "insured": self.query_one("#import-insured", Input).value.strip(),
             "program": self.query_one("#import-program", Input).value.strip(),
             "inception": self.query_one("#import-inception", Input).value.strip(),
@@ -391,10 +395,7 @@ class ImportFileModal(ModalScreen[dict | None]):
 
 
 class PasteImportModal(ModalScreen[dict | None]):
-    """Paste a schedule as text plus the meta the text can't carry.
-
-    Dismisses with {"text", "insured", "program", "inception", "expiry"}
-    or None on cancel."""
+    """Paste a schedule as text plus the meta the text can't carry."""
 
     BINDINGS = [("escape", "dismiss(None)", "Cancel")]
 
