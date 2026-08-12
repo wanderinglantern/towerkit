@@ -727,3 +727,40 @@ class TestDirtyExitOffersSave:
             await pilot.pause()
             assert isinstance(app.screen, EditorScreen)  # refused the exit
         assert sample_copy.read_bytes() == before
+
+
+class TestSoiExport:
+    @pytest.mark.asyncio
+    async def test_x_exports_workbook_to_dist(self, sample_copy, monkeypatch) -> None:
+        monkeypatch.chdir(sample_copy.parent.parent)
+        before = sample_copy.read_bytes()
+        app = TowerkitApp(path=sample_copy)
+        async with app.run_test(size=(140, 45)) as pilot:
+            editor = app.screen
+            assert isinstance(editor, EditorScreen)
+            await pilot.press("x")
+            await pilot.pause()
+            from towerkit.soi import default_filename
+
+            out = Path("dist") / default_filename(editor.session.program)
+        assert out.exists()
+        # program file untouched by export
+        assert sample_copy.read_bytes() == before
+
+    @pytest.mark.asyncio
+    async def test_x_blocked_by_validation_errors(self, sample_copy, monkeypatch) -> None:
+        monkeypatch.chdir(sample_copy.parent.parent)
+        app = TowerkitApp(path=sample_copy)
+        async with app.run_test(size=(140, 45)) as pilot:
+            editor = app.screen
+            # force validation errors: duplicate layer ids (same trick as dirty-exit tests)
+            editor.session.mutate(
+                lambda p: setattr(p.layers[1], "id", p.layers[0].id)
+            )
+            assert editor.session.diagnostics().errors
+            await pilot.press("x")
+            await pilot.pause()
+            from towerkit.soi import default_filename
+
+            out = Path("dist") / default_filename(editor.session.program)
+        assert not out.exists()

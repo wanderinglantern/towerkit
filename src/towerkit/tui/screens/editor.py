@@ -94,6 +94,7 @@ Output
   r          render (SVG+PNG to dist/)
   t          render options: theme, totals, premiums,
              per-cell premium and policy term (saved with the file)
+  x          export SOI workbook (.xlsx to dist/)
 
 Files
   ctrl+s     save (canonical JSON; prompts if errors exist)
@@ -123,6 +124,7 @@ class EditorScreen(Screen):
         ("ctrl+r", "redo", "Redo"),
         ("r", "render", "Render"),
         ("t", "render_options", "Options"),
+        ("x", "export_soi", "SOI"),
         ("a", "add_node", "Add"),
         ("delete", "remove_node", "Remove"),
         ("left_square_bracket", "move_line(-1)", "[ line left"),
@@ -1177,6 +1179,31 @@ class EditorScreen(Screen):
             ),
             on_choice,
         )
+
+    def action_export_soi(self) -> None:
+        self._drain_focused_input()
+        diags = self.session.diagnostics()
+        if diags.errors:
+            self.notify(
+                f"{len(diags.errors)} validation errors — fix before exporting",
+                severity="error",
+            )
+            return
+        from ...render.soi_xlsx import write_soi
+        from ...soi import build_soi, default_filename, sheet_title
+
+        program = self.session.program
+        written = write_soi(
+            build_soi(program),
+            title=sheet_title(program),
+            theme=self.tower_theme,
+            out_path=Path("dist") / default_filename(program),
+            show_premiums=_opts(self).show_premiums,
+        )
+        self.notify(f"exported: {written}")
+        open_cmd = os.environ.get("OPEN_CMD")
+        if open_cmd:
+            subprocess.run([*shlex.split(open_cmd), str(written)], check=False)
 
     def apply_theme(self, theme_path: Path | None) -> None:
         self.theme_path = theme_path
