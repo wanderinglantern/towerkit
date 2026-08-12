@@ -15,6 +15,7 @@ from ..session import EditSession, blank_program, slugify
 from ..widgets.modals import (
     ConfirmModal,
     HelpModal,
+    PasteImportModal,
     PromptModal,
     RenderOptions,
     RenderOptionsModal,
@@ -33,6 +34,7 @@ class ProgramBrowser(Screen):
         ("x", "diff", "Mark/compare"),
         ("t", "render_options", "Options"),
         ("i", "import_file", "Import"),
+        ("p", "paste_import", "Paste"),
         ("w", "template", "Template"),
         ("q", "quit", "Quit"),
         ("question_mark", "help", "Help"),
@@ -57,7 +59,7 @@ class ProgramBrowser(Screen):
         yield Static(
             "enter open · n new · c clone as renewal · d delete · r render · "
             "x mark two programs to compare · t render options · "
-            "i import schedule · w write template",
+            "i import schedule · p paste schedule · w write template",
             id="hint",
         )
         yield Footer()
@@ -200,6 +202,28 @@ class ProgramBrowser(Screen):
             PromptModal("Schedule file (xlsx/csv/text):"), on_source
         )
 
+    def action_paste_import(self) -> None:
+        def on_fields(fields: dict | None) -> None:
+            if not fields or not fields["text"].strip():
+                return
+            from ...ingest import import_schedule
+
+            try:
+                draft = import_schedule(
+                    None,
+                    text=fields["text"],
+                    insured=fields["insured"],
+                    program=fields["program"],
+                    inception=fields["inception"],
+                    expiry=fields["expiry"],
+                )
+            except Exception as exc:
+                self.notify(f"import failed: {exc}", severity="error")
+                return
+            self._finish_import(draft)
+
+        self.app.push_screen(PasteImportModal(), on_fields)
+
     def _finish_import(self, draft) -> None:
         for diag in draft.diagnostics.items:
             self.notify(
@@ -319,6 +343,7 @@ class ProgramBrowser(Screen):
   x          mark two programs to compare (renewal diff)
   t          render options (theme, totals, premiums, cell extras)
   i          import a schedule file (xlsx/csv/text) into a new program
+  p          paste a schedule as text into a new program
   w          write a blank import template workbook
   q          quit        ?  this help
 """

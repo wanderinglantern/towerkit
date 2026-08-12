@@ -9,7 +9,7 @@ from pathlib import Path
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import Button, Checkbox, Input, Label, OptionList
+from textual.widgets import Button, Checkbox, Input, Label, OptionList, TextArea
 from textual.widgets.option_list import Option
 
 
@@ -293,3 +293,43 @@ class SendLineModal(ModalScreen[tuple[Path, bool] | None]):
             return
         move = self.query_one("#send-move", Checkbox).value
         self.dismiss((self.targets[idx], move))
+
+
+class PasteImportModal(ModalScreen[dict | None]):
+    """Paste a schedule as text plus the meta the text can't carry."""
+
+    BINDINGS = [("escape", "dismiss(None)", "Cancel")]
+
+    DEFAULT_CSS = """
+    PasteImportModal { align: center middle; }
+    #paste-box { width: 90; height: auto; max-height: 32; padding: 1 2;
+                 background: $surface; border: thick $primary; }
+    #paste-text { height: 10; }
+    """
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="paste-box"):
+            yield Label("Paste the schedule (one layer per line):")
+            yield TextArea(id="paste-text")
+            yield Label("Insured")
+            yield Input(id="paste-insured")
+            yield Label("Program")
+            yield Input(id="paste-program")
+            yield Label("Inception / Expiry (any date form)")
+            yield Input(id="paste-inception", placeholder="Jan 1 2026")
+            yield Input(id="paste-expiry", placeholder="Jan 1 2027")
+            with Horizontal():
+                yield Button("Import", variant="primary", id="paste-confirm")
+                yield Button("Cancel", id="paste-cancel")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "paste-confirm":
+            self.dismiss({
+                "text": self.query_one("#paste-text", TextArea).text,
+                "insured": self.query_one("#paste-insured", Input).value.strip(),
+                "program": self.query_one("#paste-program", Input).value.strip(),
+                "inception": self.query_one("#paste-inception", Input).value.strip(),
+                "expiry": self.query_one("#paste-expiry", Input).value.strip(),
+            })
+        else:
+            self.dismiss(None)

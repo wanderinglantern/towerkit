@@ -1139,3 +1139,78 @@ class TestBrowserImport:
                 "import failed" in n.message for n in app._notifications
             )
         assert not list((tmp_path / "programs").glob("*.json"))
+
+    PASTE = (
+        "Primary 10M — Chubb 100% — 250,000\n"
+        "15M xs 10M — AXA XL 60%, Sompo 40% — 180k\n"
+        "SIR 500k\n"
+    )
+
+    @pytest.mark.asyncio
+    async def test_p_pastes_schedule_with_fields(self, tmp_path, monkeypatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "programs").mkdir()
+        app = TowerkitApp()
+        async with app.run_test(size=(140, 45)) as pilot:
+            await pilot.press("p")
+            await pilot.pause()
+            from towerkit.tui.widgets.modals import PasteImportModal
+
+            modal = app.screen
+            assert isinstance(modal, PasteImportModal)
+            modal.query_one("#paste-text").text = self.PASTE
+            modal.query_one("#paste-insured").value = "Atomic Industries"
+            modal.query_one("#paste-program").value = "Property"
+            modal.query_one("#paste-inception").value = "Jan 1 2026"
+            modal.query_one("#paste-expiry").value = "1/1/2027"
+            modal.query_one("#paste-confirm").press()
+            await pilot.pause()
+            assert isinstance(app.screen, EditorScreen)
+            files = list((tmp_path / "programs").glob("*.json"))
+            assert len(files) == 1
+            from towerkit.model import load_program
+
+            program = load_program(files[0])
+            assert program.insured == "Atomic Industries"
+            assert len(program.layers) == 2
+
+    @pytest.mark.asyncio
+    async def test_p_empty_text_dismisses_as_noop(self, tmp_path, monkeypatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "programs").mkdir()
+        app = TowerkitApp()
+        async with app.run_test(size=(140, 45)) as pilot:
+            await pilot.press("p")
+            await pilot.pause()
+            from towerkit.tui.widgets.modals import PasteImportModal
+
+            assert isinstance(app.screen, PasteImportModal)
+            app.screen.query_one("#paste-confirm").press()
+            await pilot.pause()
+            assert isinstance(app.screen, ProgramBrowser)
+        assert not list((tmp_path / "programs").glob("*.json"))
+
+    @pytest.mark.asyncio
+    async def test_p_import_failure_notifies_and_writes_nothing(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "programs").mkdir()
+        app = TowerkitApp()
+        async with app.run_test(size=(140, 45)) as pilot:
+            await pilot.press("p")
+            await pilot.pause()
+            from towerkit.tui.widgets.modals import PasteImportModal
+
+            modal = app.screen
+            assert isinstance(modal, PasteImportModal)
+            modal.query_one("#paste-text").text = "not a schedule at all\n"
+            modal.query_one("#paste-insured").value = "Atomic Industries"
+            modal.query_one("#paste-program").value = "Property"
+            modal.query_one("#paste-confirm").press()
+            await pilot.pause()
+            assert isinstance(app.screen, ProgramBrowser)
+            assert any(
+                "import failed" in n.message for n in app._notifications
+            )
+        assert not list((tmp_path / "programs").glob("*.json"))
