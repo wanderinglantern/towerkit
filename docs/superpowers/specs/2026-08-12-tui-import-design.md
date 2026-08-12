@@ -38,12 +38,17 @@ refactor; the exact split is settled during planning against
 All three live on `ProgramBrowser` (free keys verified against its
 BINDINGS):
 
-- **`i` — import a schedule file.** `PromptModal("Schedule file (xlsx/csv/text):")`
-  → `import_schedule(path)` → save to
-  `programs/<slug(insured)>-<slug(program)>.json` (the CLI's naming rule)
-  → refuse to overwrite an existing file (notify which file, write
-  nothing — same rule as `towerctl import`) → refresh the table and open
-  the new program in the editor.
+- **`i` — import a schedule file.** Three chained prompts: schedule path,
+  insured, program — then `import_schedule(path, insured=…, program=…)` →
+  save to `programs/<slug(insured)>-<slug(program)>.json` (the CLI's
+  naming rule) → refuse to overwrite an existing file (notify which file,
+  write nothing — same rule as `towerctl import`) → refresh the table and
+  open the new program in the editor.
+  (Amended 2026-08-12 during implementation: the original single-prompt
+  design assumed the xlsx template carries insured/program meta — it does
+  not, and `Program` requires both non-empty, so the CLI supplies them as
+  flags and the TUI must prompt. Possible follow-up: collapse the three
+  prompts into one multi-field modal.)
 - **`p` — paste a schedule.** New `PasteImportModal`: a multiline
   `TextArea` for the schedule plus four `Input`s — insured, program,
   inception, expiry (the CLI's stdin flags as form fields; dates accept
