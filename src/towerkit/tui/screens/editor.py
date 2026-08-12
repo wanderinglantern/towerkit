@@ -73,6 +73,7 @@ from ..widgets.modals import (
     PromptModal,
     RenderOptions,
     RenderOptionsModal,
+    SendLineModal,
 )
 from ..widgets.preview import TowerPreview
 
@@ -85,6 +86,8 @@ Structure
              (shift+↑/↓ also works if your terminal sends it)
   =          restack: recalculate every attachment so layers sit
              flush on the stack beneath them (heals gaps/overlaps)
+  >          send the selected line (and its exclusive
+             layers/retentions/sublimits) to another program
 
 Editing
   enter      commit the field you are typing in
@@ -135,6 +138,7 @@ class EditorScreen(Screen):
         ("escape", "back", "Back"),
         ("question_mark", "help", "Help"),
         ("equals_sign", "restack", "= restack"),
+        ("greater_than_sign", "send_line", "> send"),
     ]
 
     CSS = """
@@ -1212,6 +1216,84 @@ class EditorScreen(Screen):
         open_cmd = os.environ.get("OPEN_CMD")
         if open_cmd:
             subprocess.run([*shlex.split(open_cmd), str(written)], check=False)
+
+    def action_send_line(self) -> None:
+        self._drain_focused_input()
+        kind, key = self.selected
+        if kind != "line":
+            self.notify("select a line to send", severity="warning")
+            return
+        line = self._line(key)
+        if line is None:
+            return
+        targets = sorted(Path("programs").glob("*.json")) + sorted(
+            (Path("programs") / "private").glob("*.json")
+        )
+        if self.session.path is not None:
+            targets = [
+                p for p in targets if p.resolve() != self.session.path.resolve()
+            ]
+        if not targets:
+            self.notify("no other program files under programs/", severity="warning")
+            return
+
+        def on_target(choice: tuple[Path, bool] | None) -> None:
+            if choice is None:
+                return
+            target_path, move = choice
+            from ...model import dumps_program, load_program
+            from ...transfer import transfer_line
+            from ...validate import validate_program
+
+            try:
+                dst = load_program(target_path)
+            except Exception as exc:
+                self.notify(f"can't read {target_path}: {exc}", severity="error")
+                return
+            if validate_program(dst).errors:
+                self.notify(
+                    f"{target_path.name} has validation errors — fix it first",
+                    severity="error",
+                )
+                return
+            result = transfer_line(self.session.program, dst, line.id, move=move)
+            lines = [f"{'Move' if move else 'Copy'} to {target_path.name}:"]
+            lines += [f"  + {t}" for t in result.summary.travels]
+            lines += [f"  stays: {s}" for s in result.summary.stays]
+            lines += [
+                f"  renamed in target: {old} → {new}"
+                for old, new in result.summary.renames
+            ]
+
+            async def on_confirm(go: bool | None) -> None:
+                if not go:
+                    return
+                target_path.write_text(
+                    dumps_program(result.dst_after), encoding="utf-8"
+                )
+                if move:
+                    def apply_src(p: Program) -> None:
+                        p.lines = result.src_after.lines
+                        p.layers = result.src_after.layers
+                        p.retentions = result.src_after.retentions
+                        p.sublimits = result.src_after.sublimits
+
+                    self.session.mutate(apply_src)
+                    # the moved line's node is gone from the tree; fall back
+                    # to the program-level selection like action_remove_node
+                    # does, and rebuild the detail pane so it doesn't keep
+                    # showing a form for a line that no longer exists
+                    self.selected = ("program", None)
+                    self.refresh_all()
+                    await self._rebuild_detail()
+                verb = "moved" if move else "copied"
+                self.notify(f"{verb} {line.name} to {target_path.name}")
+
+            self.app.push_screen(
+                ConfirmModal("\n".join(lines), yes_label="Send"), on_confirm
+            )
+
+        self.app.push_screen(SendLineModal(line.name, targets), on_target)
 
     def apply_theme(self, theme_path: Path | None) -> None:
         self.theme_path = theme_path
