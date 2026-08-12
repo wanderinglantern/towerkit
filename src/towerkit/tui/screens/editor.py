@@ -1057,6 +1057,12 @@ class EditorScreen(Screen):
                 ]
                 for r in p.retentions:
                     r.applies_to = [lid for lid in r.applies_to if lid != key]
+                p.sublimits = [
+                    s for s in p.sublimits
+                    if [lid for lid in s.applies_to if lid != key]
+                ]
+                for s in p.sublimits:
+                    s.applies_to = [lid for lid in s.applies_to if lid != key]
 
             self.session.mutate(drop_line)
             await after()

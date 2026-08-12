@@ -817,6 +817,40 @@ class TestSoiExport:
         assert not out.exists()
 
 
+class TestRemoveLineCleansSublimits:
+    @pytest.mark.asyncio
+    async def test_sublimits_narrow_or_drop_with_their_line(
+        self, sample_copy, monkeypatch
+    ) -> None:
+        # deleting a line must treat sublimits like retentions: entries
+        # that only applied to it are removed, shared ones are narrowed —
+        # never left with a dangling line ref (which fails validation and
+        # is what made the line-transfer crash reachable)
+        monkeypatch.chdir(sample_copy.parent.parent)
+        app = TowerkitApp(path=sample_copy)
+        async with app.run_test(size=(140, 45)) as pilot:
+            editor = app.screen
+            from towerkit.model import Sublimit
+
+            editor.session.mutate(
+                lambda p: p.sublimits.extend(
+                    [
+                        Sublimit(name="Shared", amount=100_000, applies_to=["gl", "al"]),
+                        Sublimit(name="AlOnly", amount=50_000, applies_to=["al"]),
+                    ]
+                )
+            )
+            editor.selected = ("line", "al")
+            await editor.action_remove_node()
+            await pilot.pause()
+            subs = editor.session.program.sublimits
+            names = [s.name for s in subs]
+            assert "AlOnly" not in names          # exclusive sublimit removed
+            shared = next(s for s in subs if s.name == "Shared")
+            assert shared.applies_to == ["gl"]    # shared sublimit narrowed
+            assert all("al" not in s.applies_to for s in subs)
+
+
 class TestAutocomplete:
     @pytest.mark.asyncio
     async def test_dropdowns_mount_for_known_records(self, sample_copy, monkeypatch) -> None:
