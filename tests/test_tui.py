@@ -764,3 +764,23 @@ class TestSoiExport:
 
             out = Path("dist") / default_filename(editor.session.program)
         assert not out.exists()
+
+    @pytest.mark.asyncio
+    async def test_premiums_toggle_drops_premium_column(
+        self, sample_copy, monkeypatch
+    ) -> None:
+        monkeypatch.chdir(sample_copy.parent.parent)
+        app = TowerkitApp(path=sample_copy)
+        async with app.run_test(size=(140, 45)) as pilot:
+            editor = app.screen
+            app.show_premiums = False  # the t-menu toggle's backing attr
+            await pilot.press("x")
+            await pilot.pause()
+            from towerkit.soi import default_filename
+
+            out = Path("dist") / default_filename(editor.session.program)
+        from openpyxl import load_workbook
+
+        headers = [c.value for c in load_workbook(out).active[1]]
+        assert "Premium" not in headers
+        assert headers[0] == "Insured"
