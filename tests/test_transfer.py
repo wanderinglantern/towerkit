@@ -108,3 +108,32 @@ class TestSummary:
         stays = "\n".join(r.summary.stays)
         assert "Umbrella" in stays and "Auto Liability" in stays
         assert r.summary.renames == []
+
+
+class TestCollisions:
+    def test_line_id_collision_reslugs_and_cascades(self) -> None:
+        dst = make_dst()
+        dst.lines.append(type(dst.lines[0])(id="gl", name="Existing GL"))
+        r = transfer_line(make_src(), dst, "gl", move=False)
+        ids = [ln.id for ln in r.dst_after.lines]
+        assert ids == ["el", "gl", "gl-2"]               # existing untouched
+        moved_primary = next(
+            ly for ly in r.dst_after.layers if ly.name == "Primary GL"
+        )
+        assert moved_primary.applies_to == ["gl-2"]      # cascade
+        assert r.dst_after.retentions[0].applies_to == ["gl-2"]
+        assert r.dst_after.sublimits[0].applies_to == ["gl-2"]
+        assert ("gl", "gl-2") in r.summary.renames
+
+    def test_layer_id_collision_reslugs(self) -> None:
+        dst = make_dst()
+        dst.layers[0].id = "gl-primary"                  # collide with traveller
+        dst.layers[0].applies_to = ["el"]
+        r = transfer_line(make_src(), dst, "gl", move=False)
+        layer_ids = [ly.id for ly in r.dst_after.layers]
+        assert layer_ids == ["gl-primary", "gl-primary-2"]
+        assert ("gl-primary", "gl-primary-2") in r.summary.renames
+
+    def test_no_collision_no_renames(self) -> None:
+        r = transfer_line(make_src(), make_dst(), "gl", move=False)
+        assert r.summary.renames == []

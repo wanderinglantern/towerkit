@@ -92,7 +92,24 @@ def transfer_line(
                 f"Sublimit: {s.name} — shared with {others(s.applies_to)}"
             )
 
-    # -- graft into the target (collision handling lands in Task 2) ----------
+    # -- graft into the target (collision handling) ---------------------------
+    taken = {ln.id for ln in dst_after.lines} | {ly.id for ly in dst_after.layers}
+    new_line_id = _unique_id(line.id, taken)
+    if new_line_id != line.id:
+        summary.renames.append((line.id, new_line_id))
+        line.id = new_line_id
+    taken.add(new_line_id)
+    for ly in layers:
+        new_id = _unique_id(ly.id, taken)
+        if new_id != ly.id:
+            summary.renames.append((ly.id, new_id))
+            ly.id = new_id
+        taken.add(new_id)
+        ly.applies_to = [new_line_id]
+    for r in retentions:
+        r.applies_to = [new_line_id]
+    for s in sublimits:
+        s.applies_to = [new_line_id]
     dst_after.lines.append(line)
     dst_after.layers.extend(layers)
     dst_after.retentions.extend(retentions)
