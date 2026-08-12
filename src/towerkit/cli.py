@@ -243,47 +243,24 @@ def _cmd_template(args: argparse.Namespace) -> int:
 
 
 def _cmd_import(args: argparse.Namespace) -> int:
-    import csv
-
-    from .dates import parse_flexible_date
-    from .ingest import CANONICAL_FIELDS, parse_tower, program_from_rows
-    from .model import Period, dump_program
+    from .ingest import import_schedule
+    from .model import dump_program
     from .validate import ProgramInvalidError
 
     insured, program_name = args.insured, args.program_name
     source = args.source
-    if source == "-":
-        draft = parse_tower(sys.stdin.read(), insured=insured, program=program_name)
-    else:
-        path = Path(source)
-        if path.suffix.lower() == ".xlsx":
-            from .ingest_template import read_rows
-
-            draft = program_from_rows(
-                read_rows(path), insured=insured, program=program_name
-            )
-        elif path.suffix.lower() == ".csv":
-            with path.open(newline="", encoding="utf-8") as fh:
-                reader = csv.DictReader(fh)
-                headers = [h.strip().lower() for h in reader.fieldnames or []]
-                unknown = [h for h in headers if h and h not in CANONICAL_FIELDS]
-                if unknown:  # same strictness as the xlsx reader — never drop silently
-                    print(f"unknown columns {unknown!r}; expected {list(CANONICAL_FIELDS)!r}")
-                    return 1
-                rows: list[dict[str, object]] = [
-                    {k.strip().lower(): v for k, v in row.items() if v not in (None, "")}
-                    for row in reader
-                ]
-            draft = program_from_rows(rows, insured=insured, program=program_name)
-        else:
-            draft = parse_tower(
-                path.read_text(encoding="utf-8"), insured=insured, program=program_name
-            )
-    if draft.period is None and args.inception and args.expiry:
-        start = parse_flexible_date(args.inception)
-        end = parse_flexible_date(args.expiry)
-        if start and end:
-            draft.period = Period(start=start, end=end)
+    try:
+        draft = import_schedule(
+            None if source == "-" else source,
+            text=sys.stdin.read() if source == "-" else None,
+            insured=insured,
+            program=program_name,
+            inception=args.inception,
+            expiry=args.expiry,
+        )
+    except ValueError as exc:
+        print(exc)
+        return 1
     for diag in draft.diagnostics.items:
         print(f"  {diag}")
     try:

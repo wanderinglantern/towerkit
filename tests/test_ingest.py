@@ -198,3 +198,36 @@ def test_round_trip_program_rows_program() -> None:
     assert [layer.name for layer in again.layers] == [x.name for x in original.layers]
     assert [layer.limit for layer in again.layers] == [x.limit for x in original.layers]
     assert again.layers[1].participants == original.layers[1].participants
+
+
+# --- import_schedule ----------------------------------------------------------
+
+from pathlib import Path  # noqa: E402
+
+from towerkit.ingest import import_schedule  # noqa: E402
+
+
+class TestImportSchedule:
+    def test_text_routes_through_parse_tower(self) -> None:
+        draft = import_schedule(None, text=PASTE, insured="Atomic", program="Property")
+        assert [layer.attach for layer in draft.layers] == [0, 10_000_000]
+
+    def test_txt_file_routes_through_parse_tower(self, tmp_path) -> None:
+        src = tmp_path / "sched.txt"
+        src.write_text(PASTE, encoding="utf-8")
+        draft = import_schedule(src, insured="Atomic", program="Property")
+        assert draft.layers[0].limit == 10_000_000
+
+    def test_csv_unknown_column_raises_value_error(self, tmp_path) -> None:
+        src = tmp_path / "sched.csv"
+        src.write_text("line,mystery\nGL,1\n", encoding="utf-8")
+        with pytest.raises(ValueError, match="unknown columns"):
+            import_schedule(src)
+
+    def test_period_fallback_parses_human_dates(self) -> None:
+        draft = import_schedule(
+            None, text=PASTE, insured="Atomic", program="Property",
+            inception="Jan 1 2026", expiry="1/1/2027",
+        )
+        assert draft.period is not None
+        assert draft.period.start.isoformat() == "2026-01-01"
