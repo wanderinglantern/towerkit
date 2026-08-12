@@ -280,7 +280,7 @@ def transfer_line(
     return TransferResult(src_after=src_after, dst_after=dst_after, summary=summary)
 ```
 
-Note: `layers`/`retentions`/`sublimits` are objects from the `src_after` copy. In move mode the source-side list rebuilds drop them by the `exclusive` predicate, so appending the same objects to `dst_after` is safe — they are never shared between the two returned programs. Also note `applies_to` narrowing can never produce an empty list (shared means ≥2 refs), and `min_length=1` on the model enforces it.
+Note (corrected in Task 1's fix round): the travelling `line`/`layers`/`retentions`/`sublimits` must be selected with `.model_copy(deep=True)` — selecting them by reference from `src_after` aliases the same objects into both returned programs in copy mode, which Task 2's rename cascade would corrupt. A regression test (`test_copy_shares_no_objects_between_results`) locks this. Also note `applies_to` narrowing can never produce an empty list (shared means ≥2 refs), and `min_length=1` on the model enforces it.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -385,7 +385,7 @@ In `transfer_line`, replace the four graft lines (`dst_after.lines.append(line)`
 - [ ] **Step 4: Run the whole transfer suite**
 
 Run: `MPL_IGNORE_SYSTEM_FONTS=1 uv run pytest tests/test_transfer.py -q`
-Expected: 11 passed (Task 1's tests must stay green).
+Expected: 11 passed (Task 1's 8 tests must stay green — including the copy-mode aliasing regression test added in Task 1's fix round).
 
 - [ ] **Step 5: Commit**
 

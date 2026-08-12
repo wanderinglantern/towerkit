@@ -58,7 +58,9 @@ def transfer_line(
         return set(applies_to) == {line_id}
 
     def others(applies_to: list[str]) -> str:
-        return ", ".join(line_names[i] for i in applies_to if i != line_id)
+        # a dangling id (reachable via in-TUI action sequences that leave a
+        # stale applies_to ref) prints as the raw id rather than crashing
+        return ", ".join(line_names.get(i, i) for i in applies_to if i != line_id)
 
     # -- what travels (read from the src copy) --------------------------------
     line = next(ln for ln in src_after.lines if ln.id == line_id).model_copy(deep=True)
@@ -75,18 +77,21 @@ def transfer_line(
     summary.travels += [
         f"Sublimit: {s.name} {format_money(s.amount)}" for s in sublimits
     ]
-    for ly in src.layers:
+    # both travels and stays read from src_after — this whole summary block
+    # must be built before the move-mode mutation below, which rewrites
+    # src_after in place.
+    for ly in src_after.layers:
         if line_id in ly.applies_to and not exclusive(ly.applies_to):
             summary.stays.append(
                 f"Layer: {ly.name} — shared with {others(ly.applies_to)}"
             )
-    for r in src.retentions:
+    for r in src_after.retentions:
         if line_id in r.applies_to and not exclusive(r.applies_to):
             summary.stays.append(
                 f"Retention: {_RETENTION_LABELS[r.type.value]} "
                 f"{format_money(r.amount)} — shared with {others(r.applies_to)}"
             )
-    for s in src.sublimits:
+    for s in src_after.sublimits:
         if line_id in s.applies_to and not exclusive(s.applies_to):
             summary.stays.append(
                 f"Sublimit: {s.name} — shared with {others(s.applies_to)}"
@@ -114,6 +119,14 @@ def transfer_line(
     dst_after.layers.extend(layers)
     dst_after.retentions.extend(retentions)
     dst_after.sublimits.extend(sublimits)
+
+    # follows_underlying attachments are derived state (session.mutate heals
+    # them the same way) — a grafted follows layer must re-seat against
+    # whatever actually travelled with it, never carry its old attach.
+    for ly in dst_after.layers:
+        if ly.follows_underlying:
+            tops = dst_after.underlying_tops(ly)
+            ly.attach = max(tops.values(), default=0)
 
     # -- source side ----------------------------------------------------------
     if move:

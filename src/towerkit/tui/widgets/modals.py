@@ -279,11 +279,17 @@ class SendLineModal(ModalScreen[tuple[Path, bool] | None]):
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "send-confirm":
-            options = self.query_one("#send-targets", OptionList)
-            idx = options.highlighted
-            if idx is None:
-                return
-            move = self.query_one("#send-move", Checkbox).value
-            self.dismiss((self.targets[idx], move))
+            self._confirm()
         else:
             self.dismiss(None)
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        self._confirm()
+
+    def _confirm(self) -> None:
+        options = self.query_one("#send-targets", OptionList)
+        idx = options.highlighted
+        if idx is None:
+            return
+        move = self.query_one("#send-move", Checkbox).value
+        self.dismiss((self.targets[idx], move))

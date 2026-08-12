@@ -53,6 +53,10 @@ this; it guards the API).
 - **Retentions and sublimits:** identical rule. Exclusive entries travel;
   shared entries stay and, in move mode, drop the departing id. Any source
   entry whose `applies_to` would become empty in move mode is removed.
+  Refusing to fabricate the shared layer in the target necessarily means
+  the sent line can arrive with a gap under its excess layers; the confirm
+  screen surfaces the target's would-be validation errors and the user
+  accepts them knowingly.
 - **Copy vs move:** copy leaves `src_after` identical to `src`; move
   removes the line, its exclusive dependents, and narrows shared refs as
   above.

@@ -1241,7 +1241,7 @@ class EditorScreen(Screen):
             if choice is None:
                 return
             target_path, move = choice
-            from ...model import dumps_program, load_program
+            from ...model import dump_program, load_program
             from ...transfer import transfer_line
             from ...validate import validate_program
 
@@ -1256,7 +1256,11 @@ class EditorScreen(Screen):
                     severity="error",
                 )
                 return
-            result = transfer_line(self.session.program, dst, line.id, move=move)
+            try:
+                result = transfer_line(self.session.program, dst, line.id, move=move)
+            except Exception as exc:
+                self.notify(f"transfer failed: {exc}", severity="error")
+                return
             lines = [f"{'Move' if move else 'Copy'} to {target_path.name}:"]
             lines += [f"  + {t}" for t in result.summary.travels]
             lines += [f"  stays: {s}" for s in result.summary.stays]
@@ -1264,13 +1268,22 @@ class EditorScreen(Screen):
                 f"  renamed in target: {old} → {new}"
                 for old, new in result.summary.renames
             ]
+            target_diags = validate_program(result.dst_after)
+            if target_diags.errors:
+                lines.append(
+                    f"  target will have {len(target_diags.errors)} "
+                    "validation error(s):"
+                )
+                lines += [f"    {d.message}" for d in target_diags.errors]
 
             async def on_confirm(go: bool | None) -> None:
                 if not go:
                     return
-                target_path.write_text(
-                    dumps_program(result.dst_after), encoding="utf-8"
-                )
+                try:
+                    dump_program(result.dst_after, target_path)
+                except Exception as exc:
+                    self.notify(f"write failed: {exc}", severity="error")
+                    return
                 if move:
                     def apply_src(p: Program) -> None:
                         p.lines = result.src_after.lines

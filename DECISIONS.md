@@ -216,3 +216,19 @@ relitigated here.
   control chars in user text, or a `PermissionError` from a locked `dist/`
   file, previously took the whole app down with unsaved edits. Same pattern
   in both actions, kept mirrored.
+
+## Line transfer (2026-08-12)
+
+- **Shared layers stay in the source, never fabricated into the target** —
+  the send flow refuses to invent a placement that does not exist. The
+  trade-off: the sent line can arrive in the target with a gap under its
+  excess layers (nothing left to attach to). Rather than block the send,
+  the confirm screen runs `validate_program` on `dst_after` and appends any
+  errors to the summary text; the user accepts the send knowingly, since
+  hypothetical program designs are a first-class use case.
+- **Follows-underlying attachments are re-derived in the graft**, exactly
+  as `session.mutate` heals them post-edit: after appending the travelling
+  layers into `dst_after`, every `follows_underlying` layer's `attach` is
+  recomputed from `dst_after.underlying_tops(layer)` rather than carrying
+  whatever attach it had in the source. A stale attach is derived-state
+  rot, not data worth preserving verbatim.

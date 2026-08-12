@@ -110,6 +110,38 @@ class TestSummary:
         assert r.summary.renames == []
 
 
+class TestDanglingRefs:
+    def test_dangling_applies_to_id_does_not_crash(self) -> None:
+        # reachable via valid in-TUI action sequences: a shared layer whose
+        # applies_to still names an id that no longer resolves to a line
+        src = make_src()
+        src.layers[1].applies_to = ["gl", "al", "ghost"]
+        r = transfer_line(src, make_dst(), "gl", move=False)
+        stays = "\n".join(r.summary.stays)
+        assert "ghost" in stays
+
+
+class TestFollowsUnderlyingHeal:
+    def test_grafted_follows_layer_reattaches_to_what_travelled(self) -> None:
+        src = make_src()
+        # GL excess follows-underlying, riding atop the shared umbrella in
+        # the source (stale attach 6,000,000 = umbrella's top there)
+        src.layers.append(
+            type(src.layers[0]).model_validate({
+                "id": "gl-excess", "name": "GL Excess", "appliesTo": ["gl"],
+                "attach": 6_000_000, "limit": 4_000_000,
+                "followsUnderlying": True,
+            })
+        )
+        r = transfer_line(src, make_dst(), "gl", move=False)
+        grafted = next(ly for ly in r.dst_after.layers if ly.name == "GL Excess")
+        assert grafted.follows_underlying is True
+        # only Primary GL travelled with it (the umbrella stayed behind, as
+        # a SHARED layer) — attach must re-seat to that top, not the stale
+        # source value
+        assert grafted.attach == 1_000_000
+
+
 class TestCollisions:
     def test_line_id_collision_reslugs_and_cascades(self) -> None:
         dst = make_dst()

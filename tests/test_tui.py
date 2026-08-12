@@ -861,6 +861,22 @@ class TestSendLine:
             # additive: every original line/layer still present, gl grafted
             assert {ln.id for ln in before.lines} <= {ln.id for ln in after.lines}
             assert len(after.lines) == len(before.lines) + 1
+            # pre-existing lines/layers serialise identically — not just
+            # set-containment, the untouched target content is byte-for-byte
+            after_lines_by_id = {ln.id: ln for ln in after.lines}
+            for ln in before.lines:
+                assert (
+                    after_lines_by_id[ln.id].model_dump()
+                    == ln.model_dump()
+                )
+            after_layers_by_id = {ly.id: ly for ly in after.layers}
+            before_layer_ids = {ly.id for ly in before.layers}
+            assert before_layer_ids <= set(after_layers_by_id)
+            for ly in before.layers:
+                assert (
+                    after_layers_by_id[ly.id].model_dump()
+                    == ly.model_dump()
+                )
             # copy mode: source session untouched
             assert not editor.session.dirty
 
@@ -921,6 +937,41 @@ class TestSendLine:
             assert any(
                 "can't read" in n.message for n in app._notifications
             )
+        assert dst.read_bytes() == bad
+
+    @pytest.mark.asyncio
+    async def test_invalid_target_refused_bytes_unchanged(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        # target parses as valid JSON/Program but fails semantic validation
+        # (duplicate layer id) — refused before any transfer is attempted
+        src, dst = self._two_programs(tmp_path, monkeypatch)
+        text = dst.read_text(encoding="utf-8").replace(
+            '"id": "primary-al"', '"id": "primary-gl"'
+        )
+        dst.write_text(text, encoding="utf-8")
+        bad = dst.read_bytes()
+        app = TowerkitApp(path=src)
+        async with app.run_test(size=(140, 45)) as pilot:
+            editor = app.screen
+            editor.selected = ("line", "gl")
+            await pilot.press("greater_than_sign")
+            await pilot.pause()
+            from towerkit.tui.widgets.modals import SendLineModal
+
+            modal = app.screen
+            assert isinstance(modal, SendLineModal)
+            idx = next(
+                i for i, p in enumerate(modal.targets) if p.name == "dst.json"
+            )
+            modal.query_one("#send-targets").highlighted = idx
+            modal.query_one("#send-confirm").press()
+            await pilot.pause()
+            await pilot.pause()
+            assert any(
+                "validation errors" in n.message for n in app._notifications
+            )
+            assert isinstance(app.screen, EditorScreen)  # no confirm modal
         assert dst.read_bytes() == bad
 
     @pytest.mark.asyncio
