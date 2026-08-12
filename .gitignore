@@ -12,3 +12,4 @@ programs/private/
 handoffs/
 changelog.md
 CLAUDE.md
+.install-pypi.log

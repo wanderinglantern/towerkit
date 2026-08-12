@@ -3,11 +3,12 @@
 #
 #   ./install.sh
 #
-# Tries PyPI first — on machines where pip has network access (directly or
-# through the corporate proxy) every dependency, including newly added ones,
-# resolves in seconds after a `git pull`. Machines with no PyPI access fall
-# back to the prebuilt wheelhouse from the GitHub release (the only network
-# needed there is github.com; macOS Intel/Apple Silicon, Python 3.12-3.13).
+# Tries PyPI first (standard pip env like PIP_INDEX_URL / HTTPS_PROXY is
+# honored, so corporate mirrors work). If that fails, the reason is saved to
+# .install-pypi.log and the prebuilt wheelhouse from the GitHub release takes
+# over (github.com is the only network needed; macOS Intel/Apple Silicon,
+# Python 3.12-3.13). A wheelhouse that cannot satisfy the install is thrown
+# away and re-downloaded once — stale caches must never fail the install.
 #
 # Everything installs into ./.venv so the ./towerctl wrapper always works and
 # the system Python is never touched. Re-run after every `git pull`.
@@ -26,30 +27,39 @@ echo "→ creating .venv with $PY ($version) …"
 rm -rf .venv
 "$PY" -m venv .venv
 
+fetch_wheelhouse() {
+    echo "→ downloading wheelhouse (~160MB) …"
+    curl -fSL --progress-bar -o wheelhouse.zip "$WHEELHOUSE_URL"
+    rm -rf wheelhouse
+    mkdir wheelhouse
+    unzip -q wheelhouse.zip -d wheelhouse
+    rm wheelhouse.zip
+}
+
+offline_install() {
+    ./.venv/bin/pip install -q --no-index --find-links wheelhouse hatchling editables         && ./.venv/bin/pip install -q --no-index --find-links wheelhouse --no-build-isolation -e .
+}
+
 echo "→ trying PyPI …"
-if ./.venv/bin/pip install -q -e . 2>/dev/null; then
+if ./.venv/bin/pip install -q -e . >.install-pypi.log 2>&1; then
     echo "✓ installed from PyPI"
+    rm -f .install-pypi.log
 else
-    echo "→ no PyPI access — installing from the local wheelhouse …"
+    echo "→ PyPI attempt failed (reason saved to .install-pypi.log):"
+    tail -3 .install-pypi.log | sed 's/^/    /'
+    echo "→ falling back to the local wheelhouse …"
     case "$version" in
         3.12|3.13) ;;
         *) echo "warning: wheelhouse targets Python 3.12/3.13; found $version" \
                "(set PYTHON=/path/to/python3.12 to override)" ;;
     esac
-    # refresh when a required wheel is missing — new deps land in the wheelhouse
-    if [ -d wheelhouse ] && ! ls wheelhouse/textual_autocomplete-*.whl >/dev/null 2>&1; then
-        echo "→ wheelhouse is stale (missing textual-autocomplete) — refreshing …"
-        rm -rf wheelhouse
+    [ -d wheelhouse ] || fetch_wheelhouse
+    if ! offline_install; then
+        echo "→ cached wheelhouse could not satisfy the install — refreshing it …"
+        fetch_wheelhouse
+        offline_install
     fi
-    if [ ! -d wheelhouse ]; then
-        echo "→ downloading wheelhouse (~160MB, one time) …"
-        curl -fSL --progress-bar -o wheelhouse.zip "$WHEELHOUSE_URL"
-        mkdir wheelhouse
-        unzip -q wheelhouse.zip -d wheelhouse
-        rm wheelhouse.zip
-    fi
-    ./.venv/bin/pip install -q --no-index --find-links wheelhouse hatchling editables
-    ./.venv/bin/pip install -q --no-index --find-links wheelhouse --no-build-isolation -e .
+    echo "✓ installed from the wheelhouse"
 fi
 
 echo
