@@ -1137,12 +1137,16 @@ class EditorScreen(Screen):
         from ...render.mpl_program import render_program
 
         stem = self.session.path.stem if self.session.path else "untitled"
-        written = render_program(
-            self.session.program, self.tower_theme, Path("dist"), stem, ["svg", "png"],
-            show_totals=_opts(self).show_totals, show_premiums=_opts(self).show_premiums,
-            cell_premiums=getattr(_opts(self), "cell_premiums", False),
-            cell_dates=getattr(_opts(self), "cell_dates", False),
-        )
+        try:
+            written = render_program(
+                self.session.program, self.tower_theme, Path("dist"), stem, ["svg", "png"],
+                show_totals=_opts(self).show_totals, show_premiums=_opts(self).show_premiums,
+                cell_premiums=getattr(_opts(self), "cell_premiums", False),
+                cell_dates=getattr(_opts(self), "cell_dates", False),
+            )
+        except Exception as exc:
+            self.notify(f"render failed: {exc}", severity="error")
+            return
         self.notify("rendered: " + ", ".join(str(p) for p in written))
         open_cmd = os.environ.get("OPEN_CMD")
         if open_cmd and written:
@@ -1193,13 +1197,17 @@ class EditorScreen(Screen):
         from ...soi import build_soi, default_filename, sheet_title
 
         program = self.session.program
-        written = write_soi(
-            build_soi(program),
-            title=sheet_title(program),
-            theme=self.tower_theme,
-            out_path=Path("dist") / default_filename(program),
-            show_premiums=_opts(self).show_premiums,
-        )
+        try:
+            written = write_soi(
+                build_soi(program),
+                title=sheet_title(program),
+                theme=self.tower_theme,
+                out_path=Path("dist") / default_filename(program),
+                show_premiums=_opts(self).show_premiums,
+            )
+        except Exception as exc:
+            self.notify(f"export failed: {exc}", severity="error")
+            return
         self.notify(f"exported: {written}")
         open_cmd = os.environ.get("OPEN_CMD")
         if open_cmd:

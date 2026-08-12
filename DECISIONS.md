@@ -194,3 +194,23 @@ relitigated here.
   "multiline" — matching the Notes field and reusing the stamped-ref commit
   flow; a `TextArea` would need its own commit path. Long prose still fits
   (the field scrolls); revisit if editing long schedules in place hurts.
+
+## TUI SOI export (2026-08-12)
+
+- **Output goes to `dist/`** (the TUI's convention, matching `action_render`),
+  while the CLI's `towerctl soi` still defaults to CWD — the TUI already
+  treats `dist/` as its working output directory; no reason to special-case
+  SOI.
+- **Filename keys on insured via `default_filename`**, same as the CLI —
+  renewal years of the same insured share one filename since the year lives
+  in the sheet title, not the path. Known clobber (a later export overwrites
+  an earlier renewal year's file); accepted for now, revisit if multi-year
+  exports become a workflow.
+- **Write errors notify instead of crashing** (this fix wave): both
+  `action_render` and `action_export_soi` wrap only their write call
+  (`render_program` / `write_soi`) in a try/except and notify
+  `"{render,export} failed: {exc}"` on failure rather than letting the
+  exception propagate and crash Textual — an `IllegalCharacterError` from
+  control chars in user text, or a `PermissionError` from a locked `dist/`
+  file, previously took the whole app down with unsaved edits. Same pattern
+  in both actions, kept mirrored.

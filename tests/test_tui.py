@@ -743,6 +743,9 @@ class TestSoiExport:
             from towerkit.soi import default_filename
 
             out = Path("dist") / default_filename(editor.session.program)
+            assert any(
+                str(out) in n.message for n in app._notifications
+            ), "expected a notification with the written path"
         assert out.exists()
         # program file untouched by export
         assert sample_copy.read_bytes() == before
@@ -763,6 +766,9 @@ class TestSoiExport:
             from towerkit.soi import default_filename
 
             out = Path("dist") / default_filename(editor.session.program)
+            assert any(
+                "validation error" in n.message for n in app._notifications
+            ), "expected a notification mentioning validation errors"
         assert not out.exists()
 
     @pytest.mark.asyncio
@@ -784,3 +790,28 @@ class TestSoiExport:
         headers = [c.value for c in load_workbook(out).active[1]]
         assert "Premium" not in headers
         assert headers[0] == "Insured"
+
+    @pytest.mark.asyncio
+    async def test_x_notifies_and_survives_write_failure(
+        self, sample_copy, monkeypatch
+    ) -> None:
+        monkeypatch.chdir(sample_copy.parent.parent)
+
+        def raiser(*args, **kwargs):
+            raise PermissionError("locked")
+
+        monkeypatch.setattr("towerkit.render.soi_xlsx.write_soi", raiser)
+        app = TowerkitApp(path=sample_copy)
+        async with app.run_test(size=(140, 45)) as pilot:
+            editor = app.screen
+            assert isinstance(editor, EditorScreen)
+            await pilot.press("x")
+            await pilot.pause()
+            assert app.screen is editor
+            assert any(
+                "export failed" in n.message for n in app._notifications
+            ), "expected a notification with the export failure"
+            from towerkit.soi import default_filename
+
+            out = Path("dist") / default_filename(editor.session.program)
+        assert not out.exists()
