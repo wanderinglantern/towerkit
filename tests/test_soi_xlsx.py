@@ -141,3 +141,16 @@ class TestContent:
         assert [c.value for c in ws[1]][-1] == "Deductible / SIR / Retention"
         assert ws.max_column == 8
         assert "A2:H2" in {str(r) for r in ws.merged_cells.ranges}  # full-width band
+
+
+# Refactor guard: extracting the generic table writer (render/table_xlsx.py)
+# must not change SOI bytes. Regenerate this hash ONLY on a deliberate style
+# change or an openpyxl version bump — never to make a refactor pass.
+GOLDEN_SHA = "f7c016f3628ed8e5b61230d61517190a8f9cc89abebe92678cac54e79c618450"
+
+
+def test_refactor_golden_bytes(program, theme, tmp_path):
+    import hashlib
+
+    path = _write(program, theme, tmp_path / "golden.xlsx")
+    assert hashlib.sha256(path.read_bytes()).hexdigest() == GOLDEN_SHA
