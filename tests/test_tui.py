@@ -839,3 +839,173 @@ class TestAutocomplete:
                 w for w in editor.query(AutoComplete)
             ]
             assert carriers  # carrier inputs carry dropdown completion too
+
+
+class TestSendLine:
+    def _two_programs(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        target = tmp_path / "programs"
+        target.mkdir()
+        shutil.copy(SAMPLE, target / "src.json")
+        shutil.copy(SAMPLE, target / "dst.json")
+        return target / "src.json", target / "dst.json"
+
+    @pytest.mark.asyncio
+    async def test_copy_line_writes_target_additively(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        src, dst = self._two_programs(tmp_path, monkeypatch)
+        from towerkit.model import load_program
+
+        before = load_program(dst)
+        app = TowerkitApp(path=src)
+        async with app.run_test(size=(140, 45)) as pilot:
+            editor = app.screen
+            editor.selected = ("line", "gl")
+            await pilot.press("greater_than_sign")
+            await pilot.pause()
+            from towerkit.tui.widgets.modals import SendLineModal
+
+            modal = app.screen
+            assert isinstance(modal, SendLineModal)
+            # pick dst.json in the option list, leave "move" unchecked
+            options = modal.query_one("#send-targets")
+            idx = next(
+                i for i, p in enumerate(modal.targets) if p.name == "dst.json"
+            )
+            options.highlighted = idx
+            modal.query_one("#send-confirm").press()
+            await pilot.pause()
+            # summary confirm modal — drive it by button press, same
+            # mechanism as TestDirtyExitOffersSave, not a raw keypress
+            # (ConfirmModal has no "y" binding, only Button ids yes/no)
+            app.screen.query_one("#yes").press()
+            await pilot.pause()
+            after = load_program(dst)
+            # additive: every original line/layer still present, gl grafted
+            assert {ln.id for ln in before.lines} <= {ln.id for ln in after.lines}
+            assert len(after.lines) == len(before.lines) + 1
+            # pre-existing lines/layers serialise identically — not just
+            # set-containment, the untouched target content is byte-for-byte
+            after_lines_by_id = {ln.id: ln for ln in after.lines}
+            for ln in before.lines:
+                assert (
+                    after_lines_by_id[ln.id].model_dump()
+                    == ln.model_dump()
+                )
+            after_layers_by_id = {ly.id: ly for ly in after.layers}
+            before_layer_ids = {ly.id for ly in before.layers}
+            assert before_layer_ids <= set(after_layers_by_id)
+            for ly in before.layers:
+                assert (
+                    after_layers_by_id[ly.id].model_dump()
+                    == ly.model_dump()
+                )
+            # copy mode: source session untouched
+            assert not editor.session.dirty
+
+    @pytest.mark.asyncio
+    async def test_move_is_undoable_and_source_file_untouched(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        src, dst = self._two_programs(tmp_path, monkeypatch)
+        src_bytes = src.read_bytes()
+        app = TowerkitApp(path=src)
+        async with app.run_test(size=(140, 45)) as pilot:
+            editor = app.screen
+            n_lines = len(editor.session.program.lines)
+            editor.selected = ("line", "gl")
+            await pilot.press("greater_than_sign")
+            await pilot.pause()
+            from towerkit.tui.widgets.modals import SendLineModal
+
+            modal = app.screen
+            idx = next(
+                i for i, p in enumerate(modal.targets) if p.name == "dst.json"
+            )
+            modal.query_one("#send-targets").highlighted = idx
+            modal.query_one("#send-move").value = True
+            modal.query_one("#send-confirm").press()
+            await pilot.pause()
+            app.screen.query_one("#yes").press()
+            await pilot.pause()
+            assert len(editor.session.program.lines) == n_lines - 1
+            assert editor.session.undo()
+            assert len(editor.session.program.lines) == n_lines
+        assert src.read_bytes() == src_bytes  # source file never written
+
+    @pytest.mark.asyncio
+    async def test_malformed_target_refused_bytes_unchanged(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        src, dst = self._two_programs(tmp_path, monkeypatch)
+        dst.write_text("{not json", encoding="utf-8")
+        bad = dst.read_bytes()
+        app = TowerkitApp(path=src)
+        async with app.run_test(size=(140, 45)) as pilot:
+            editor = app.screen
+            editor.selected = ("line", "gl")
+            await pilot.press("greater_than_sign")
+            await pilot.pause()
+            from towerkit.tui.widgets.modals import SendLineModal
+
+            modal = app.screen
+            idx = next(
+                i for i, p in enumerate(modal.targets) if p.name == "dst.json"
+            )
+            modal.query_one("#send-targets").highlighted = idx
+            modal.query_one("#send-confirm").press()
+            await pilot.pause()
+            await pilot.pause()  # notify() is itself a posted message; give
+            # it a second idle-drain so this isn't racy under load
+            assert any(
+                "can't read" in n.message for n in app._notifications
+            )
+        assert dst.read_bytes() == bad
+
+    @pytest.mark.asyncio
+    async def test_invalid_target_refused_bytes_unchanged(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        # target parses as valid JSON/Program but fails semantic validation
+        # (duplicate layer id) — refused before any transfer is attempted
+        src, dst = self._two_programs(tmp_path, monkeypatch)
+        text = dst.read_text(encoding="utf-8").replace(
+            '"id": "primary-al"', '"id": "primary-gl"'
+        )
+        dst.write_text(text, encoding="utf-8")
+        bad = dst.read_bytes()
+        app = TowerkitApp(path=src)
+        async with app.run_test(size=(140, 45)) as pilot:
+            editor = app.screen
+            editor.selected = ("line", "gl")
+            await pilot.press("greater_than_sign")
+            await pilot.pause()
+            from towerkit.tui.widgets.modals import SendLineModal
+
+            modal = app.screen
+            assert isinstance(modal, SendLineModal)
+            idx = next(
+                i for i, p in enumerate(modal.targets) if p.name == "dst.json"
+            )
+            modal.query_one("#send-targets").highlighted = idx
+            modal.query_one("#send-confirm").press()
+            await pilot.pause()
+            await pilot.pause()
+            assert any(
+                "validation errors" in n.message for n in app._notifications
+            )
+            assert isinstance(app.screen, EditorScreen)  # no confirm modal
+        assert dst.read_bytes() == bad
+
+    @pytest.mark.asyncio
+    async def test_requires_line_selection(self, sample_copy, monkeypatch) -> None:
+        monkeypatch.chdir(sample_copy.parent.parent)
+        app = TowerkitApp(path=sample_copy)
+        async with app.run_test(size=(140, 45)) as pilot:
+            editor = app.screen
+            editor.selected = ("program", None)
+            await pilot.press("greater_than_sign")
+            await pilot.pause()
+            assert isinstance(app.screen, EditorScreen)  # no modal
+            assert any("select a line" in n.message for n in app._notifications)

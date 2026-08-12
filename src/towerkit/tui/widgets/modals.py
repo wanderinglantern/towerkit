@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from textual.app import ComposeResult
-from textual.containers import Horizontal, VerticalScroll
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Button, Checkbox, Input, Label, OptionList
 from textual.widgets.option_list import Option
@@ -241,3 +241,55 @@ class ExitChoiceModal(ModalScreen[str]):
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         self.dismiss(event.button.id or "keep")
+
+
+class SendLineModal(ModalScreen[tuple[Path, bool] | None]):
+    """Pick a target program file and copy/move mode for a line transfer."""
+
+    BINDINGS = [("escape", "dismiss(None)", "Cancel")]
+
+    DEFAULT_CSS = """
+    SendLineModal { align: center middle; }
+    SendLineModal > Vertical {
+        width: 70; height: auto; max-height: 24; padding: 1 2;
+        background: $surface; border: thick $primary;
+    }
+    SendLineModal OptionList { height: auto; max-height: 12; }
+    SendLineModal Horizontal { height: auto; align-horizontal: right; }
+    SendLineModal Button { margin-left: 2; }
+    """
+
+    def __init__(self, line_name: str, targets: list[Path]) -> None:
+        super().__init__()
+        self.line_name = line_name
+        self.targets = targets
+
+    def compose(self) -> ComposeResult:
+        with Vertical():
+            yield Label(f"Send {self.line_name} to…")
+            yield OptionList(
+                *[str(p) for p in self.targets], id="send-targets"
+            )
+            yield Checkbox(
+                "Move (remove from this program)", value=False, id="send-move"
+            )
+            with Horizontal():
+                yield Button("Cancel", id="send-cancel")
+                yield Button("Send", variant="primary", id="send-confirm")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "send-confirm":
+            self._confirm()
+        else:
+            self.dismiss(None)
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        self._confirm()
+
+    def _confirm(self) -> None:
+        options = self.query_one("#send-targets", OptionList)
+        idx = options.highlighted
+        if idx is None:
+            return
+        move = self.query_one("#send-move", Checkbox).value
+        self.dismiss((self.targets[idx], move))
