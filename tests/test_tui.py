@@ -436,6 +436,55 @@ class TestLineIdLocked:
             assert id_field.disabled  # locked, not editable
 
 
+class TestPlaceholderNameCommit:
+    @pytest.mark.asyncio
+    async def test_blur_with_default_name_does_not_consume_id_generation(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        # Repro: add a line, let the name field blur with its untouched
+        # default ("New Line"), THEN type the real name. The id must come
+        # from the real name, never from the placeholder.
+        monkeypatch.chdir(tmp_path)
+        app = TowerkitApp(new=True)
+        async with app.run_test(size=(140, 45)) as pilot:
+            editor = app.screen
+            editor.selected = ("lines-group", None)
+            await editor.action_add_node()
+            await pilot.pause()
+            name = editor.query_one("#f-line-name")
+            editor._commit_input(name)  # blur/drain with the default value
+            await pilot.pause()
+            name.value = "Inland Marine"
+            editor._commit_input(name)
+            await pilot.pause()
+            _, line_id = editor.selected
+            assert line_id == "inland-marine"
+            assert editor._line(line_id).name == "Inland Marine"
+
+    @pytest.mark.asyncio
+    async def test_layer_default_name_blur_keeps_id_generation(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        app = TowerkitApp(new=True)
+        async with app.run_test(size=(140, 45)) as pilot:
+            editor = app.screen
+            editor.selected = ("lines-group", None)
+            await editor.action_add_node()
+            await pilot.pause()
+            editor.selected = ("layers-group", None)
+            await editor.action_add_node()
+            await pilot.pause()
+            name = editor.query_one("#f-layer-name")
+            editor._commit_input(name)  # blur with default "New Layer"
+            await pilot.pause()
+            name.value = "Umbrella"
+            editor._commit_input(name)
+            await pilot.pause()
+            _, layer_id = editor.selected
+            assert layer_id == "umbrella"
+
+
 class TestLineReorder:
     @pytest.mark.asyncio
     async def test_shift_arrows_reorder_columns(self, sample_copy, monkeypatch) -> None:
@@ -634,3 +683,47 @@ class TestNodeDiagnosticsDrillThrough:
 
             texts = [str(w.render()) for w in editor.query(Label)]
             assert any("no retention recorded" in t for t in texts), texts
+
+
+class TestDirtyExitOffersSave:
+    async def test_escape_then_save_writes_and_exits(self, sample_copy) -> None:
+        app = TowerkitApp(path=sample_copy)
+        async with app.run_test(size=(140, 45)) as pilot:
+            editor = app.screen
+            assert isinstance(editor, EditorScreen)
+            editor.session.mutate(lambda p: setattr(p, "insured", "Exit Save Co"))
+            assert editor.session.dirty
+            await pilot.press("escape")
+            await pilot.pause()
+            await pilot.press("s")  # Save & exit
+            await pilot.pause()
+        assert '"insured": "Exit Save Co"' in sample_copy.read_text()
+
+    async def test_escape_then_discard_leaves_file_untouched(self, sample_copy) -> None:
+        before = sample_copy.read_bytes()
+        app = TowerkitApp(path=sample_copy)
+        async with app.run_test(size=(140, 45)) as pilot:
+            editor = app.screen
+            editor.session.mutate(lambda p: setattr(p, "insured", "Nope Co"))
+            await pilot.press("escape")
+            await pilot.pause()
+            await pilot.press("d")  # Discard and exit
+            await pilot.pause()
+        assert sample_copy.read_bytes() == before
+
+    async def test_escape_save_with_errors_stays_in_editor(self, sample_copy) -> None:
+        before = sample_copy.read_bytes()
+        app = TowerkitApp(path=sample_copy)
+        async with app.run_test(size=(140, 45)) as pilot:
+            editor = app.screen
+            # force a guaranteed validation error: duplicate layer ids
+            editor.session.mutate(
+                lambda p: setattr(p.layers[1], "id", p.layers[0].id)
+            )
+            assert editor.session.diagnostics().errors
+            await pilot.press("escape")
+            await pilot.pause()
+            await pilot.press("s")
+            await pilot.pause()
+            assert isinstance(app.screen, EditorScreen)  # refused the exit
+        assert sample_copy.read_bytes() == before

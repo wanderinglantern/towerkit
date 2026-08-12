@@ -207,3 +207,36 @@ class HelpModal(ModalScreen[None]):
     def compose(self) -> ComposeResult:
         with VerticalScroll():
             yield Label(self.help_text)
+
+
+class ExitChoiceModal(ModalScreen[str]):
+    """Dirty-exit choice: save and leave, discard, or keep editing.
+    Dismisses with 'save' | 'discard' | 'keep'."""
+
+    BINDINGS = [
+        ("s", "dismiss('save')", "Save & exit"),
+        ("d", "dismiss('discard')", "Discard"),
+        ("escape", "dismiss('keep')", "Keep editing"),
+    ]
+
+    DEFAULT_CSS = """
+    ExitChoiceModal { align: center middle; }
+    ExitChoiceModal > VerticalScroll {
+        width: 64; max-height: 80%; padding: 1 2;
+        border: thick $primary; background: $surface;
+    }
+    ExitChoiceModal Horizontal { height: auto; align-horizontal: right; }
+    ExitChoiceModal Button { margin-left: 2; }
+    """
+
+    def compose(self) -> ComposeResult:
+        with VerticalScroll():
+            yield Label("Unsaved changes.")
+            yield Label("[dim]s save & exit · d discard · esc keep editing[/dim]")
+            with Horizontal():
+                yield Button("Keep editing", id="keep")
+                yield Button("Discard", id="discard", variant="warning")
+                yield Button("Save & exit", id="save", variant="primary")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss(event.button.id or "keep")

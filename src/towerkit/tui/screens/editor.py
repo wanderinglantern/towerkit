@@ -68,6 +68,7 @@ from ..widgets.inputs import (
 )
 from ..widgets.modals import (
     ConfirmModal,
+    ExitChoiceModal,
     HelpModal,
     PromptModal,
     RenderOptions,
@@ -626,7 +627,7 @@ class EditorScreen(Screen):
         if line is None:
             return
         value = widget.value.strip()
-        if widget.id == "f-line-name" and value:
+        if widget.id == "f-line-name" and value and value != line.name:
             if PLACEHOLDER_ID.match(line.id):
                 # auto-generate the id from the name, cascading references
                 old, new_id = line.id, self.session.unique_id(slugify(value))
@@ -659,7 +660,7 @@ class EditorScreen(Screen):
         wid = widget.id
         if wid == "f-layer-name":
             value = widget.value.strip()
-            if value:
+            if value and value != layer.name:
                 def rename(p: Program) -> None:
                     layer.name = value
                     if PLACEHOLDER_ID.match(layer.id):
@@ -1199,17 +1200,36 @@ class EditorScreen(Screen):
         self.app.push_screen(HelpModal(EDITOR_HELP))
 
     def action_back(self) -> None:
-        if self.session.dirty:
-            def on_confirm(leave: bool | None) -> None:
-                if leave:
-                    self.dismiss_editor()
-
-            self.app.push_screen(
-                ConfirmModal("Unsaved changes. Leave without saving?", yes_label="Leave"),
-                on_confirm,
-            )
-        else:
+        if not self.session.dirty:
             self.dismiss_editor()
+            return
+        self._drain_focused_input()
+
+        def on_choice(choice: str | None) -> None:
+            if choice == "discard":
+                self.dismiss_editor()
+                return
+            if choice != "save":
+                return  # keep editing
+            diags = self.session.diagnostics()
+            if diags.errors:
+                self.notify(
+                    f"{len(diags.errors)} validation error"
+                    f"{'s' if len(diags.errors) > 1 else ''} — fix them "
+                    "(or choose Discard); nothing was lost",
+                    severity="error",
+                )
+                return  # stay in the editor with the changes intact
+            if self.session.path is None:
+                self.notify(
+                    "no file name yet — ctrl+s saves-as first", severity="warning"
+                )
+                return
+            self.session.save()
+            self.notify(f"saved {self.session.path}")
+            self.dismiss_editor()
+
+        self.app.push_screen(ExitChoiceModal(), on_choice)
 
     def dismiss_editor(self) -> None:
         if len(self.app.screen_stack) > 2:
