@@ -144,13 +144,27 @@ class TestContent:
 
 
 # Refactor guard: extracting the generic table writer (render/table_xlsx.py)
-# must not change SOI bytes. Regenerate this hash ONLY on a deliberate style
-# change or an openpyxl version bump — never to make a refactor pass.
-GOLDEN_SHA = "f7c016f3628ed8e5b61230d61517190a8f9cc89abebe92678cac54e79c618450"
+# must not change SOI output. docProps/core.xml embeds provenance() — the
+# CURRENT git sha and dirty marker — so RAW file bytes change with every
+# commit; the guard therefore hashes every zip entry EXCEPT core.xml.
+# Regenerate GOLDEN_SHA only on a deliberate style/content change or an
+# openpyxl bump — never to make a refactor pass.
+GOLDEN_SHA = "73c2af260f264203983ec583865674fa06fb18a929fd84b6380fed8ebb8d95ad"
 
 
-def test_refactor_golden_bytes(program, theme, tmp_path):
+def _content_hash(xlsx_path: Path) -> str:
     import hashlib
 
+    digest = hashlib.sha256()
+    with zipfile.ZipFile(xlsx_path) as z:
+        for name in sorted(z.namelist()):
+            if name == "docProps/core.xml":
+                continue
+            digest.update(name.encode())
+            digest.update(z.read(name))
+    return digest.hexdigest()
+
+
+def test_refactor_golden_content(program, theme, tmp_path):
     path = _write(program, theme, tmp_path / "golden.xlsx")
-    assert hashlib.sha256(path.read_bytes()).hexdigest() == GOLDEN_SHA
+    assert _content_hash(path) == GOLDEN_SHA
