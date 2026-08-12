@@ -201,11 +201,13 @@ relitigated here.
   while the CLI's `towerctl soi` still defaults to CWD — the TUI already
   treats `dist/` as its working output directory; no reason to special-case
   SOI.
-- **Filename keys on insured via `default_filename`**, same as the CLI —
-  renewal years of the same insured share one filename since the year lives
-  in the sheet title, not the path. Known clobber (a later export overwrites
-  an earlier renewal year's file); accepted for now, revisit if multi-year
-  exports become a workflow.
+- **Filename keys on insured + period years via `default_filename`**, same
+  as the CLI. Originally shipped insured-only with the year in the sheet
+  title; revisited same day because renewal-year exports clobbered each
+  other (`atomic-2025` and `atomic-2026` wrote the same file). Now
+  `<Insured> - Schedule of Insurance YY-YY.xlsx`, matching the sheet
+  title's year convention. Changes CLI default output names too — chosen
+  deliberately.
 - **Write errors notify instead of crashing** (this fix wave): both
   `action_render` and `action_export_soi` wrap only their write call
   (`render_program` / `write_soi`) in a try/except and notify

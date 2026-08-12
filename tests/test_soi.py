@@ -230,9 +230,11 @@ class TestNaming:
         assert "[" not in sheet_title(p) and ":" not in sheet_title(p)
 
     def test_default_filename(self) -> None:
+        # period years in the filename: renewal-year exports must not
+        # clobber each other (26-27 vs 27-28 are distinct files)
         assert (
             default_filename(make_program())
-            == "Atomic Industries, LLC - Schedule of Insurance.xlsx"
+            == "Atomic Industries, LLC - Schedule of Insurance 26-27.xlsx"
         )
 
     def test_default_filename_replaces_path_hostile_chars(self) -> None:

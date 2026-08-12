@@ -174,4 +174,8 @@ def sheet_title(program: Program) -> str:
 
 
 def default_filename(program: Program) -> str:
-    return f"{_PATH_HOSTILE.sub('-', program.insured)} - Schedule of Insurance.xlsx"
+    years = f"{program.period.start.year % 100:02d}-{program.period.end.year % 100:02d}"
+    return (
+        f"{_PATH_HOSTILE.sub('-', program.insured)}"
+        f" - Schedule of Insurance {years}.xlsx"
+    )
