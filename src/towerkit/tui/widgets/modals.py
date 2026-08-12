@@ -117,18 +117,19 @@ class RenderOptionsModal(ModalScreen[RenderOptions | None]):
         self.show_premiums = show_premiums
         self.cell_premiums = cell_premiums
         self.cell_dates = cell_dates
-        self.themes_dir = themes_dir or Path("themes")
+        self.themes_dir = themes_dir
 
     def compose(self) -> ComposeResult:
+        from ...theme import available_themes
+
         options = [Option(self._label(None, "default (built-in)"), id="")]
-        if self.themes_dir.is_dir():
-            for path in sorted(self.themes_dir.glob("*.json")):
-                name = path.stem
-                try:
-                    name = json.loads(path.read_text(encoding="utf-8")).get("name", name)
-                except (OSError, json.JSONDecodeError):
-                    pass
-                options.append(Option(self._label(path, f"{name} — {path}"), id=str(path)))
+        for path in available_themes(self.themes_dir):
+            name = path.stem
+            try:
+                name = json.loads(path.read_text(encoding="utf-8")).get("name", name)
+            except (OSError, json.JSONDecodeError):
+                pass
+            options.append(Option(self._label(path, f"{name} — {path}"), id=str(path)))
         with VerticalScroll():
             yield Label("Theme (preview and renders):")
             yield OptionList(*options, id="themes")

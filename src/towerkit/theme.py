@@ -145,3 +145,25 @@ def load_theme(path: Path | str | None = None) -> Theme:
     else:
         text = Path(path).read_text(encoding="utf-8")
     return _theme_from_jsonable(json.loads(text))
+
+
+def available_themes(extra_dir: Path | None = None) -> list[Path]:
+    """Every theme file reachable RIGHT NOW: ./themes (user's, wins on name
+    clash), an optional extra directory, then the packaged set — so the
+    picker finds marsh.json no matter which directory launched towerctl
+    (e.g. the jump from bookkit)."""
+    candidates: list[Path] = [Path("themes")]
+    if extra_dir is not None:
+        candidates.append(extra_dir)
+    packaged = Path(str(resources.files("towerkit").joinpath("themes")))
+    candidates.append(packaged)
+    seen: dict[str, Path] = {}
+    for directory in candidates:
+        if not directory.is_dir():
+            continue
+        for path in sorted(directory.glob("*.json")):
+            # paths stay as found: ./themes entries remain RELATIVE, keeping
+            # the stored render.theme portable between machines (the existing
+            # program-file contract); packaged entries are absolute by nature
+            seen.setdefault(path.stem, path)
+    return list(seen.values())

@@ -228,3 +228,23 @@ class TestLayerNameReliability:
             program, theme, tmp_path, "t", ["svg"], cell_premiums=True, cell_dates=True
         )[0]
         assert "Umbrella Excess" in out.read_text()
+
+
+def test_available_themes_includes_packaged_from_any_cwd(tmp_path, monkeypatch) -> None:
+    from towerkit.theme import available_themes
+
+    monkeypatch.chdir(tmp_path)  # no ./themes here — like the jump from bookkit
+    stems = {path.stem for path in available_themes()}
+    assert "marsh" in stems and "default" in stems
+
+
+def test_available_themes_cwd_overrides_packaged(tmp_path, monkeypatch) -> None:
+    from towerkit.theme import available_themes
+
+    themes = tmp_path / "themes"
+    themes.mkdir()
+    (themes / "marsh.json").write_text('{"name": "local marsh"}')
+    monkeypatch.chdir(tmp_path)
+    marsh = next(path for path in available_themes() if path.stem == "marsh")
+    # relative on purpose — stored render.theme paths stay portable
+    assert marsh == Path("themes") / "marsh.json"
