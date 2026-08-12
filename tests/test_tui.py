@@ -954,6 +954,7 @@ class TestSendLine:
             from towerkit.tui.widgets.modals import SendLineModal
 
             modal = app.screen
+            assert isinstance(modal, SendLineModal)
             idx = next(
                 i for i, p in enumerate(modal.targets) if p.name == "dst.json"
             )
@@ -984,6 +985,7 @@ class TestSendLine:
             from towerkit.tui.widgets.modals import SendLineModal
 
             modal = app.screen
+            assert isinstance(modal, SendLineModal)
             idx = next(
                 i for i, p in enumerate(modal.targets) if p.name == "dst.json"
             )
