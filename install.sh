@@ -20,7 +20,7 @@ cd "$(dirname "$0")"
 
 WHEELHOUSE_URL="https://github.com/wanderinglantern/towerkit/releases/download/v0.1.0/towerkit-wheelhouse-macos.zip"
 PY="${PYTHON:-python3}"
-WHEELHOUSE_SHA256="6b665030ed828d14c9cfa3bee0cdb3defaf1b423ae36842687f4b5eb4fae6bde"
+WHEELHOUSE_SHA256="5d17d09750eb4c12202c0e8953342178d62461dadf07ef0d013e6ad50ae76c4b"
 
 version=$("$PY" -c 'import sys; print("%d.%d" % sys.version_info[:2])')
 
