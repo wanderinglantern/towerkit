@@ -24,6 +24,12 @@ case "$version" in
            "(set PYTHON=/path/to/python3.12 to override)" ;;
 esac
 
+# refresh when a required wheel is missing — new deps land in the wheelhouse
+if [ -d wheelhouse ] && ! ls wheelhouse/textual_autocomplete-*.whl >/dev/null 2>&1; then
+    echo "→ wheelhouse is stale (missing textual-autocomplete) — refreshing …"
+    rm -rf wheelhouse
+fi
+
 if [ ! -d wheelhouse ]; then
     echo "→ downloading wheelhouse (~160MB, one time) …"
     curl -fSL --progress-bar -o wheelhouse.zip "$WHEELHOUSE_URL"

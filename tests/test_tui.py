@@ -815,3 +815,27 @@ class TestSoiExport:
 
             out = Path("dist") / default_filename(editor.session.program)
         assert not out.exists()
+
+
+class TestAutocomplete:
+    @pytest.mark.asyncio
+    async def test_dropdowns_mount_for_known_records(self, sample_copy, monkeypatch) -> None:
+        from textual_autocomplete import AutoComplete
+
+        monkeypatch.chdir(sample_copy.parent.parent)
+        app = TowerkitApp(path=sample_copy)
+        async with app.run_test(size=(140, 45)) as pilot:
+            editor = app.screen
+            # program form: insured completes from programs on disk
+            editor.selected = ("program", None)
+            await editor._rebuild_detail()
+            await pilot.pause()
+            assert editor.query(AutoComplete)
+            # layer form: one dropdown per participant carrier input
+            editor.selected = ("layer", "umbrella")
+            await editor._rebuild_detail()
+            await pilot.pause()
+            carriers = [
+                w for w in editor.query(AutoComplete)
+            ]
+            assert carriers  # carrier inputs carry dropdown completion too

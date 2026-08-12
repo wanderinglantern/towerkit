@@ -128,3 +128,35 @@ def known_carriers(programs_dir: Path, themes_dir: Path, extra: list[str]) -> li
     for carrier in extra:
         seen.setdefault(carrier, None)
     return list(seen)
+
+
+def known_insureds(programs_dir: Path, extra: list[str]) -> list[str]:
+    """Insured names across every program on disk — one client, one spelling."""
+    seen: dict[str, None] = {}
+    for program_path in sorted(programs_dir.glob("*.json")) if programs_dir.is_dir() else []:
+        try:
+            data = json.loads(program_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(data, dict) and data.get("insured"):
+            seen.setdefault(str(data["insured"]), None)
+    for name in extra:
+        seen.setdefault(name, None)
+    return list(seen)
+
+
+def known_line_names(programs_dir: Path, extra: list[str]) -> list[str]:
+    """Coverage line names across every program on disk plus the current
+    program's own — 'General Liability' never fragments into 'Gen Liab'."""
+    seen: dict[str, None] = {}
+    for program_path in sorted(programs_dir.glob("*.json")) if programs_dir.is_dir() else []:
+        try:
+            data = json.loads(program_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        for line in data.get("lines", []) if isinstance(data, dict) else []:
+            if isinstance(line, dict) and line.get("name"):
+                seen.setdefault(str(line["name"]), None)
+    for name in extra:
+        seen.setdefault(name, None)
+    return list(seen)

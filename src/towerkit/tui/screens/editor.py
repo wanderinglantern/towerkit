@@ -64,6 +64,8 @@ from ..widgets.inputs import (
     MoneyInput,
     ShareValidator,
     known_carriers,
+    known_insureds,
+    known_line_names,
     parse_share_pct,
 )
 from ..widgets.modals import (
@@ -176,6 +178,7 @@ class EditorScreen(Screen):
         self._carriers = known_carriers(
             Path("programs"), Path("themes"), session.program.carriers()
         )
+        self._insureds = known_insureds(Path("programs"), [session.program.insured])
 
     # -- layout ---------------------------------------------------------------
 
@@ -345,6 +348,31 @@ class EditorScreen(Screen):
         }
         builder = builders.get(kind, self._form_hint)
         await detail.mount_all(builder(key))
+        await self._mount_autocompletes(detail, kind)
+
+    async def _mount_autocompletes(self, detail: VerticalScroll, kind: str) -> None:
+        """Dropdown completion from existing records (data consistency):
+        insureds, line names, and carriers complete to known spellings.
+        Mounted inside #detail, so the next rebuild sweeps them away."""
+        from textual_autocomplete import AutoComplete
+
+        mounts: list[tuple[str, list[str]]] = []
+        if kind == "program":
+            mounts.append(("f-insured", self._insureds))
+        elif kind == "line":
+            names = known_line_names(
+                Path("programs"), [ln.name for ln in self.session.program.lines]
+            )
+            mounts.append(("f-line-name", names))
+        elif kind == "layer":
+            for widget in detail.query(Input):
+                if widget.id and widget.id.startswith("p-carrier-"):
+                    mounts.append((widget.id, self._carriers))
+        for input_id, candidates in mounts:
+            if candidates:
+                await detail.mount(
+                    AutoComplete(f"#{input_id}", candidates=list(candidates))
+                )
 
     def _form_hint(self, _key: Any) -> list:
         return [
