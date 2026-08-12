@@ -1188,12 +1188,17 @@ class TestBrowserImport:
             app.screen.query_one("#paste-confirm").press()
             await pilot.pause()
             assert isinstance(app.screen, ProgramBrowser)
+            assert not any(n.severity == "error" for n in app._notifications)
         assert not list((tmp_path / "programs").glob("*.json"))
 
     @pytest.mark.asyncio
-    async def test_p_import_failure_notifies_and_writes_nothing(
+    async def test_p_unparseable_schedule_notifies_and_writes_nothing(
         self, tmp_path, monkeypatch
     ) -> None:
+        # this exercises _finish_import's ProgramInvalidError path (a
+        # diagnostics-only draft); parse_tower never raises, so
+        # action_paste_import's except-Exception wrapper is defensive
+        # only, untested here.
         monkeypatch.chdir(tmp_path)
         (tmp_path / "programs").mkdir()
         app = TowerkitApp()
