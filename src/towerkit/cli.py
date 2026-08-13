@@ -91,6 +91,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "--no-premiums", action="store_true",
         help="omit the Premium column and section roll-ups",
     )
+    p_soi.add_argument(
+        "--schematic", action="store_true",
+        help="include the tower schematic as a second worksheet",
+    )
     p_soi.set_defaults(handler=_cmd_soi)
 
     p_edit = sub.add_parser("edit", help="edit a program in the TUI")
@@ -200,8 +204,8 @@ def _cmd_compare(args: argparse.Namespace) -> int:
 
 
 def _cmd_soi(args: argparse.Namespace) -> int:
-    from .render.soi_xlsx import write_soi
-    from .soi import build_soi, default_filename, sheet_title
+    from .render.soi_xlsx import write_soi_workbook
+    from .soi import default_filename
     from .theme import load_theme
     from .validate import ProgramInvalidError
 
@@ -214,12 +218,12 @@ def _cmd_soi(args: argparse.Namespace) -> int:
     theme_path = args.theme or (Path(stored.theme) if stored and stored.theme else None)
     theme = load_theme(theme_path)
     out_path = args.out or Path(default_filename(program))
-    written = write_soi(
-        build_soi(program),
-        title=sheet_title(program),
+    written = write_soi_workbook(
+        program,
         theme=theme,
         out_path=out_path,
         show_premiums=not args.no_premiums and (stored.show_premiums if stored else True),
+        include_schematic=args.schematic or bool(stored and stored.soi_schematic),
     )
     print(written)
     _maybe_open([written])

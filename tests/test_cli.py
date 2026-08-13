@@ -158,3 +158,33 @@ class TestParser:
         except SystemExit as exc:
             assert exc.code == 0
         assert "towerctl" in capsys.readouterr().out
+
+
+def test_soi_schematic_flag_adds_second_sheet(tmp_path) -> None:
+    from openpyxl import load_workbook
+
+    out = tmp_path / "soi.xlsx"
+    assert main(["soi", str(OLD), "-o", str(out), "--schematic"]) == 0
+    assert len(load_workbook(out).sheetnames) == 2
+
+
+def test_soi_without_flag_stays_single_sheet(tmp_path) -> None:
+    from openpyxl import load_workbook
+
+    out = tmp_path / "soi.xlsx"
+    assert main(["soi", str(OLD), "-o", str(out)]) == 0
+    assert len(load_workbook(out).sheetnames) == 1
+
+
+def test_soi_honors_stored_render_setting(tmp_path) -> None:
+    import json
+
+    from openpyxl import load_workbook
+
+    data = json.loads(OLD.read_text())
+    data.setdefault("render", {})["soiSchematic"] = True
+    sample = tmp_path / "stored.json"
+    sample.write_text(json.dumps(data))
+    out = tmp_path / "soi.xlsx"
+    assert main(["soi", str(sample), "-o", str(out)]) == 0
+    assert len(load_workbook(out).sheetnames) == 2
