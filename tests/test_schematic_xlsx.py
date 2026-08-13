@@ -14,6 +14,8 @@ from towerkit.layout import build_layout
 from towerkit.model import Layer, Line, Participant, Period, Placement, Program
 from towerkit.render.labels import participant_label
 from towerkit.render.schematic_xlsx import (
+    AXIS_WIDTH,
+    CANVAS_WIDTH_UNITS,
     FIRST_GRID_COL,  # noqa: F401 -- import-existence is part of the interface contract
     FIRST_GRID_ROW,
     GROUP_ROW,
@@ -236,18 +238,50 @@ class TestSchematicSheet:
         b = _write_schematic(program, marsh, tmp_path / "b.xlsx")
         assert a.read_bytes() == b.read_bytes()
 
+    def test_canvas_fills_the_full_working_width(self, program, marsh, tmp_path):
+        """Grant's Excel review (2026-08-13): the tower occupied roughly
+        columns A-R and looked cramped. The sheet's total width — the fixed
+        axis column plus every proportional tower column — must now fill
+        CANVAS_WIDTH_UNITS (~columns A-AM at Excel's default width), not
+        whatever a fixed per-unit rate happens to add up to."""
+        path = _write_schematic(program, marsh, tmp_path / "s.xlsx")
+        ws = load_workbook(path)["Casualty Schematic"]
+        layout, _, col_of = _grid(program)
+        xs = x_boundaries(layout)
+        tower_total = sum(
+            ws.column_dimensions[get_column_letter(col_of[x_lo])].width
+            for x_lo in xs[:-1]
+        )
+        total = AXIS_WIDTH + tower_total
+        assert abs(total - CANVAS_WIDTH_UNITS) < 1.0
+
 
 # Task 9: visual parity polish (Grant's Excel review) — theme colours, header
 # wrap, narrow-merge fitting, the row floor, and the group-band border fix.
 
 
+def _filler_lines(n: int) -> list[Line]:
+    """Undrawn sibling columns (no layer touches them) that only exist to
+    inflate a fixture's total tower span. Task 10 widened the canvas to
+    fill CANVAS_WIDTH_UNITS regardless of line count (Grant's review
+    2026-08-13), so a single-column fixture no longer renders narrow — it
+    gets the WHOLE canvas to itself. These fillers put the column under
+    test back in the many-lines-sharing-one-canvas position a real cramped
+    tower is actually in, without adding anything for the test to read."""
+    return [Line(id=f"filler{i}", name=f"Filler {i}") for i in range(n)]
+
+
 def _long_header_program() -> Program:
-    """A single narrow column whose line name cannot fit one wrapped line at
-    the column's width — line headers must never clip (requirement 2)."""
+    """A narrow column whose line name cannot fit one wrapped line at the
+    column's width — line headers must never clip (requirement 2). Ten
+    filler siblings (see `_filler_lines`) keep this column's share of the
+    canvas narrow post-Task-10; without them the lone column would claim
+    the full ~290-unit canvas and never need to wrap."""
     return Program(
         insured="T", program="T", placement=Placement.BOUND,
         period=Period(start=date(2026, 1, 1), end=date(2027, 1, 1)),
-        lines=[Line(id="x", name="Excess Casualty Following Form Umbrella")],
+        lines=[Line(id="x", name="Excess Casualty Following Form Umbrella"),
+               *_filler_lines(10)],
         layers=[
             Layer(id="p", name="Primary", applies_to=["x"], attach=0, limit=1_000_000,
                   participants=[Participant(carrier="A", share_bps=10_000)]),
@@ -257,12 +291,14 @@ def _long_header_program() -> Program:
 
 def _narrow_split_program() -> Program:
     """Grant's Property tower case: a 3-way ~33.33% split on one line column
-    (10 Excel width units / 3 ≈ 3.33 units per sub-merge — below the
-    threshold for a 2- or 3-line label, requirement 3)."""
+    among many (below the threshold for a 2- or 3-line label, requirement
+    3). Nineteen filler siblings (see `_filler_lines`) keep the Property
+    column's share of the canvas narrow post-Task-10 — same technique and
+    same reason as `_long_header_program`."""
     return Program(
         insured="T", program="Property", placement=Placement.BOUND,
         period=Period(start=date(2026, 1, 1), end=date(2027, 1, 1)),
-        lines=[Line(id="prop", name="Property")],
+        lines=[Line(id="prop", name="Property"), *_filler_lines(19)],
         layers=[
             Layer(id="p", name="Primary", applies_to=["prop"], attach=0,
                   limit=9_000_000, premium=90_000,

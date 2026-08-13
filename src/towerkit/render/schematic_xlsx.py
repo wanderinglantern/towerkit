@@ -56,9 +56,17 @@ from .table_xlsx import _argb, sanitize_sheet_title
 
 TOTAL_ROWS = 100         # quantization target across the full y-span
 GRID_ROW_HEIGHT = 4.0    # uniform thin rows: ~100 × 4pt ≈ one screen of tower
-X_CHARS_PER_UNIT = 10.0  # a 1.0-wide line column ≈ 10 Excel character units
 AXIS_COL = 1             # column A: attachment boundaries as money labels
 AXIS_WIDTH = 10.0
+
+# Total tower width in Excel column-width units; ~columns A-AM at default
+# width, per Grant's review 2026-08-13 ("the tower currently occupies
+# roughly columns A-R and looks cramped ... use the full working width").
+# Every render fills to this SAME total, regardless of how many line
+# columns it has: AXIS_WIDTH stays fixed, and the tower's columns are
+# scaled by whatever per-unit rate makes their sum fill the remainder —
+# same relative proportions as a fixed rate would give, just wider.
+CANVAS_WIDTH_UNITS = 300.0
 FIRST_GRID_COL = 2
 TITLE_ROW, GROUP_ROW, LINE_ROW = 1, 2, 3
 FIRST_GRID_ROW = 4
@@ -68,10 +76,10 @@ ROW_FLOOR = 2  # every labeled layer/retention row band gets at least this many
 
 # Below this many Excel width units per text LINE, Excel's wrap_text has no
 # good place to break a word and degenerates toward one-character-per-line
-# (Grant's Excel review). Derivation: X_CHARS_PER_UNIT already treats 1
-# Excel width unit ~= 1 character of the sheet's font, so 2.5 units is
-# "enough room for a short word or a percentage" per wrapped line — below
-# that, shrink_to_fit with a shorter label reads better than a wrap attempt.
+# (Grant's Excel review). Derivation: 1 Excel width unit is treated as ~= 1
+# character of the sheet's font, so 2.5 units is "enough room for a short
+# word or a percentage" per wrapped line — below that, shrink_to_fit with a
+# shorter label reads better than a wrap attempt.
 NARROW_MERGE_UNITS_PER_LINE = 2.5
 
 # LINE_ROW header text-line height estimate for the bold 9pt font used
@@ -209,15 +217,21 @@ def add_schematic_sheet(
     col_of = {x: FIRST_GRID_COL + i for i, x in enumerate(xs)}
     last_col = FIRST_GRID_COL + len(xs) - 2
 
+    # Fill CANVAS_WIDTH_UNITS regardless of how wide the tower's own layout
+    # units happen to span: AXIS_WIDTH is fixed, the tower's columns share
+    # what's left, at whatever per-unit rate makes their sum hit the target.
+    tower_span = xs[-1] - xs[0]
+    chars_per_unit = (CANVAS_WIDTH_UNITS - AXIS_WIDTH) / tower_span
+
     ws.column_dimensions[get_column_letter(AXIS_COL)].width = AXIS_WIDTH
     for x_lo, x_hi in zip(xs, xs[1:], strict=False):
         letter = get_column_letter(col_of[x_lo])
-        ws.column_dimensions[letter].width = (x_hi - x_lo) * X_CHARS_PER_UNIT
+        ws.column_dimensions[letter].width = (x_hi - x_lo) * chars_per_unit
     for r in range(FIRST_GRID_ROW, FIRST_GRID_ROW + top):
         ws.row_dimensions[r].height = GRID_ROW_HEIGHT
 
     _title(ws, program, chrome, last_col=last_col)
-    _headers(ws, layout, chrome, col_of)
+    _headers(ws, layout, chrome, col_of, chars_per_unit)
     _axis(ws, layout, rows, chrome)
 
     pending = {ly.layer_id for ly in layout.layers if ly.signed_bps == 0}
@@ -263,7 +277,7 @@ def add_schematic_sheet(
         anchor_rect = max(block.rects, key=lambda r: r.width, default=None)
         if block.carrier is not None and anchor_rect is not None:
             anchor_text, shrink = _fit_label(
-                lines, anchor_rect.width * X_CHARS_PER_UNIT, block.carrier, block.share_bps
+                lines, anchor_rect.width * chars_per_unit, block.carrier, block.share_bps
             )
         else:
             anchor_text, shrink = "\n".join(lines), False
@@ -376,7 +390,11 @@ def _title(ws: Worksheet, program: Program, chrome: Chrome, *, last_col: int) ->
 
 
 def _headers(
-    ws: Worksheet, layout: TowerLayout, chrome: Chrome, col_of: dict[float, int]
+    ws: Worksheet,
+    layout: TowerLayout,
+    chrome: Chrome,
+    col_of: dict[float, int],
+    chars_per_unit: float,
 ) -> None:
     """Group bands above, line names under them (the spec's header order —
     the graphic puts both below the tower, a chart-only convention).
@@ -407,7 +425,7 @@ def _headers(
         cell = ws.cell(row=LINE_ROW, column=c0, value=column.name)
         cell.font = Font(name=chrome.font, size=9, bold=True, color=_argb(chrome.ink))
         cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-        width = (column.ex1 - column.ex0) * X_CHARS_PER_UNIT
+        width = (column.ex1 - column.ex0) * chars_per_unit
         if len(column.name) > width:  # never fits on one wrapped line: grow the row
             wraps = True
     if wraps:
