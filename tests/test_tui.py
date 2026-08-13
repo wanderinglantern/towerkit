@@ -812,7 +812,7 @@ class TestSoiExport:
         def raiser(*args, **kwargs):
             raise PermissionError("locked")
 
-        monkeypatch.setattr("towerkit.render.soi_xlsx.write_soi", raiser)
+        monkeypatch.setattr("towerkit.render.soi_xlsx.write_soi_workbook", raiser)
         app = TowerkitApp(path=sample_copy)
         async with app.run_test(size=(140, 45)) as pilot:
             editor = app.screen
@@ -1311,3 +1311,37 @@ class TestBrowserImport:
                 "import failed" in n.message for n in app._notifications
             )
         assert not list((tmp_path / "programs").glob("*.json"))
+
+
+class TestSchematicToggle:
+    @pytest.mark.asyncio
+    async def test_toggle_persists_and_export_honors_it(
+        self, sample_copy, monkeypatch
+    ) -> None:
+        from openpyxl import load_workbook
+
+        monkeypatch.chdir(sample_copy.parent.parent)
+        app = TowerkitApp(path=sample_copy)
+        async with app.run_test(size=(140, 45)) as pilot:
+            editor = app.screen
+            await pilot.press("t")
+            await pilot.pause()
+            modal = app.screen
+            modal.query_one("#opt-soi-schematic").value = True
+            modal.query_one("#apply").press()
+            await pilot.pause()
+            stored = editor.session.program.render
+            assert stored is not None and stored.soi_schematic is True
+            assert app.soi_schematic is True
+            editor.session.save()
+            await pilot.press("x")  # export honors the toggle
+            await pilot.pause()
+            from towerkit.soi import default_filename
+
+            out = Path("dist") / default_filename(editor.session.program)
+            assert out.exists()
+            assert len(load_workbook(out).sheetnames) == 2
+        # a fresh session reopens with the toggle set
+        app2 = TowerkitApp(path=sample_copy)
+        async with app2.run_test(size=(140, 45)):
+            assert app2.soi_schematic is True
