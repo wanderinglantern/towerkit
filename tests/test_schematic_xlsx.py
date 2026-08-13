@@ -10,19 +10,24 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.utils import get_column_letter
 from test_soi import make_program
 
+from towerkit import __version__
 from towerkit.layout import build_layout
-from towerkit.model import Layer, Line, Participant, Period, Placement, Program
+from towerkit.model import Layer, Line, Participant, Period, Placement, Program, Retention
 from towerkit.render.labels import participant_label
 from towerkit.render.schematic_xlsx import (
+    AXIS_COL,
     AXIS_WIDTH,
     CANVAS_WIDTH_UNITS,
-    FIRST_GRID_COL,  # noqa: F401 -- import-existence is part of the interface contract
+    FIRST_GRID_COL,
     FIRST_GRID_ROW,
     GROUP_ROW,
     HEADER_TWO_LINE_HEIGHT,
     LINE_ROW,
+    SPACER_UNITS,
     _label_spans,
     add_schematic_sheet,
+    label_row_floor,
+    line_column_slots,
     quantize_boundaries,
     sheet_rows,
     x_boundaries,
@@ -107,11 +112,22 @@ def _write_schematic(program, theme, path: Path) -> Path:
 
 
 def _grid(program):
+    """Reuses the SAME production pure functions `add_schematic_sheet`
+    calls (`_label_spans`, `quantize_boundaries`, `x_boundaries`,
+    `line_column_slots`) rather than reimplementing the column mapping —
+    Task 11 injects a schematic-only spacer column at every joined line-of-
+    cover boundary (see `line_column_slots`'s docstring), so a naive
+    `enumerate(xs)` mapping here would silently diverge from what's
+    actually on the sheet. Returns (layout, rows, col_of, col_of_close):
+    `col_of[x]` is right for an OPENING edge (rect.x0), `col_of_close[x]`
+    for a CLOSING edge (rect.x1: c1 = col_of_close[x] - 1) — see
+    `line_column_slots`."""
     layout = build_layout(program)
-    rows = quantize_boundaries(y_boundaries(layout), label_spans=_label_spans(layout))
+    label_spans = _label_spans(layout, program)
+    rows = quantize_boundaries(y_boundaries(layout), label_spans=label_spans)
     xs = x_boundaries(layout)
-    col_of = {x: FIRST_GRID_COL + i for i, x in enumerate(xs)}
-    return layout, rows, col_of
+    col_of, col_of_close = line_column_slots(layout, xs)
+    return layout, rows, col_of, col_of_close
 
 
 def _fill_hex(xlsx_path: Path, sheet_xml: str, cell_ref: str) -> str | None:
@@ -152,6 +168,27 @@ def _bottom_border_hex(xlsx_path: Path, sheet_xml: str, cell_ref: str) -> str | 
     return None
 
 
+def _border_hex(xlsx_path: Path, sheet_xml: str, cell_ref: str, side: str) -> str | None:
+    """ARGB colour of one cell's border SIDE ('left'/'right'/'top'/
+    'bottom'), read from the saved XML — same styles.xml-reading technique
+    as `_bottom_border_hex`, generalized: Task 11's axis lines (left/
+    bottom) and attachment gridlines (top) need every side, not just
+    bottom."""
+    with zipfile.ZipFile(xlsx_path) as z:
+        styles = ET.fromstring(z.read("xl/styles.xml"))
+        sheet = ET.fromstring(z.read(f"xl/worksheets/{sheet_xml}"))
+    borders = []
+    for border in styles.find(f"{_SML_NS}borders"):
+        edge = border.find(f"{_SML_NS}{side}")
+        colour = edge.find(f"{_SML_NS}color") if edge is not None else None
+        borders.append(colour.get("rgb") if colour is not None else None)
+    border_ids = [int(xf.get("borderId", "0")) for xf in styles.find(f"{_SML_NS}cellXfs")]
+    for cell in sheet.iter(f"{_SML_NS}c"):
+        if cell.get("r") == cell_ref:
+            return borders[border_ids[int(cell.get("s", "0"))]]
+    return None
+
+
 class TestSchematicSheet:
     def test_sheet_appended_and_named(self, program, marsh, tmp_path):
         wb = load_workbook(_write_schematic(program, marsh, tmp_path / "s.xlsx"))
@@ -172,14 +209,14 @@ class TestSchematicSheet:
     ):
         path = _write_schematic(program, marsh, tmp_path / "s.xlsx")
         ws = load_workbook(path)["Casualty Schematic"]
-        layout, rows, col_of = _grid(program)
+        layout, rows, col_of, col_of_close = _grid(program)
         zenith = next(
             b for b in layout.participants
             if b.carrier == "Zenith" and b.layer_id == "gl-primary"
         )
         rect = zenith.rects[0]
         r0, r1 = sheet_rows(rows, rect.y0, rect.y1)
-        c0, c1 = col_of[rect.x0], col_of[rect.x1] - 1
+        c0, c1 = col_of[rect.x0], col_of_close[rect.x1] - 1
         ref = f"{get_column_letter(c0)}{r0}:{get_column_letter(c1)}{r1}"
         assert ref in {str(r) for r in ws.merged_cells.ranges}
         anchor = ws[f"{get_column_letter(c0)}{r0}"]
@@ -191,7 +228,7 @@ class TestSchematicSheet:
 
     def test_merged_interior_cells_carry_the_fill(self, program, marsh, tmp_path):
         path = _write_schematic(program, marsh, tmp_path / "s.xlsx")
-        layout, rows, col_of = _grid(program)
+        layout, rows, col_of, _ = _grid(program)
         gamma_blk = next(b for b in layout.participants if b.carrier == "Gamma")
         rect = gamma_blk.rects[0]
         r0, _ = sheet_rows(rows, rect.y0, rect.y1)
@@ -200,7 +237,7 @@ class TestSchematicSheet:
         assert _fill_hex(path, "sheet2.xml", interior) == "FF82BAFF"  # Gamma = palette[3]
 
     def test_proportions_boundaries_and_stacking(self, program, marsh, tmp_path):
-        layout, rows, _ = _grid(program)
+        layout, rows, _, _ = _grid(program)
 
         def span(layer_id: str) -> tuple[int, int]:
             ly = next(lyr for lyr in layout.layers if lyr.layer_id == layer_id)
@@ -226,7 +263,7 @@ class TestSchematicSheet:
 
     def test_retention_fill_is_the_typed_theme_fill(self, program, marsh, tmp_path):
         path = _write_schematic(program, marsh, tmp_path / "s.xlsx")
-        layout, rows, col_of = _grid(program)
+        layout, rows, col_of, _ = _grid(program)
         sir = next(r for r in layout.retentions if r.type == "sir")
         rect = sir.rects[0]
         r0, _ = sheet_rows(rows, rect.y0, rect.y1)
@@ -241,25 +278,35 @@ class TestSchematicSheet:
     def test_canvas_fills_the_full_working_width(self, program, marsh, tmp_path):
         """Grant's Excel review (2026-08-13): the tower occupied roughly
         columns A-R and looked cramped. The sheet's total width — the fixed
-        axis column plus every proportional tower column — must now fill
-        the full working width, not whatever a fixed per-unit rate happens
-        to add up to."""
+        axis column plus every proportional tower column (Task 11: plus the
+        fixed-width line spacers between them, see SPACER_UNITS) — must
+        fill the full working width, not whatever a fixed per-unit rate
+        happens to add up to.
+
+        Summed over the FULL contiguous column range (not just
+        `x_boundaries()`'s own entries): Task 11 injects extra spacer
+        columns between joined lines of cover that have no `x_boundaries`
+        entry of their own (see `line_column_slots`), so summing only
+        `xs[:-1]` would silently miss them."""
         path = _write_schematic(program, marsh, tmp_path / "s.xlsx")
         ws = load_workbook(path)["Casualty Schematic"]
-        layout, _, col_of = _grid(program)
+        layout, _, _, col_of_close = _grid(program)
         xs = x_boundaries(layout)
+        last_col = col_of_close[xs[-1]] - 1
         tower_total = sum(
-            ws.column_dimensions[get_column_letter(col_of[x_lo])].width
-            for x_lo in xs[:-1]
+            ws.column_dimensions[get_column_letter(c)].width or 0.0
+            for c in range(FIRST_GRID_COL, last_col + 1)
         )
         total = AXIS_WIDTH + tower_total
         # Literal floor, independent of CANVAS_WIDTH_UNITS: pins Grant's
-        # actual intent (~columns A-AM, a total canvas of ~300-330 Excel
-        # width units) rather than merely checking the code's arithmetic is
-        # self-consistent. A regression back to the old cramped ~45-unit
-        # canvas (the pre-Task-10 fixed 10-units-per-line-width rate on this
-        # 3-column fixture) must fail this assertion.
-        assert total >= 250.0
+        # actual intent (a total canvas of ~230-250 Excel width units,
+        # narrowed from ~300-330 in the 2026-08-13 follow-up review — "each
+        # line of cover slightly less wide") rather than merely checking
+        # the code's arithmetic is self-consistent. A regression back to
+        # the old cramped ~45-unit canvas (the pre-Task-10 fixed
+        # 10-units-per-line-width rate on this 3-column fixture) must fail
+        # this assertion.
+        assert total >= 200.0
         # Secondary check: the module constant is actually honored, not just
         # some other value >= the floor.
         assert abs(total - CANVAS_WIDTH_UNITS) < 1.0
@@ -349,7 +396,7 @@ class TestVisualPolish:
         (mpl_program) draws from — not a hardcoded hex and not a colour
         re-derived independently by the schematic."""
         path = _write_schematic(program, marsh, tmp_path / "s.xlsx")
-        layout, rows, col_of = _grid(program)
+        layout, rows, col_of, _ = _grid(program)
         expected = marsh.carrier_colours(program.carriers())
         checked = 0
         for block in layout.participants:
@@ -377,7 +424,7 @@ class TestVisualPolish:
         program = _narrow_split_program()
         path = _write_schematic(program, marsh, tmp_path / "s.xlsx")
         ws = load_workbook(path)["Property Schematic"]
-        layout, rows, col_of = _grid(program)
+        layout, rows, col_of, _ = _grid(program)
         expected = {
             participant_label(carrier, share_bps)
             for carrier, share_bps in (("Alpha", 3_333), ("Beta", 3_333), ("Gamma", 3_334))
@@ -419,7 +466,7 @@ class TestVisualPolish:
             ],
         )
         path = _write_schematic(program, theme, tmp_path / "s.xlsx")
-        layout, rows, col_of = _grid(program)
+        layout, rows, col_of, _ = _grid(program)
         primary = next(ly for ly in layout.layers if ly.layer_id == "p")
         r0, r1 = sheet_rows(rows, primary.y0, primary.y1)
         assert r1 - r0 + 1 >= 2
@@ -463,7 +510,7 @@ class TestVisualPolish:
             ],
         )
         path = _write_schematic(program, theme, tmp_path / "s.xlsx")
-        layout, rows, col_of = _grid(program)
+        layout, rows, col_of, _ = _grid(program)
         block = next(b for b in layout.participants if b.layer_id == "umb")
         anchor_rect = max(block.rects, key=lambda r: r.width)
         assert anchor_rect.x1 - anchor_rect.x0 > 1.125  # the wide GL1+GL2 run won
@@ -478,23 +525,306 @@ class TestVisualPolish:
         """Pure-function proof of the floor mechanism, same style as
         TestQuantizeBoundaries above: without label_spans, y=0.001 gets the
         existing 1-row strict-monotonic floor; with a label_spans entry
-        naming (0.0, 0.001), it must additionally clear row_floor rows."""
+        naming (0.0, 0.001, min_rows), it must additionally clear its OWN
+        min_rows (Task 11: the floor rides per-span/label-aware now, not a
+        single module constant — see `label_row_floor`)."""
         bare = quantize_boundaries([0.0, 0.001, 1.0], total_rows=100)
         assert bare[0.001] - bare[0.0] == 1
 
         floored = quantize_boundaries(
-            [0.0, 0.001, 1.0], total_rows=100, label_spans=[(0.0, 0.001)],
+            [0.0, 0.001, 1.0], total_rows=100, label_spans=[(0.0, 0.001, 2)],
         )
         assert floored[0.001] - floored[0.0] >= 2
+
+    def test_quantize_boundaries_floor_rides_per_span(self):
+        """Two label_spans ending at the SAME boundary but with different
+        min_rows both apply independently — proves the floor is genuinely
+        per-span (Task 11), not a single value shared across every labeled
+        span like the pre-Task-11 uniform ROW_FLOOR was."""
+        rows = quantize_boundaries(
+            [0.0, 0.2, 1.0], total_rows=100,
+            label_spans=[(0.0, 0.2, 3), (0.2, 1.0, 9)],
+        )
+        assert rows[0.2] - rows[0.0] >= 3
+        assert rows[1.0] - rows[0.2] >= 9
 
     def test_group_band_bottom_border_survives_a_three_column_span(self, tmp_path):
         theme = load_theme(None)
         program = _three_column_group_program()
         path = _write_schematic(program, theme, tmp_path / "s.xlsx")
-        layout, _, col_of = _grid(program)
+        layout, _, col_of, col_of_close = _grid(program)
         band = next(b for b in layout.groups if b.label == "Casualty")
-        c0, c1 = col_of[band.x0], col_of[band.x1] - 1
-        assert c1 - c0 == 2  # a genuine 3-column band, not the 2-column case
-        interior = c0 + 1
+        c0, c1 = col_of[band.x0], col_of_close[band.x1] - 1
+        # A genuine 3-column band: 3 real line columns PLUS the 2 Task-11
+        # line spacers injected between them (see `line_column_slots`) —
+        # the band's own merge spans straight through both, so its column
+        # count grew from the pre-Task-11 2 to 4.
+        assert c1 - c0 == 4
+        # The interior (non-edge) REAL column — al's own, not one of the
+        # spacers either side of it — is where the pre-fix merge-before-
+        # style bug lost the bottom accent border.
+        al_ex0 = next(c for c in layout.columns if c.line_id == "al").ex0
+        interior = col_of[al_ex0]
         ref = f"{get_column_letter(interior)}{GROUP_ROW}"
         assert _bottom_border_hex(path, "sheet2.xml", ref) == _argb(theme.chrome.accent)
+
+
+# Task 11: polish round 3 (Grant's native-Excel review) — narrower canvas,
+# label-aware row floor, real axis lines, freeze panes, line-of-cover
+# spacers, print setup, faint attachment gridlines and a version-only
+# provenance footer.
+
+
+def _uneven_towers_program() -> Program:
+    """Two ungrouped (so layout.py JOINS them flush — "both ungrouped
+    counts as one bucket") lines with different tower heights: "tall" runs
+    a primary + excess to $10M, "short" stops at $1M. At the row for the
+    $10M boundary (tall-x's own top, also the sheet's topmost grid row),
+    "tall" is filled (tall-x) and "short" is genuinely blank — the known
+    empty-vs-filled contrast the gridline test (item 7) needs, and the
+    joined-line-spacer test (item 5) needs an adjacent pair with no group
+    in common."""
+    return Program(
+        insured="T", program="T", placement=Placement.BOUND,
+        period=Period(start=date(2026, 1, 1), end=date(2027, 1, 1)),
+        lines=[Line(id="tall", name="Tall"), Line(id="short", name="Short")],
+        layers=[
+            Layer(id="short-p", name="Primary", applies_to=["short"], attach=0,
+                  limit=1_000_000,
+                  participants=[Participant(carrier="A", share_bps=10_000)]),
+            Layer(id="tall-p", name="Primary", applies_to=["tall"], attach=0,
+                  limit=1_000_000,
+                  participants=[Participant(carrier="B", share_bps=10_000)]),
+            Layer(id="tall-x", name="Excess", applies_to=["tall"], attach=1_000_000,
+                  limit=9_000_000,
+                  participants=[Participant(carrier="C", share_bps=10_000)]),
+        ],
+    )
+
+
+class TestNarrowerCanvasAndLabelAwareFloor:
+    """Items 1 and 2: the canvas itself narrowed (covered by the updated
+    literal in test_canvas_fills_the_full_working_width above); this class
+    covers the label-aware row floor."""
+
+    def test_label_row_floor_scales_with_line_count(self) -> None:
+        """Pure-function proof of the derivation: ceil(lines *
+        LABEL_LINE_HEIGHT_PT / GRID_ROW_HEIGHT) + 1, literal per line
+        count (not re-deriving the formula, just pinning its output for a
+        few concrete inputs)."""
+        assert label_row_floor(1) == 4
+        assert label_row_floor(2) == 7
+        assert label_row_floor(3) == 10
+
+    def test_thin_primary_three_line_label_clears_the_label_aware_floor(
+        self, tmp_path
+    ) -> None:
+        """Literal-value proof of the LABEL-AWARE floor in an actual
+        render (Grant's second Excel review, item 2: "primary-layer labels
+        ... render tight against block edges"). The SAME extreme-ratio
+        fixture as test_thin_labeled_layer_gets_the_row_floor above (so
+        gamma compression isn't doing the work) — its sole/widest
+        participant carries the heading, share AND premium, a genuine
+        3-line label. The span must clear 10 rows: a LITERAL pinned here,
+        independent of quantize_boundaries' and label_row_floor's own
+        arithmetic, per the project's 'never self-referential' rule for
+        floor tests."""
+        theme = load_theme(None)
+        program = Program(
+            insured="T", program="T", placement=Placement.BOUND,
+            period=Period(start=date(2026, 1, 1), end=date(2027, 1, 1)),
+            lines=[Line(id="gl", name="General Liability")],
+            layers=[
+                Layer(id="p", name="Primary", applies_to=["gl"], attach=0,
+                      limit=2_000, premium=100,
+                      participants=[Participant(carrier="A", share_bps=10_000)]),
+                Layer(id="x", name="Excess", applies_to=["gl"], attach=2_000,
+                      limit=999_998_000, premium=500_000,
+                      participants=[Participant(carrier="B", share_bps=10_000)]),
+            ],
+        )
+        _write_schematic(program, theme, tmp_path / "s.xlsx")  # must render without error
+        layout, rows, _, _ = _grid(program)
+        primary = next(ly for ly in layout.layers if ly.layer_id == "p")
+        r0, r1 = sheet_rows(rows, primary.y0, primary.y1)
+        assert r1 - r0 + 1 >= 10  # ceil(3 * 11.0 / 4.0) + 1, literal
+
+
+class TestAxisLines:
+    """Item 3: real Y (left, column A) and X (bottom, baseline row) axis
+    lines in the theme's ink colour at medium weight."""
+
+    def test_y_axis_left_border_spans_top_boundary_to_baseline(
+        self, program, marsh, tmp_path
+    ) -> None:
+        path = _write_schematic(program, marsh, tmp_path / "s.xlsx")
+        layout, rows, _, _ = _grid(program)
+        top = max(rows.values())
+        baseline_row = FIRST_GRID_ROW + top - rows[0.0] - 1
+        for row in (FIRST_GRID_ROW, baseline_row):
+            ref = f"{get_column_letter(AXIS_COL)}{row}"
+            assert _border_hex(path, "sheet2.xml", ref, "left") == _argb(marsh.chrome.ink)
+
+    def test_x_axis_bottom_border_spans_the_full_tower_width_at_baseline(
+        self, program, marsh, tmp_path
+    ) -> None:
+        path = _write_schematic(program, marsh, tmp_path / "s.xlsx")
+        layout, rows, _, col_of_close = _grid(program)
+        xs = x_boundaries(layout)
+        last_col = col_of_close[xs[-1]] - 1
+        top = max(rows.values())
+        baseline_row = FIRST_GRID_ROW + top - rows[0.0] - 1
+        for col in (FIRST_GRID_COL, last_col):
+            ref = f"{get_column_letter(col)}{baseline_row}"
+            assert _border_hex(path, "sheet2.xml", ref, "bottom") == _argb(marsh.chrome.ink)
+
+    def test_axis_lines_skip_a_retention_only_program_without_corrupting_headers(
+        self, tmp_path
+    ) -> None:
+        """Fresh-eyes regression: a program with a retention but NO
+        drawable layers has y=0.0 as its own maximum (nothing positive to
+        draw), so the naive baseline_row arithmetic lands ONE ROW ABOVE
+        FIRST_GRID_ROW — exactly on LINE_ROW, corrupting the line header's
+        own border. There is no positive-y tower to axis in this case, so
+        both axis edges must be skipped entirely rather than landing on
+        whatever row the arithmetic produces."""
+        theme = load_theme(None)
+        program = Program(
+            insured="T", program="T", placement=Placement.BOUND,
+            period=Period(start=date(2026, 1, 1), end=date(2027, 1, 1)),
+            lines=[Line(id="gl", name="General Liability")],
+            layers=[],
+            retentions=[Retention(applies_to=["gl"], type="sir", amount=250_000)],
+        )
+        path = _write_schematic(program, theme, tmp_path / "s.xlsx")
+        ws = load_workbook(path)["T Schematic"]
+        assert ws.cell(row=LINE_ROW, column=FIRST_GRID_COL).value == "General Liability"
+        header_ref = f"{get_column_letter(FIRST_GRID_COL)}{LINE_ROW}"
+        assert _border_hex(path, "sheet2.xml", header_ref, "bottom") is None
+
+
+class TestFreezePanes:
+    """Item 4: freeze at the first tower column / first grid row below
+    headers, so the axis column and header rows stay visible while
+    scrolling the tower."""
+
+    def test_freeze_panes_cell_is_the_first_tower_grid_cell(
+        self, program, marsh, tmp_path
+    ) -> None:
+        path = _write_schematic(program, marsh, tmp_path / "s.xlsx")
+        ws = load_workbook(path)["Casualty Schematic"]
+        assert ws.freeze_panes == f"{get_column_letter(FIRST_GRID_COL)}{FIRST_GRID_ROW}"
+
+
+class TestLineSpacers:
+    """Item 5: a narrow fixed-width spacer column between adjacent lines
+    of cover, even where layout.py joins them flush (same group bucket,
+    or both ungrouped — see layout.py's `_columns` docstring)."""
+
+    def test_spacer_column_separates_two_joined_ungrouped_lines(
+        self, tmp_path
+    ) -> None:
+        theme = load_theme(None)
+        program = _uneven_towers_program()  # both ungrouped -> layout.py joins them
+        path = _write_schematic(program, theme, tmp_path / "s.xlsx")
+        ws = load_workbook(path)["T Schematic"]
+        layout, _, col_of, col_of_close = _grid(program)
+        tall = next(c for c in layout.columns if c.line_id == "tall")
+        short = next(c for c in layout.columns if c.line_id == "short")
+        assert tall.ex1 == short.ex0  # confirms layout.py joined them flush
+        tall_close = col_of_close[tall.ex1]
+        short_open = col_of[short.ex0]
+        assert short_open == tall_close + 1  # exactly one injected slot between them
+        spacer_letter = get_column_letter(tall_close)
+        assert ws.column_dimensions[spacer_letter].width == pytest.approx(SPACER_UNITS)
+
+    def test_blanket_layer_merges_straight_through_a_line_spacer(
+        self, tmp_path
+    ) -> None:
+        """A layer that genuinely spans multiple joined lines of cover (a
+        blanket primary across gl/al/el) must still merge as ONE
+        continuous range — the spacer sits BETWEEN independent lines, it
+        must not fracture a rect that spans across the join."""
+        theme = load_theme(None)
+        program = _three_column_group_program()
+        path = _write_schematic(program, theme, tmp_path / "s.xlsx")
+        ws = load_workbook(path)["T Schematic"]
+        layout, rows, col_of, col_of_close = _grid(program)
+        block = next(b for b in layout.participants)
+        rect = block.rects[0]
+        r0, r1 = sheet_rows(rows, rect.y0, rect.y1)
+        c0, c1 = col_of[rect.x0], col_of_close[rect.x1] - 1
+        ref = f"{get_column_letter(c0)}{r0}:{get_column_letter(c1)}{r1}"
+        assert ref in {str(r) for r in ws.merged_cells.ranges}
+
+
+class TestPrintSetup:
+    """Item 6: landscape, fit-to-width one page, comfortably zoomed."""
+
+    def test_landscape_fit_to_width_one_page(self, program, marsh, tmp_path) -> None:
+        path = _write_schematic(program, marsh, tmp_path / "s.xlsx")
+        ws = load_workbook(path)["Casualty Schematic"]
+        assert ws.page_setup.orientation == "landscape"
+        assert ws.page_setup.fitToWidth == 1
+        assert ws.page_setup.fitToHeight == 0
+        assert ws.sheet_view.zoomScale == 80
+
+
+class TestGridlines:
+    """Item 7: a faint hairline top border at every attachment boundary —
+    the same boundaries the axis labels mark — but ONLY through empty grid
+    cells, never through a filled participant block."""
+
+    def test_gridline_marks_an_empty_cell_but_not_a_filled_one(
+        self, tmp_path
+    ) -> None:
+        theme = load_theme(None)
+        program = _uneven_towers_program()
+        path = _write_schematic(program, theme, tmp_path / "s.xlsx")
+        layout, _, col_of, _ = _grid(program)
+        tall_col = col_of[next(c for c in layout.columns if c.line_id == "tall").ex0]
+        short_col = col_of[next(c for c in layout.columns if c.line_id == "short").ex0]
+        # $10M (tall-x's top) is the sheet's topmost grid row: "tall" is
+        # filled there (tall-x), "short" (capped at $1M) is genuinely
+        # blank there.
+        empty_ref = f"{get_column_letter(short_col)}{FIRST_GRID_ROW}"
+        filled_ref = f"{get_column_letter(tall_col)}{FIRST_GRID_ROW}"
+        assert _border_hex(path, "sheet2.xml", empty_ref, "top") == _argb(theme.chrome.grid)
+        assert _border_hex(path, "sheet2.xml", filled_ref, "top") != _argb(theme.chrome.grid)
+
+
+class TestProvenanceFooter:
+    """Item 8: a small dim provenance line below the tower, version-only
+    (no git sha) so it stays git-state-independent by construction — the
+    SCHEMATIC_GOLDEN_SHA and two-run byte-identity tests both depend on
+    that (see tests/test_soi_xlsx.py)."""
+
+    def test_footer_shows_the_version_only_provenance_line(
+        self, program, marsh, tmp_path
+    ) -> None:
+        path = _write_schematic(program, marsh, tmp_path / "s.xlsx")
+        ws = load_workbook(path)["Casualty Schematic"]
+        values = {
+            c.value for row in ws.iter_rows() for c in row if c.value is not None
+        }
+        assert f"towerkit {__version__} · Schedule of Insurance schematic" in values
+        # git-state-independent by construction: no sha/dirty token, ever.
+        assert not any(
+            isinstance(v, str) and ("+dirty" in v or "unversioned" in v) for v in values
+        )
+
+    def test_footer_sits_below_the_tower_with_no_fill_or_border(
+        self, program, marsh, tmp_path
+    ) -> None:
+        path = _write_schematic(program, marsh, tmp_path / "s.xlsx")
+        ws = load_workbook(path)["Casualty Schematic"]
+        layout, rows, _, _ = _grid(program)
+        top = max(rows.values())
+        bottom_row = FIRST_GRID_ROW + top - 1
+        footer_cell = next(
+            c for row in ws.iter_rows() for c in row
+            if isinstance(c.value, str) and c.value.startswith("towerkit ")
+        )
+        assert footer_cell.row > bottom_row
+        assert footer_cell.fill.patternType is None
+        assert _fill_hex(path, "sheet2.xml", footer_cell.coordinate) is None

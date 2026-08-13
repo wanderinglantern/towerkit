@@ -228,7 +228,12 @@ class TestWorkbookOrchestration:
 # Content golden WITH the schematic sheet (same core.xml-exclusion mechanism
 # as GOLDEN_SHA above; same regeneration rule — deliberate change or
 # openpyxl bump only, never to make a refactor pass).
-SCHEMATIC_GOLDEN_SHA = "0a94cd8733b19074f4e43143daae6b254d4c98f34d0abf5db623feb1d6ab13f2"
+SCHEMATIC_GOLDEN_SHA = "dc0d1549a4bbbfe0568229eed34c4f0fd75fab7267e3f8d6646b406aaf68321c"
+# Regenerated 2026-08-13 (Task 11, polish round 3, feat/schematic-polish3):
+# narrower canvas (CANVAS_WIDTH_UNITS 300->240), label-aware row floor,
+# real axis lines, freeze panes, line-of-cover spacer columns, landscape
+# print setup, faint attachment gridlines, and a version-only provenance
+# footer. Deliberate, one-time regeneration — see that commit's body.
 
 
 def test_schematic_golden_content(program, theme, tmp_path):

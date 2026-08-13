@@ -13,23 +13,59 @@ Neighbours share bit-identical edge floats (layout.py's exactness rule), so
 merges tile with no gaps and no overlaps by construction.
 
 HYBRID deviation from pure proportionality (Task 9, Grant's Excel review):
-`quantize_boundaries` accepts `label_spans` — (y_lo, y_hi) pairs that carry
-rendered text, i.e. every layer's and retention's row band — and floors
-each to at least `row_floor` rows even when gamma-compressed
+`quantize_boundaries` accepts `label_spans` — (y_lo, y_hi, min_rows) triples
+naming every layer's and retention's row band that carries rendered text —
+and floors each to at least ITS OWN `min_rows` even when gamma-compressed
 proportionality alone would round it thinner (an extreme primary deep
-under a tall tower can still hit this after compression). The floor only
-pushes the span's upper boundary and everything strictly after it forward;
-it never reopens an earlier boundary, so tiling stays gap-free and
-overlap-free by construction — see `quantize_boundaries` for the mechanism.
+under a tall tower can still hit this after compression). `min_rows` is
+label-aware (Task 11, Grant's second Excel review): `label_row_floor`
+derives it from the span's actual rendered LINE COUNT, so a 3-line primary
+heading gets more room than a 1-line share label — see `label_row_floor`
+and `_label_spans`. The floor only pushes the span's upper boundary and
+everything strictly after it forward; it never reopens an earlier
+boundary, so tiling stays gap-free and overlap-free by construction — see
+`quantize_boundaries` for the mechanism.
 
 Narrow merges get a parallel hybrid: below `NARROW_MERGE_UNITS_PER_LINE`
 Excel-width-units per text line, `wrap_text` has nowhere good to break a
 word and degenerates toward one-character-per-line, so those cells switch
 to `shrink_to_fit` with a shorter label pulled from the labels.py compact
-ladder instead (see `_fit_label`)."""
+ladder instead (see `_fit_label`). This is deliberately ORTHOGONAL to the
+row floor above: the row floor always sizes for the full (uncompacted)
+candidate line count, never the width-driven compacted one.
+
+LINE SPACERS (Task 11, adopted improvement): layout.py's `_columns` closes
+the interior gutter between columns sharing a group bucket (both ungrouped
+counts as one bucket, per its own docstring) so a blanket layer spanning
+several lines draws as ONE continuous shape — correct for the graphic, but
+it means the schematic's grid has NO visual separation between adjacent
+lines of cover whenever they're joined, and only a proportionally-scaled
+(so, at high line counts, imperceptibly thin) gap when they're not. Since
+layout.py's x-coordinates are shared with the graphic and must NOT change
+for this, `line_column_slots` injects a schematic-only spacer COLUMN
+between every pair of adjacent `layout.columns`, sized to a fixed
+`SPACER_UNITS` regardless of the tower's own scale — mirroring the
+graphic's inter-column GUTTER, just implemented one layer up, in the sheet
+grid rather than in tower coordinates. A genuinely continuous (blanket)
+rect that spans the transition still merges straight through the injected
+column, so it reads unbroken; two independent per-line rects that happen
+to meet exactly at the transition now have a visible gutter between them.
+See `line_column_slots` for the open/close dual-mapping this requires.
+
+AXIS LINES, GRIDLINES, FOOTER (Task 11): `_axis_lines` draws the real Y
+(left, column A) and X (bottom, baseline row) axis borders in the theme's
+ink colour; `_gridlines` adds a faint hairline top border at every
+attachment boundary, but only through cells no block already occupies (a
+line through a filled block would slice it, and the boundary is already
+implied where blocks abut); `_footer` writes a small dim provenance line
+below the tower. All three run AFTER every block/retention merge is
+styled (`_add_border_edge` merges a new edge into whatever a cell already
+has, rather than overwriting it) — same ordering rule as the merge-before-
+style fix elsewhere in this module."""
 
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 
 from openpyxl import Workbook
@@ -37,7 +73,8 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
-from ..layout import Rect, TowerLayout, build_layout
+from .. import __version__
+from ..layout import LayerBlock, ParticipantBlock, Rect, TowerLayout, build_layout
 from ..model import Program
 from ..money import format_money_compact
 from ..scale import DEFAULT_GAMMA
@@ -61,18 +98,21 @@ AXIS_WIDTH = 10.0
 
 # Total tower width in Excel column-width units; ~columns A-AM at default
 # width, per Grant's review 2026-08-13 ("the tower currently occupies
-# roughly columns A-R and looks cramped ... use the full working width").
-# Every render fills to this SAME total, regardless of how many line
-# columns it has: AXIS_WIDTH stays fixed, and the tower's columns are
-# scaled by whatever per-unit rate makes their sum fill the remainder —
-# same relative proportions as a fixed rate would give, just wider.
-CANVAS_WIDTH_UNITS = 300.0
+# roughly columns A-R and looks cramped ... use the full working width"),
+# narrowed slightly in the follow-up review (2026-08-13, Task 11: "each
+# line of cover slightly less wide"). Every render fills to this SAME
+# total, regardless of how many line columns it has: AXIS_WIDTH stays
+# fixed, and the tower's columns (plus the Task-11 line spacers, see
+# SPACER_UNITS) are scaled by whatever per-unit rate makes their sum fill
+# the remainder — same relative proportions as a fixed rate would give,
+# just wider.
+CANVAS_WIDTH_UNITS = 240.0
 FIRST_GRID_COL = 2
 TITLE_ROW, GROUP_ROW, LINE_ROW = 1, 2, 3
 FIRST_GRID_ROW = 4
-ROW_FLOOR = 2  # every labeled layer/retention row band gets at least this many
-# sheet rows, even when gamma-compressed proportionality alone rounds thinner
-# (the module docstring's "hybrid" deviation)
+ROW_FLOOR = 2  # absolute safety-net minimum every labeled row band gets,
+# under whatever label_row_floor(line_count) computes (belt-and-braces:
+# label_row_floor already exceeds this for any real label, see below)
 
 # Below this many Excel width units per text LINE, Excel's wrap_text has no
 # good place to break a word and degenerates toward one-character-per-line
@@ -88,58 +128,137 @@ NARROW_MERGE_UNITS_PER_LINE = 2.5
 HEADER_LINE_HEIGHT = 12.0
 HEADER_TWO_LINE_HEIGHT = 2 * HEADER_LINE_HEIGHT
 
+# Participant/retention block label line-height estimate (8pt/7pt block
+# fonts) — same heuristic family as HEADER_LINE_HEIGHT, one size down.
+# Used by label_row_floor (Task 11's label-aware row floor, Grant's second
+# Excel review: "a 3-line primary label must render with visible breathing
+# room").
+LABEL_LINE_HEIGHT_PT = 11.0
+
+# Fixed-width gutter column injected between every pair of adjacent lines
+# of cover (layout.columns), independent of the tower's own scale — see
+# the module docstring's "LINE SPACERS" section and `line_column_slots`.
+SPACER_UNITS = 1.2
+
+# Row gap between the tower's lowest drawn row (the retention band, if any
+# — otherwise the lowest layer) and the provenance footer line.
+FOOTER_GAP_ROWS = 3
+
+
+def label_row_floor(label_lines: int) -> int:
+    """Minimum grid-row span for a labeled block: enough GRID_ROW_HEIGHT
+    rows to hold `label_lines` lines of text at LABEL_LINE_HEIGHT_PT, plus
+    one row of padding (~half a line) so the label doesn't sit flush
+    against the block's own edges (Grant's Excel review: thin primary
+    blocks with a 3-line label rendered tight). Never below the absolute
+    ROW_FLOOR safety net."""
+    lines = max(label_lines, 1)
+    return max(math.ceil(lines * LABEL_LINE_HEIGHT_PT / GRID_ROW_HEIGHT) + 1, ROW_FLOOR)
+
 
 def quantize_boundaries(
     ys: Sequence[float],
     total_rows: int = TOTAL_ROWS,
     *,
-    label_spans: Sequence[tuple[float, float]] = (),
-    row_floor: int = ROW_FLOOR,
+    label_spans: Sequence[tuple[float, float, int]] = (),
 ) -> dict[float, int]:
     """Each distinct boundary → an integer row index, proportional over the
     full span, strictly increasing (the spec's ceil/min-1 floor: gamma
     compression already keeps small layers visible, so bumps are rare).
 
-    `label_spans` names (y_lo, y_hi) pairs — every layer's and retention's
-    row band — that carry rendered text: each is additionally floored to
-    `rows[y_hi] - rows[y_lo] >= row_floor`, on top of the strict-monotonic
-    1-row floor every boundary already gets. The bump only pushes y_hi (and,
-    via the running `prev`, everything strictly after it) forward — it never
-    revisits an earlier boundary — so adjacent spans still tile with no gaps
-    and no overlaps by construction (the module docstring's "hybrid" case)."""
+    `label_spans` names (y_lo, y_hi, min_rows) triples — every layer's and
+    retention's row band that carries rendered text — each additionally
+    floored to `rows[y_hi] - rows[y_lo] >= min_rows`, on top of the strict-
+    monotonic 1-row floor every boundary already gets. `min_rows` rides
+    PER SPAN (label-aware, see `label_row_floor`) rather than one module
+    constant: a 3-line primary heading needs more room than a 1-line share
+    label. The bump only pushes y_hi (and, via the running `prev`,
+    everything strictly after it) forward — it never revisits an earlier
+    boundary — so adjacent spans still tile with no gaps and no overlaps
+    by construction (the module docstring's "hybrid" case)."""
     distinct = sorted(set(ys))
     if len(distinct) < 2:
         return dict.fromkeys(distinct, 0)
     lo, span = distinct[0], distinct[-1] - distinct[0]
-    floors_ending_at: dict[float, list[float]] = {}
-    for y_lo, y_hi in label_spans:
-        floors_ending_at.setdefault(y_hi, []).append(y_lo)
+    floors_ending_at: dict[float, list[tuple[float, int]]] = {}
+    for y_lo, y_hi, min_rows in label_spans:
+        floors_ending_at.setdefault(y_hi, []).append((y_lo, min_rows))
     out: dict[float, int] = {}
     prev = -1
     for y in distinct:
         row = max(round((y - lo) / span * total_rows), prev + 1)
-        for y_lo in floors_ending_at.get(y, ()):
+        for y_lo, min_rows in floors_ending_at.get(y, ()):
             if y_lo in out:
-                row = max(row, out[y_lo] + row_floor)
+                row = max(row, out[y_lo] + min_rows)
         out[y] = row
         prev = row
     return out
 
 
-def _label_spans(layout: TowerLayout) -> list[tuple[float, float]]:
-    """Every row band that will actually carry rendered text, for
-    `quantize_boundaries`'s row floor: each participant block's ANCHOR rect
-    (the one add_schematic_sheet writes text into) and each retention's
-    first rect. Deliberately NOT LayerBlock.y0/y1 — a follows-underlying
-    layer's outline is only nominally that tall; its stepped-bottom runs
-    (what's actually drawn) can be a fraction of it, and that's exactly the
-    thin case the floor exists for."""
-    spans = []
-    for block in layout.participants:
+def _participant_lines(
+    block: ParticipantBlock,
+    owner: LayerBlock,
+    *,
+    is_heading: bool,
+    follows: bool,
+    is_pending: bool,
+    show_premiums: bool,
+) -> list[str]:
+    """Candidate label lines for a participant block's anchor cell, BEFORE
+    `_fit_label`'s width-driven narrow-merge compaction. Used both to
+    render the cell and (via `label_row_floor`, in `_label_spans`) to size
+    its row band — the row floor always sizes for this full candidate,
+    never the compacted one (the row floor and the narrow-merge fix stay
+    orthogonal, per the module docstring)."""
+    lines: list[str] = []
+    if is_heading:
+        lines.append(layer_heading(owner, follows=follows))
+    if block.carrier is None:
+        lines.append(unplaced_label(block.share_bps, pending=is_pending))
+    else:
+        lines.append(participant_label(block.carrier, block.share_bps))
+        if show_premiums:
+            premium = block_premium_label(owner.premium, block.share_bps)
+            if premium is not None:
+                lines.append(premium)
+    return lines
+
+
+def _label_spans(
+    layout: TowerLayout, program: Program, *, show_premiums: bool = True
+) -> list[tuple[float, float, int]]:
+    """Every row band that will actually carry rendered text, each with its
+    OWN label-aware row floor (see `label_row_floor`): every participant
+    block's ANCHOR rect (the one add_schematic_sheet writes text into,
+    deliberately NOT LayerBlock.y0/y1 — a follows-underlying layer's
+    outline is only nominally that tall; its stepped-bottom runs, what's
+    actually drawn, can be a fraction of it) and each retention's first
+    rect (always a single line — see retention_label). The line count for
+    each participant span comes from `_participant_lines`, the SAME
+    candidate-line assembly the main render loop uses, so the floor always
+    matches what will actually be drawn."""
+    follows = {ly.id for ly in program.layers if ly.follows_underlying}
+    pending = {ly.layer_id for ly in layout.layers if ly.signed_bps == 0}
+    headings = heading_blocks(layout.participants)
+    layer_by_id = {ly.layer_id: ly for ly in layout.layers}
+    spans: list[tuple[float, float, int]] = []
+    for index, block in enumerate(layout.participants):
         anchor = max(block.rects, key=lambda r: r.width, default=None)
-        if anchor is not None:
-            spans.append((anchor.y0, anchor.y1))
-    spans.extend((ret.rects[0].y0, ret.rects[0].y1) for ret in layout.retentions if ret.rects)
+        if anchor is None:
+            continue
+        owner = layer_by_id[block.layer_id]
+        lines = _participant_lines(
+            block, owner,
+            is_heading=headings.get(block.layer_id) == index,
+            follows=block.layer_id in follows,
+            is_pending=block.layer_id in pending,
+            show_premiums=show_premiums,
+        )
+        spans.append((anchor.y0, anchor.y1, label_row_floor(len(lines))))
+    spans.extend(
+        (ret.rects[0].y0, ret.rects[0].y1, label_row_floor(1))
+        for ret in layout.retentions if ret.rects
+    )
     return spans
 
 
@@ -185,6 +304,63 @@ def y_boundaries(layout: TowerLayout) -> tuple[float, ...]:
     return tuple(sorted(ys))
 
 
+def _line_transitions(layout: TowerLayout) -> tuple[set[float], set[float]]:
+    """Every x value marking the boundary between two adjacent lines of
+    cover (`layout.columns`), split into `joined` (flush — layout.py
+    closed the gutter, same group bucket) and `gapped` (a real layout.py
+    GUTTER already separates them). See the module docstring's "LINE
+    SPACERS": `joined` boundaries need a spacer COLUMN injected
+    (`line_column_slots`); `gapped` boundaries already have a slot, which
+    just needs its WIDTH fixed instead of scaled (the caller in
+    `add_schematic_sheet`) — proportional scaling could round a gutter
+    imperceptibly thin at high line counts."""
+    columns = layout.columns
+    joined: set[float] = set()
+    gapped: set[float] = set()
+    for i in range(len(columns) - 1):
+        if columns[i].ex1 == columns[i + 1].ex0:
+            joined.add(columns[i].ex1)
+        else:
+            gapped.add(columns[i].ex1)
+    return joined, gapped
+
+
+def line_column_slots(
+    layout: TowerLayout, xs: Sequence[float]
+) -> tuple[dict[float, int], dict[float, int]]:
+    """Map each `x_boundaries()` value to a spreadsheet column, injecting
+    one spacer slot at every JOINED line-of-cover transition (see
+    `_line_transitions`) — flush column pairs get no visual separation
+    from layout.py today, so a schematic-only gutter is added here
+    instead. Non-joined (gapped) pairs already have a real interval
+    between them; that slot is left alone here and instead given a fixed
+    `SPACER_UNITS` width by the caller, same visual result, no extra slot
+    needed.
+
+    Returns `(col_of, col_of_close)`. They agree everywhere except at a
+    joined-transition value, where the two rects meeting there need
+    DIFFERENT integers: `col_of[x]` is right for an OPENING edge (rect.x0:
+    c0 = col_of[x]) — it steps past the injected spacer. `col_of_close[x]`
+    is right for a CLOSING edge, used as `col_of_close[x] - 1` (rect.x1:
+    c1 = col_of_close[x] - 1) — the spacer never shifts what's already the
+    last real cell of the column ending at x. A genuinely continuous
+    (blanket) rect spans OUTER boundaries only, never an interior joined
+    value, so it merges straight through the injected slot regardless."""
+    joined, _ = _line_transitions(layout)
+    col_of: dict[float, int] = {}
+    col_of_close: dict[float, int] = {}
+    slot = FIRST_GRID_COL
+    for x in xs:
+        col_of_close[x] = slot
+        if x in joined:
+            col_of[x] = slot + 1
+            slot += 2  # the reserved slot (col_of_close[x]) IS the spacer
+        else:
+            col_of[x] = slot
+            slot += 1
+    return col_of, col_of_close
+
+
 def sheet_rows(rows: dict[float, int], y0: float, y1: float) -> tuple[int, int]:
     """Inclusive (top_row, bottom_row) worksheet span for normalized
     [y0, y1]. Rows grow downward; y grows upward."""
@@ -207,31 +383,45 @@ def add_schematic_sheet(
     colours = theme.carrier_colours(program.carriers())
     ws = wb.create_sheet(sanitize_sheet_title(f"{program.program} Schematic"))
     ws.sheet_view.showGridLines = False
+    _print_setup(ws)
 
     xs = x_boundaries(layout)
-    rows = quantize_boundaries(y_boundaries(layout), label_spans=_label_spans(layout))
+    label_spans = _label_spans(layout, program, show_premiums=show_premiums)
+    rows = quantize_boundaries(y_boundaries(layout), label_spans=label_spans)
     top = max(rows.values())
     if len(xs) < 2 or top == 0:  # draft with no drawable tower: title only
         _title(ws, program, chrome, last_col=AXIS_COL)
         return
-    col_of = {x: FIRST_GRID_COL + i for i, x in enumerate(xs)}
-    last_col = FIRST_GRID_COL + len(xs) - 2
+    col_of, col_of_close = line_column_slots(layout, xs)
+    last_col = col_of_close[xs[-1]] - 1
+    ws.freeze_panes = f"{get_column_letter(FIRST_GRID_COL)}{FIRST_GRID_ROW}"
 
     # Fill CANVAS_WIDTH_UNITS regardless of how wide the tower's own layout
-    # units happen to span: AXIS_WIDTH is fixed, the tower's columns share
-    # what's left, at whatever per-unit rate makes their sum hit the target.
-    tower_span = xs[-1] - xs[0]
-    chars_per_unit = (CANVAS_WIDTH_UNITS - AXIS_WIDTH) / tower_span
+    # units happen to span, and regardless of how many line spacers it
+    # needs: AXIS_WIDTH and the spacer budget are both fixed off the top,
+    # and the tower's own columns share whatever's left, at whatever
+    # per-unit rate makes their sum hit the target.
+    joined, gapped_starts = _line_transitions(layout)
+    n_transitions = max(len(layout.columns) - 1, 0)
+    spacer_budget = n_transitions * SPACER_UNITS
+    proportional_span = sum(
+        x_hi - x_lo for x_lo, x_hi in zip(xs, xs[1:], strict=False)
+        if x_lo not in gapped_starts
+    )
+    chars_per_unit = (CANVAS_WIDTH_UNITS - AXIS_WIDTH - spacer_budget) / proportional_span
 
     ws.column_dimensions[get_column_letter(AXIS_COL)].width = AXIS_WIDTH
     for x_lo, x_hi in zip(xs, xs[1:], strict=False):
         letter = get_column_letter(col_of[x_lo])
-        ws.column_dimensions[letter].width = (x_hi - x_lo) * chars_per_unit
+        width = SPACER_UNITS if x_lo in gapped_starts else (x_hi - x_lo) * chars_per_unit
+        ws.column_dimensions[letter].width = width
+    for x in joined:
+        ws.column_dimensions[get_column_letter(col_of_close[x])].width = SPACER_UNITS
     for r in range(FIRST_GRID_ROW, FIRST_GRID_ROW + top):
         ws.row_dimensions[r].height = GRID_ROW_HEIGHT
 
     _title(ws, program, chrome, last_col=last_col)
-    _headers(ws, layout, chrome, col_of, chars_per_unit)
+    _headers(ws, layout, chrome, col_of, col_of_close, chars_per_unit)
     _axis(ws, layout, rows, chrome)
 
     pending = {ly.layer_id for ly in layout.layers if ly.signed_bps == 0}
@@ -239,14 +429,19 @@ def add_schematic_sheet(
     headings = heading_blocks(layout.participants)
     layer_by_id = {ly.layer_id: ly for ly in layout.layers}
 
+    occupied: set[tuple[int, int]] = set()
+
     for index, block in enumerate(layout.participants):
-        lines: list[str] = []
-        if headings.get(block.layer_id) == index:
-            owner = layer_by_id[block.layer_id]
-            lines.append(layer_heading(owner, follows=block.layer_id in follows))
+        owner = layer_by_id[block.layer_id]
+        is_pending = block.layer_id in pending
+        lines = _participant_lines(
+            block, owner,
+            is_heading=headings.get(block.layer_id) == index,
+            follows=block.layer_id in follows,
+            is_pending=is_pending,
+            show_premiums=show_premiums,
+        )
         if block.carrier is None:
-            is_pending = block.layer_id in pending
-            lines.append(unplaced_label(block.share_bps, pending=is_pending))
             # graphic: pending = empty dashed outline; open remainder = hatch
             fill = (
                 None
@@ -263,13 +458,6 @@ def add_schematic_sheet(
                 color=_argb(chrome.ink if is_pending else chrome.unplaced),
             )
         else:
-            lines.append(participant_label(block.carrier, block.share_bps))
-            if show_premiums:
-                premium = block_premium_label(
-                    layer_by_id[block.layer_id].premium, block.share_bps
-                )
-                if premium is not None:
-                    lines.append(premium)
             face = colours[block.carrier]
             fill = PatternFill("solid", fgColor=_argb(face))
             text_colour = contrast_text(face, chrome.background, chrome.ink)
@@ -283,12 +471,13 @@ def add_schematic_sheet(
             anchor_text, shrink = "\n".join(lines), False
         for rect in block.rects:
             _block(
-                ws, rect, rows, col_of,
+                ws, rect, rows, col_of, col_of_close,
                 text=anchor_text if rect is anchor_rect else "",
                 fill=fill,
                 border=Border(left=edge, right=edge, top=edge, bottom=edge),
                 font=Font(name=chrome.font, size=8, color=_argb(text_colour)),
                 shrink=shrink if rect is anchor_rect else False,
+                occupied=occupied,
             )
 
     for retention in layout.retentions:
@@ -296,7 +485,7 @@ def add_schematic_sheet(
         edge = Side(style="thin", color=_argb(chrome.ink))
         for i, rect in enumerate(retention.rects):
             _block(
-                ws, rect, rows, col_of,
+                ws, rect, rows, col_of, col_of_close,
                 text=(
                     retention_label(retention.type, retention.amount, retention.vehicle)
                     if i == 0
@@ -305,7 +494,23 @@ def add_schematic_sheet(
                 fill=fill,
                 border=Border(left=edge, right=edge, top=edge, bottom=edge),
                 font=Font(name=chrome.font, size=7, color=_argb(chrome.ink)),
+                occupied=occupied,
             )
+
+    _axis_lines(ws, rows, chrome, last_col)
+    _gridlines(ws, layout, rows, chrome, last_col, occupied)
+    _footer(ws, chrome, top, last_col)
+
+
+def _print_setup(ws: Worksheet) -> None:
+    """Landscape, fit-to-one-page-wide, comfortably zoomed — a tower reads
+    left to right across many lines of cover, so width (not height) is the
+    constraint printing needs to respect (Task 11, adopted improvement)."""
+    ws.page_setup.orientation = "landscape"
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+    ws.sheet_view.zoomScale = 80
 
 
 def _fit_label(
@@ -333,17 +538,37 @@ def _fit_label(
     return "", True  # unreachable: [] always fits
 
 
+def _add_border_edge(ws: Worksheet, row: int, col: int, *, side: str, edge: Side) -> None:
+    """Add ONE border edge to a cell without disturbing whatever else is
+    already there (fill, other edges). The axis lines, gridlines and
+    similar post-hoc styling all run AFTER every block/retention merge is
+    styled, so a naive `cell.border = Border(...)` would erase the block's
+    own edges — this merges the new edge into the existing Border instead
+    (same "style after merge, never blindly overwrite" family of rule as
+    the merge-before-style fix elsewhere in this module)."""
+    cell = ws.cell(row=row, column=col)
+    current = cell.border
+    sides = {
+        "left": current.left, "right": current.right,
+        "top": current.top, "bottom": current.bottom,
+    }
+    sides[side] = edge
+    cell.border = Border(**sides)
+
+
 def _block(
     ws: Worksheet,
     rect: Rect,
     rows: dict[float, int],
     col_of: dict[float, int],
+    col_of_close: dict[float, int],
     *,
     text: str,
     fill: PatternFill | None,
     border: Border,
     font: Font,
     shrink: bool = False,
+    occupied: set[tuple[int, int]] | None = None,
 ) -> None:
     """One rect → one merged range. MUST merge BEFORE styling non-anchor
     cells: openpyxl's merge_cells() replaces every non-anchor cell with a
@@ -351,7 +576,7 @@ def _block(
     set on those coordinates first is discarded — merge first, style after,
     the same order render_table_sheet already uses in table_xlsx.py."""
     r0, r1 = sheet_rows(rows, rect.y0, rect.y1)
-    c0, c1 = col_of[rect.x0], col_of[rect.x1] - 1
+    c0, c1 = col_of[rect.x0], col_of_close[rect.x1] - 1
     if (r0, c0) != (r1, c1):  # a 1×1 block is already one cell; no merge
         ws.merge_cells(start_row=r0, start_column=c0, end_row=r1, end_column=c1)
     anchor = ws.cell(row=r0, column=c0, value=text or None)
@@ -367,6 +592,8 @@ def _block(
             if fill is not None:
                 cell.fill = fill
             cell.border = border
+            if occupied is not None:
+                occupied.add((r, c))
 
 
 def _title(ws: Worksheet, program: Program, chrome: Chrome, *, last_col: int) -> None:
@@ -394,6 +621,7 @@ def _headers(
     layout: TowerLayout,
     chrome: Chrome,
     col_of: dict[float, int],
+    col_of_close: dict[float, int],
     chars_per_unit: float,
 ) -> None:
     """Group bands above, line names under them (the spec's header order —
@@ -404,7 +632,7 @@ def _headers(
     columns loses its bottom accent border the same way if styled first)."""
     accent = Side(style="medium", color=_argb(chrome.accent))
     for band in layout.groups:
-        c0, c1 = col_of[band.x0], col_of[band.x1] - 1
+        c0, c1 = col_of[band.x0], col_of_close[band.x1] - 1
         if c1 > c0:
             ws.merge_cells(
                 start_row=GROUP_ROW, start_column=c0, end_row=GROUP_ROW, end_column=c1
@@ -417,7 +645,7 @@ def _headers(
 
     wraps = False
     for column in layout.columns:
-        c0, c1 = col_of[column.ex0], col_of[column.ex1] - 1
+        c0, c1 = col_of[column.ex0], col_of_close[column.ex1] - 1
         if c1 > c0:
             ws.merge_cells(
                 start_row=LINE_ROW, start_column=c0, end_row=LINE_ROW, end_column=c1
@@ -451,3 +679,80 @@ def _axis(
             ws.merge_cells(
                 start_row=r0, start_column=AXIS_COL, end_row=r1, end_column=AXIS_COL
             )
+
+
+def _axis_lines(
+    ws: Worksheet, rows: dict[float, int], chrome: Chrome, last_col: int
+) -> None:
+    """Real axis lines (Task 11, Grant's Excel review): a solid left border
+    down column A's tower extent (Y axis, top boundary to baseline) and a
+    solid bottom border along the baseline (y=0) row across the full tower
+    width (X axis, every line of cover) — both in the theme's ink colour
+    at medium weight. Run AFTER every block/retention merge is styled (see
+    `_add_border_edge`), otherwise a block sitting exactly on the baseline
+    would overwrite this with its own (thinner, differently-coloured)
+    edge.
+
+    Degenerate case: a program with retentions but NO drawable layers has
+    y=0.0 AS its own maximum (nothing positive to draw), so `baseline_row`
+    lands ABOVE FIRST_GRID_ROW — one row short of colliding with LINE_ROW's
+    own header border. Guarded: with no positive-y tower there is no axis
+    to draw, so both edges are skipped entirely rather than landing on
+    whatever row the arithmetic produces."""
+    top = max(rows.values())
+    top_row = FIRST_GRID_ROW
+    baseline_row = FIRST_GRID_ROW + top - rows[0.0] - 1
+    if baseline_row < top_row:
+        return
+    ink = Side(style="medium", color=_argb(chrome.ink))
+    for r in range(top_row, baseline_row + 1):
+        _add_border_edge(ws, r, AXIS_COL, side="left", edge=ink)
+    for c in range(FIRST_GRID_COL, last_col + 1):
+        _add_border_edge(ws, baseline_row, c, side="bottom", edge=ink)
+
+
+def _gridlines(
+    ws: Worksheet,
+    layout: TowerLayout,
+    rows: dict[float, int],
+    chrome: Chrome,
+    last_col: int,
+    occupied: set[tuple[int, int]],
+) -> None:
+    """Faint hairline top border at every quantized attachment boundary —
+    the SAME breakpoints `_axis` labels — but only through EMPTY grid
+    cells: a filled participant block already implies the boundary where
+    it abuts, so a line straight through one would slice it visually
+    instead of marking a boundary (Task 11, adopted improvement). Run
+    AFTER the block/retention loop so `occupied` is complete."""
+    ref = list(layout.ref_lines)
+    hair = Side(style="hair", color=_argb(chrome.grid))
+    for (d_lo, y_lo), (_d_hi, y_hi) in zip(ref, ref[1:], strict=False):
+        if d_lo <= 0:
+            continue
+        r0, _ = sheet_rows(rows, y_lo, y_hi)
+        for c in range(FIRST_GRID_COL, last_col + 1):
+            if (r0, c) not in occupied:
+                _add_border_edge(ws, r0, c, side="top", edge=hair)
+
+
+def _footer(ws: Worksheet, chrome: Chrome, top: int, last_col: int) -> None:
+    """A dim, version-only provenance line a few grid rows below the
+    tower's lowest drawn row (Task 11, adopted improvement) — mirrors the
+    graphic's visible footer text, but deliberately NOT the git sha that
+    workbook properties' `provenance()` already carries: a visible cell
+    with the sha would change bytes on every commit and break
+    SCHEMATIC_GOLDEN_SHA. The version string alone is git-state-independent
+    by construction, so the golden hash and two-run byte-identity both stay
+    stable across commits."""
+    bottom_row = FIRST_GRID_ROW + top - 1
+    row = bottom_row + FOOTER_GAP_ROWS
+    cell = ws.cell(
+        row=row, column=AXIS_COL,
+        value=f"towerkit {__version__} · Schedule of Insurance schematic",
+    )
+    cell.font = Font(name=chrome.font, size=7, color=_argb(chrome.muted))
+    cell.alignment = Alignment(horizontal="left", vertical="center")
+    end_col = min(AXIS_COL + 5, last_col)
+    if end_col > AXIS_COL:
+        ws.merge_cells(start_row=row, start_column=AXIS_COL, end_row=row, end_column=end_col)
