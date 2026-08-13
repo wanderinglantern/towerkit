@@ -2,7 +2,18 @@
 
 Extracted from soi_xlsx.py so other tools (bookkit's open-items export)
 delegate formatting here instead of copying it. Same determinism contract:
-pinned workbook properties + epoch-rewritten archive → byte-identical runs."""
+pinned workbook properties + epoch-rewritten archive → byte-identical runs.
+
+Multi-sheet composition contract (PUBLIC API — consumed by this module's
+own schematic/SOI sheet writers and by bookkit's future multi-sheet
+open-items export): build a `Workbook()`, name and render each sheet with
+`render_table_sheet` (or another sheet-body writer such as
+`render_soi_sheet` / `add_schematic_sheet`) — the first sheet reuses
+`wb.active`, later ones come from `wb.create_sheet` — using
+`sanitize_sheet_title` for every sheet name, then call
+`finalize_workbook` exactly ONCE per workbook after all sheets are
+rendered. `write_table` is the single-sheet convenience wrapper over this
+same path."""
 
 from __future__ import annotations
 
@@ -18,6 +29,7 @@ from typing import Any
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
+from openpyxl.worksheet.worksheet import Worksheet
 
 from ..theme import Theme
 from .common import provenance
@@ -36,7 +48,7 @@ _ILLEGAL_SHEET_CHARS = re.compile(r"[\\/?*\[\]:]")
 _MULTI_SPACE = re.compile(r" {2,}")
 
 
-def _sanitize_sheet_title(title: str) -> str:
+def sanitize_sheet_title(title: str) -> str:
     """openpyxl raises ValueError for `/ \\ ? * [ ] :` in sheet titles and
     caps them at 31 chars. This is the authority for every write_table
     caller — sanitize here so no caller can crash on a client/program name
@@ -85,15 +97,17 @@ class TableSection:
     total: Any = None  # rendered in the last column of the label row
 
 
-def write_table(
+def render_table_sheet(
+    ws: Worksheet,
     columns: Sequence[TableColumn],
     sections: Sequence[TableSection],
     *,
-    title: str,
     theme: Theme,
-    out_path: Path,
     row_height: Callable[[tuple[Any, ...]], float] | None = None,
-) -> Path:
+) -> None:
+    """The styled sheet body — everything write_table does between naming
+    the sheet and pinning workbook properties, verbatim. Title is the
+    caller's job so a multi-sheet workbook can name each sheet itself."""
     soi = theme.soi
     ncols = len(columns)
     thin = Side(style="thin", color=_argb(soi.border))
@@ -104,9 +118,6 @@ def write_table(
     header_fill = PatternFill("solid", fgColor=_argb(soi.header_fill))
     band_fill = PatternFill("solid", fgColor=_argb(soi.band_fill))
 
-    wb = Workbook()
-    ws = wb.active
-    ws.title = _sanitize_sheet_title(title)
     for i, col in enumerate(columns, start=1):
         ws.column_dimensions[get_column_letter(i)].width = col.width
     for i, col in enumerate(columns, start=1):
@@ -160,13 +171,33 @@ def write_table(
                 ws.row_dimensions[row_ix].height = row_height(values)
             row_ix += 1
 
+
+def finalize_workbook(wb: Workbook, out_path: Path) -> Path:
+    """Pin properties and normalize the archive — call exactly ONCE per
+    workbook, after every sheet is rendered."""
     props = wb.properties
     props.creator = provenance()
     props.created = _PINNED
     props.modified = _PINNED
     props.lastModifiedBy = None
-
     buffer = BytesIO()
     wb.save(buffer)
     _normalize_zip(buffer.getvalue(), out_path)
     return out_path
+
+
+def write_table(
+    columns: Sequence[TableColumn],
+    sections: Sequence[TableSection],
+    *,
+    title: str,
+    theme: Theme,
+    out_path: Path,
+    row_height: Callable[[tuple[Any, ...]], float] | None = None,
+) -> Path:
+    wb = Workbook()
+    ws = wb.active
+    assert ws is not None
+    ws.title = sanitize_sheet_title(title)
+    render_table_sheet(ws, columns, sections, theme=theme, row_height=row_height)
+    return finalize_workbook(wb, out_path)
