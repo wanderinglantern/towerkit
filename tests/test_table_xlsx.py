@@ -101,3 +101,24 @@ def test_finalize_pins_modified_timestamp(theme, tmp_path: Path):
     with zipfile.ZipFile(path) as z:
         core = z.read("docProps/core.xml").decode()
     assert "1980-01-01T00:00:00Z</dcterms:modified>" in core
+
+
+def test_new_workbook_starts_multi_sheet_composition(theme, tmp_path: Path):
+    # bookkit cannot name openpyxl (convention-tested) nor re-import Workbook
+    # from this namespace (its strict mypy: no_implicit_reexport) — this
+    # factory is how convention-bound consumers start the multi-sheet flow.
+    from towerkit.render.table_xlsx import (
+        finalize_workbook,
+        new_workbook,
+        render_table_sheet,
+        sanitize_sheet_title,
+    )
+
+    wb = new_workbook()
+    ws = wb.active
+    ws.title = sanitize_sheet_title("One")
+    render_table_sheet(ws, COLS, SECTIONS, theme=theme)
+    ws2 = wb.create_sheet(sanitize_sheet_title("Two"))
+    render_table_sheet(ws2, COLS, SECTIONS, theme=theme)
+    path = finalize_workbook(wb, tmp_path / "multi.xlsx")
+    assert load_workbook(path).sheetnames == ["One", "Two"]

@@ -6,7 +6,8 @@ pinned workbook properties + epoch-rewritten archive → byte-identical runs.
 
 Multi-sheet composition contract (PUBLIC API — consumed by this module's
 own schematic/SOI sheet writers and by bookkit's future multi-sheet
-open-items export): build a `Workbook()`, name and render each sheet with
+open-items export): build a workbook (`new_workbook()`, or `Workbook()`
+directly), name and render each sheet with
 `render_table_sheet` (or another sheet-body writer such as
 `render_soi_sheet` / `add_schematic_sheet`) — the first sheet reuses
 `wb.active`, later ones come from `wb.create_sheet` — using
@@ -57,6 +58,16 @@ def sanitize_sheet_title(title: str) -> str:
     doubled spaces collapse, and the result is trimmed before the cap."""
     cleaned = _MULTI_SPACE.sub(" ", _ILLEGAL_SHEET_CHARS.sub(" ", title)).strip()
     return cleaned[:31].rstrip()
+
+
+def new_workbook() -> Workbook:
+    """Start a multi-sheet composition (see the module docstring's contract).
+
+    Exists so consumers that must not name openpyxl anywhere in their source
+    (bookkit convention-tests exactly that, and its strict mypy rejects
+    re-importing Workbook from this namespace as an implicit re-export) can
+    still obtain the Workbook. Everyone else may construct Workbook directly."""
+    return Workbook()
 
 
 def _normalize_zip(data: bytes, out_path: Path) -> None:
