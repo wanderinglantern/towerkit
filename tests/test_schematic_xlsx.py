@@ -242,8 +242,8 @@ class TestSchematicSheet:
         """Grant's Excel review (2026-08-13): the tower occupied roughly
         columns A-R and looked cramped. The sheet's total width — the fixed
         axis column plus every proportional tower column — must now fill
-        CANVAS_WIDTH_UNITS (~columns A-AM at Excel's default width), not
-        whatever a fixed per-unit rate happens to add up to."""
+        the full working width, not whatever a fixed per-unit rate happens
+        to add up to."""
         path = _write_schematic(program, marsh, tmp_path / "s.xlsx")
         ws = load_workbook(path)["Casualty Schematic"]
         layout, _, col_of = _grid(program)
@@ -253,6 +253,15 @@ class TestSchematicSheet:
             for x_lo in xs[:-1]
         )
         total = AXIS_WIDTH + tower_total
+        # Literal floor, independent of CANVAS_WIDTH_UNITS: pins Grant's
+        # actual intent (~columns A-AM, a total canvas of ~300-330 Excel
+        # width units) rather than merely checking the code's arithmetic is
+        # self-consistent. A regression back to the old cramped ~45-unit
+        # canvas (the pre-Task-10 fixed 10-units-per-line-width rate on this
+        # 3-column fixture) must fail this assertion.
+        assert total >= 250.0
+        # Secondary check: the module constant is actually honored, not just
+        # some other value >= the floor.
         assert abs(total - CANVAS_WIDTH_UNITS) < 1.0
 
 
