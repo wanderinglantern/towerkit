@@ -18,9 +18,9 @@
 set -eu
 cd "$(dirname "$0")"
 
-WHEELHOUSE_URL="https://github.com/wanderinglantern/towerkit/releases/download/v0.1.0/towerkit-wheelhouse-macos.zip"
+WHEELHOUSE_URL="https://github.com/wanderinglantern/towerkit/releases/download/v0.2.0/towerkit-wheelhouse-macos.zip"
 PY="${PYTHON:-python3}"
-WHEELHOUSE_SHA256="5d17d09750eb4c12202c0e8953342178d62461dadf07ef0d013e6ad50ae76c4b"
+WHEELHOUSE_SHA256="cc41531923a3aa9b38345af510b191458be4b4302830774ca9af1c4ff9f2808b"
 
 version=$("$PY" -c 'import sys; print("%d.%d" % sys.version_info[:2])')
 

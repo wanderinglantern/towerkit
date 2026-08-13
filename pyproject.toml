@@ -1,6 +1,6 @@
 [project]
 name = "towerkit"
-version = "0.1.0"
+version = "0.2.0"
 description = "Publication-quality schematic diagrams of corporate insurance programs, plus a TUI editor for the program files"
 readme = "README.md"
 requires-python = ">=3.11"
