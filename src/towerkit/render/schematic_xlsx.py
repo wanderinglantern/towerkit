@@ -10,7 +10,23 @@ render/labels.py — both shared with the graphic.
 Quantization is per-BOUNDARY, not per-block: every distinct edge float in
 the layout snaps to one integer row/column, and blocks look their edges up.
 Neighbours share bit-identical edge floats (layout.py's exactness rule), so
-merges tile with no gaps and no overlaps by construction."""
+merges tile with no gaps and no overlaps by construction.
+
+HYBRID deviation from pure proportionality (Task 9, Grant's Excel review):
+`quantize_boundaries` accepts `label_spans` — (y_lo, y_hi) pairs that carry
+rendered text, i.e. every layer's and retention's row band — and floors
+each to at least `row_floor` rows even when gamma-compressed
+proportionality alone would round it thinner (an extreme primary deep
+under a tall tower can still hit this after compression). The floor only
+pushes the span's upper boundary and everything strictly after it forward;
+it never reopens an earlier boundary, so tiling stays gap-free and
+overlap-free by construction — see `quantize_boundaries` for the mechanism.
+
+Narrow merges get a parallel hybrid: below `NARROW_MERGE_UNITS_PER_LINE`
+Excel-width-units per text line, `wrap_text` has nowhere good to break a
+word and degenerates toward one-character-per-line, so those cells switch
+to `shrink_to_fit` with a shorter label pulled from the labels.py compact
+ladder instead (see `_fit_label`)."""
 
 from __future__ import annotations
 
@@ -28,6 +44,7 @@ from ..scale import DEFAULT_GAMMA
 from ..theme import Chrome, Theme, contrast_text
 from .labels import (
     block_premium_label,
+    carrier_only_label,
     group_label,
     heading_blocks,
     layer_heading,
@@ -45,25 +62,77 @@ AXIS_WIDTH = 10.0
 FIRST_GRID_COL = 2
 TITLE_ROW, GROUP_ROW, LINE_ROW = 1, 2, 3
 FIRST_GRID_ROW = 4
+ROW_FLOOR = 2  # every labeled layer/retention row band gets at least this many
+# sheet rows, even when gamma-compressed proportionality alone rounds thinner
+# (the module docstring's "hybrid" deviation)
+
+# Below this many Excel width units per text LINE, Excel's wrap_text has no
+# good place to break a word and degenerates toward one-character-per-line
+# (Grant's Excel review). Derivation: X_CHARS_PER_UNIT already treats 1
+# Excel width unit ~= 1 character of the sheet's font, so 2.5 units is
+# "enough room for a short word or a percentage" per wrapped line — below
+# that, shrink_to_fit with a shorter label reads better than a wrap attempt.
+NARROW_MERGE_UNITS_PER_LINE = 2.5
+
+# LINE_ROW header text-line height estimate for the bold 9pt font used
+# there — same "characters ~= width units" heuristic as table_xlsx.py's
+# _row_height, not a precise font metric.
+HEADER_LINE_HEIGHT = 12.0
+HEADER_TWO_LINE_HEIGHT = 2 * HEADER_LINE_HEIGHT
 
 
 def quantize_boundaries(
-    ys: Sequence[float], total_rows: int = TOTAL_ROWS
+    ys: Sequence[float],
+    total_rows: int = TOTAL_ROWS,
+    *,
+    label_spans: Sequence[tuple[float, float]] = (),
+    row_floor: int = ROW_FLOOR,
 ) -> dict[float, int]:
     """Each distinct boundary → an integer row index, proportional over the
     full span, strictly increasing (the spec's ceil/min-1 floor: gamma
-    compression already keeps small layers visible, so bumps are rare)."""
+    compression already keeps small layers visible, so bumps are rare).
+
+    `label_spans` names (y_lo, y_hi) pairs — every layer's and retention's
+    row band — that carry rendered text: each is additionally floored to
+    `rows[y_hi] - rows[y_lo] >= row_floor`, on top of the strict-monotonic
+    1-row floor every boundary already gets. The bump only pushes y_hi (and,
+    via the running `prev`, everything strictly after it) forward — it never
+    revisits an earlier boundary — so adjacent spans still tile with no gaps
+    and no overlaps by construction (the module docstring's "hybrid" case)."""
     distinct = sorted(set(ys))
     if len(distinct) < 2:
         return dict.fromkeys(distinct, 0)
     lo, span = distinct[0], distinct[-1] - distinct[0]
+    floors_ending_at: dict[float, list[float]] = {}
+    for y_lo, y_hi in label_spans:
+        floors_ending_at.setdefault(y_hi, []).append(y_lo)
     out: dict[float, int] = {}
     prev = -1
     for y in distinct:
         row = max(round((y - lo) / span * total_rows), prev + 1)
+        for y_lo in floors_ending_at.get(y, ()):
+            if y_lo in out:
+                row = max(row, out[y_lo] + row_floor)
         out[y] = row
         prev = row
     return out
+
+
+def _label_spans(layout: TowerLayout) -> list[tuple[float, float]]:
+    """Every row band that will actually carry rendered text, for
+    `quantize_boundaries`'s row floor: each participant block's ANCHOR rect
+    (the one add_schematic_sheet writes text into) and each retention's
+    first rect. Deliberately NOT LayerBlock.y0/y1 — a follows-underlying
+    layer's outline is only nominally that tall; its stepped-bottom runs
+    (what's actually drawn) can be a fraction of it, and that's exactly the
+    thin case the floor exists for."""
+    spans = []
+    for block in layout.participants:
+        anchor = max(block.rects, key=lambda r: r.width, default=None)
+        if anchor is not None:
+            spans.append((anchor.y0, anchor.y1))
+    spans.extend((ret.rects[0].y0, ret.rects[0].y1) for ret in layout.retentions if ret.rects)
+    return spans
 
 
 def x_boundaries(layout: TowerLayout) -> tuple[float, ...]:
@@ -132,7 +201,7 @@ def add_schematic_sheet(
     ws.sheet_view.showGridLines = False
 
     xs = x_boundaries(layout)
-    rows = quantize_boundaries(y_boundaries(layout))
+    rows = quantize_boundaries(y_boundaries(layout), label_spans=_label_spans(layout))
     top = max(rows.values())
     if len(xs) < 2 or top == 0:  # draft with no drawable tower: title only
         _title(ws, program, chrome, last_col=AXIS_COL)
@@ -192,13 +261,20 @@ def add_schematic_sheet(
             text_colour = contrast_text(face, chrome.background, chrome.ink)
             edge = Side(style="thin", color=_argb(chrome.background))
         anchor_rect = max(block.rects, key=lambda r: r.width, default=None)
+        if block.carrier is not None and anchor_rect is not None:
+            anchor_text, shrink = _fit_label(
+                lines, anchor_rect.width * X_CHARS_PER_UNIT, block.carrier, block.share_bps
+            )
+        else:
+            anchor_text, shrink = "\n".join(lines), False
         for rect in block.rects:
             _block(
                 ws, rect, rows, col_of,
-                text="\n".join(lines) if rect is anchor_rect else "",
+                text=anchor_text if rect is anchor_rect else "",
                 fill=fill,
                 border=Border(left=edge, right=edge, top=edge, bottom=edge),
                 font=Font(name=chrome.font, size=8, color=_argb(text_colour)),
+                shrink=shrink if rect is anchor_rect else False,
             )
 
     for retention in layout.retentions:
@@ -218,6 +294,31 @@ def add_schematic_sheet(
             )
 
 
+def _fit_label(
+    lines: list[str], width: float, carrier: str, share_bps: int
+) -> tuple[str, bool]:
+    """Pick the text and alignment for a participant block's anchor cell.
+    Below NARROW_MERGE_UNITS_PER_LINE per line, wrap_text degenerates (see
+    the module docstring); switch to shrink_to_fit and climb DOWN the
+    labels.py compact ladder — this block's full stacked lines, then just
+    'Carrier share%', then the carrier name alone, then blank (the fill
+    colour still carries the share) — stopping at the first that fits."""
+
+    def fits(candidate: list[str]) -> bool:
+        return width >= NARROW_MERGE_UNITS_PER_LINE * max(len(candidate), 1)
+
+    if fits(lines):
+        return "\n".join(lines), False
+    for candidate in (
+        [participant_label(carrier, share_bps)],
+        [carrier_only_label(carrier)],
+        [],
+    ):
+        if not candidate or fits(candidate):
+            return "\n".join(candidate), True
+    return "", True  # unreachable: [] always fits
+
+
 def _block(
     ws: Worksheet,
     rect: Rect,
@@ -228,6 +329,7 @@ def _block(
     fill: PatternFill | None,
     border: Border,
     font: Font,
+    shrink: bool = False,
 ) -> None:
     """One rect → one merged range. MUST merge BEFORE styling non-anchor
     cells: openpyxl's merge_cells() replaces every non-anchor cell with a
@@ -240,7 +342,11 @@ def _block(
         ws.merge_cells(start_row=r0, start_column=c0, end_row=r1, end_column=c1)
     anchor = ws.cell(row=r0, column=c0, value=text or None)
     anchor.font = font
-    anchor.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    anchor.alignment = (
+        Alignment(horizontal="center", vertical="center", shrink_to_fit=True)
+        if shrink
+        else Alignment(horizontal="center", vertical="center", wrap_text=True)
+    )
     for r in range(r0, r1 + 1):
         for c in range(c0, c1 + 1):
             cell = ws.cell(row=r, column=c)
@@ -273,28 +379,40 @@ def _headers(
     ws: Worksheet, layout: TowerLayout, chrome: Chrome, col_of: dict[float, int]
 ) -> None:
     """Group bands above, line names under them (the spec's header order —
-    the graphic puts both below the tower, a chart-only convention)."""
+    the graphic puts both below the tower, a chart-only convention).
+
+    Both loops MUST merge before per-cell styling — same rule and same fix
+    as `_block` (Task 4's fill loss, Task 9's follow-up: a band spanning 3+
+    columns loses its bottom accent border the same way if styled first)."""
     accent = Side(style="medium", color=_argb(chrome.accent))
     for band in layout.groups:
         c0, c1 = col_of[band.x0], col_of[band.x1] - 1
+        if c1 > c0:
+            ws.merge_cells(
+                start_row=GROUP_ROW, start_column=c0, end_row=GROUP_ROW, end_column=c1
+            )
         cell = ws.cell(row=GROUP_ROW, column=c0, value=group_label(band))
         cell.font = Font(name=chrome.font, size=8, color=_argb(chrome.accent))
         cell.alignment = Alignment(horizontal="center", vertical="center")
         for c in range(c0, c1 + 1):
             ws.cell(row=GROUP_ROW, column=c).border = Border(bottom=accent)
-        if c1 > c0:
-            ws.merge_cells(
-                start_row=GROUP_ROW, start_column=c0, end_row=GROUP_ROW, end_column=c1
-            )
+
+    wraps = False
     for column in layout.columns:
         c0, c1 = col_of[column.ex0], col_of[column.ex1] - 1
-        cell = ws.cell(row=LINE_ROW, column=c0, value=column.name)
-        cell.font = Font(name=chrome.font, size=9, bold=True, color=_argb(chrome.ink))
-        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
         if c1 > c0:
             ws.merge_cells(
                 start_row=LINE_ROW, start_column=c0, end_row=LINE_ROW, end_column=c1
             )
+        cell = ws.cell(row=LINE_ROW, column=c0, value=column.name)
+        cell.font = Font(name=chrome.font, size=9, bold=True, color=_argb(chrome.ink))
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        width = (column.ex1 - column.ex0) * X_CHARS_PER_UNIT
+        if len(column.name) > width:  # never fits on one wrapped line: grow the row
+            wraps = True
+    if wraps:
+        current = ws.row_dimensions[LINE_ROW].height or 0.0
+        ws.row_dimensions[LINE_ROW].height = max(current, HEADER_TWO_LINE_HEIGHT)
 
 
 def _axis(

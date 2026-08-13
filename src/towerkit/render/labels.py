@@ -31,6 +31,13 @@ def participant_label(carrier: str, share_bps: int) -> str:
     return f"{carrier} {format_share(share_bps)}"
 
 
+def carrier_only_label(carrier: str) -> str:
+    """Narrowest non-empty fallback for a share-split cell too tight even for
+    'Carrier share%' (schematic_xlsx's narrow-merge ladder): the fill colour
+    still carries which share this is, the label just names who holds it."""
+    return carrier
+
+
 def unplaced_label(share_bps: int, pending: bool) -> str:
     """Pending layer (nothing signed): 'To be placed'. Partially-open
     remainder: the open share."""

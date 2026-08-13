@@ -12,16 +12,21 @@ from test_soi import make_program
 
 from towerkit.layout import build_layout
 from towerkit.model import Layer, Line, Participant, Period, Placement, Program
+from towerkit.render.labels import participant_label
 from towerkit.render.schematic_xlsx import (
     FIRST_GRID_COL,  # noqa: F401 -- import-existence is part of the interface contract
     FIRST_GRID_ROW,
+    GROUP_ROW,
+    HEADER_TWO_LINE_HEIGHT,
+    LINE_ROW,
+    _label_spans,
     add_schematic_sheet,
     quantize_boundaries,
     sheet_rows,
     x_boundaries,
     y_boundaries,
 )
-from towerkit.render.table_xlsx import finalize_workbook
+from towerkit.render.table_xlsx import _argb, finalize_workbook
 from towerkit.theme import load_theme
 
 REPO = Path(__file__).parent.parent
@@ -101,7 +106,7 @@ def _write_schematic(program, theme, path: Path) -> Path:
 
 def _grid(program):
     layout = build_layout(program)
-    rows = quantize_boundaries(y_boundaries(layout))
+    rows = quantize_boundaries(y_boundaries(layout), label_spans=_label_spans(layout))
     xs = x_boundaries(layout)
     col_of = {x: FIRST_GRID_COL + i for i, x in enumerate(xs)}
     return layout, rows, col_of
@@ -122,6 +127,26 @@ def _fill_hex(xlsx_path: Path, sheet_xml: str, cell_ref: str) -> str | None:
     for cell in sheet.iter(f"{_SML_NS}c"):
         if cell.get("r") == cell_ref:
             return fills[fill_ids[int(cell.get("s", "0"))]]
+    return None
+
+
+def _bottom_border_hex(xlsx_path: Path, sheet_xml: str, cell_ref: str) -> str | None:
+    """ARGB colour of a cell's bottom border edge, read from the saved XML —
+    same styles.xml-reading technique as `_fill_hex`, needed for the same
+    reason: openpyxl won't report style on non-anchor merged cells once the
+    file is reloaded."""
+    with zipfile.ZipFile(xlsx_path) as z:
+        styles = ET.fromstring(z.read("xl/styles.xml"))
+        sheet = ET.fromstring(z.read(f"xl/worksheets/{sheet_xml}"))
+    borders = []
+    for border in styles.find(f"{_SML_NS}borders"):
+        bottom = border.find(f"{_SML_NS}bottom")
+        colour = bottom.find(f"{_SML_NS}color") if bottom is not None else None
+        borders.append(colour.get("rgb") if colour is not None else None)
+    border_ids = [int(xf.get("borderId", "0")) for xf in styles.find(f"{_SML_NS}cellXfs")]
+    for cell in sheet.iter(f"{_SML_NS}c"):
+        if cell.get("r") == cell_ref:
+            return borders[border_ids[int(cell.get("s", "0"))]]
     return None
 
 
@@ -210,3 +235,221 @@ class TestSchematicSheet:
         a = _write_schematic(program, marsh, tmp_path / "a.xlsx")
         b = _write_schematic(program, marsh, tmp_path / "b.xlsx")
         assert a.read_bytes() == b.read_bytes()
+
+
+# Task 9: visual parity polish (Grant's Excel review) — theme colours, header
+# wrap, narrow-merge fitting, the row floor, and the group-band border fix.
+
+
+def _long_header_program() -> Program:
+    """A single narrow column whose line name cannot fit one wrapped line at
+    the column's width — line headers must never clip (requirement 2)."""
+    return Program(
+        insured="T", program="T", placement=Placement.BOUND,
+        period=Period(start=date(2026, 1, 1), end=date(2027, 1, 1)),
+        lines=[Line(id="x", name="Excess Casualty Following Form Umbrella")],
+        layers=[
+            Layer(id="p", name="Primary", applies_to=["x"], attach=0, limit=1_000_000,
+                  participants=[Participant(carrier="A", share_bps=10_000)]),
+        ],
+    )
+
+
+def _narrow_split_program() -> Program:
+    """Grant's Property tower case: a 3-way ~33.33% split on one line column
+    (10 Excel width units / 3 ≈ 3.33 units per sub-merge — below the
+    threshold for a 2- or 3-line label, requirement 3)."""
+    return Program(
+        insured="T", program="Property", placement=Placement.BOUND,
+        period=Period(start=date(2026, 1, 1), end=date(2027, 1, 1)),
+        lines=[Line(id="prop", name="Property")],
+        layers=[
+            Layer(id="p", name="Primary", applies_to=["prop"], attach=0,
+                  limit=9_000_000, premium=90_000,
+                  participants=[
+                      Participant(carrier="Alpha", share_bps=3_333),
+                      Participant(carrier="Beta", share_bps=3_333),
+                      Participant(carrier="Gamma", share_bps=3_334),
+                  ]),
+        ],
+    )
+
+
+def _three_column_group_program() -> Program:
+    """Three lines sharing one group bucket — a GROUP_ROW band spanning 3
+    columns, whose interior (non-edge) column is where the pre-fix merge-
+    before-style bug loses the bottom accent border (requirement 5)."""
+    return Program(
+        insured="T", program="T", placement=Placement.BOUND,
+        period=Period(start=date(2026, 1, 1), end=date(2027, 1, 1)),
+        lines=[
+            Line(id="gl", name="General Liability", group="Casualty"),
+            Line(id="al", name="Auto Liability", group="Casualty"),
+            Line(id="el", name="Employers Liability", group="Casualty"),
+        ],
+        layers=[
+            Layer(id="p", name="Primary", applies_to=["gl", "al", "el"], attach=0,
+                  limit=3_000_000,
+                  participants=[Participant(carrier="A", share_bps=10_000)]),
+        ],
+    )
+
+
+class TestVisualPolish:
+    def test_every_participant_fill_matches_the_shared_colour_authority(
+        self, program, marsh, tmp_path
+    ):
+        """Theme parity: every participant block's fill must equal marsh's
+        theme.carrier_colours assignment — the SAME authority the graphic
+        (mpl_program) draws from — not a hardcoded hex and not a colour
+        re-derived independently by the schematic."""
+        path = _write_schematic(program, marsh, tmp_path / "s.xlsx")
+        layout, rows, col_of = _grid(program)
+        expected = marsh.carrier_colours(program.carriers())
+        checked = 0
+        for block in layout.participants:
+            if block.carrier is None:
+                continue
+            anchor_rect = max(block.rects, key=lambda r: r.width)
+            r0, _ = sheet_rows(rows, anchor_rect.y0, anchor_rect.y1)
+            ref = f"{get_column_letter(col_of[anchor_rect.x0])}{r0}"
+            actual = _fill_hex(path, "sheet2.xml", ref)
+            assert actual == _argb(expected[block.carrier])
+            checked += 1
+        assert checked >= 5  # make_program's fixture covers 5 participant blocks
+
+    def test_line_header_wraps_get_a_two_line_row_height(self, marsh, tmp_path):
+        program = _long_header_program()
+        path = _write_schematic(program, marsh, tmp_path / "s.xlsx")
+        ws = load_workbook(path)["T Schematic"]
+        anchor = ws.cell(row=LINE_ROW, column=FIRST_GRID_COL)
+        assert anchor.alignment.wrap_text is True
+        assert ws.row_dimensions[LINE_ROW].height >= HEADER_TWO_LINE_HEIGHT
+
+    def test_narrow_share_split_merges_fall_back_to_compact_labels(
+        self, marsh, tmp_path
+    ):
+        program = _narrow_split_program()
+        path = _write_schematic(program, marsh, tmp_path / "s.xlsx")
+        ws = load_workbook(path)["Property Schematic"]
+        layout, rows, col_of = _grid(program)
+        expected = {
+            participant_label(carrier, share_bps)
+            for carrier, share_bps in (("Alpha", 3_333), ("Beta", 3_333), ("Gamma", 3_334))
+        }
+        texts = set()
+        for block in layout.participants:
+            anchor_rect = max(block.rects, key=lambda r: r.width)
+            r0, _ = sheet_rows(rows, anchor_rect.y0, anchor_rect.y1)
+            c0 = col_of[anchor_rect.x0]
+            cell = ws.cell(row=r0, column=c0)
+            texts.add(cell.value)
+            assert cell.alignment.shrink_to_fit is True
+            assert cell.alignment.wrap_text is not True
+        # no block below the threshold shows more than the compact
+        # "Carrier share%" line — the layer heading never survives it
+        assert texts == expected
+        assert all("\n" not in (t or "") for t in texts)
+        assert not any(" — " in (t or "") for t in texts)
+
+    def test_thin_labeled_layer_gets_the_row_floor(self, tmp_path):
+        """Isolates the quantization floor from gamma's own compression
+        assist: a $2M primary under a realistic $100M tower is ALREADY kept
+        comfortably visible by gamma compression alone (span 20 rows under
+        DEFAULT_GAMMA) — this fixture uses a far more extreme ratio ($2K
+        under a ~$1B tower) so the pre-fix span genuinely collapses to a
+        single row, proving the floor itself, not gamma, does the work."""
+        theme = load_theme(None)
+        program = Program(
+            insured="T", program="T", placement=Placement.BOUND,
+            period=Period(start=date(2026, 1, 1), end=date(2027, 1, 1)),
+            lines=[Line(id="gl", name="General Liability")],
+            layers=[
+                Layer(id="p", name="Primary", applies_to=["gl"], attach=0,
+                      limit=2_000, premium=100,
+                      participants=[Participant(carrier="A", share_bps=10_000)]),
+                Layer(id="x", name="Excess", applies_to=["gl"], attach=2_000,
+                      limit=999_998_000, premium=500_000,
+                      participants=[Participant(carrier="B", share_bps=10_000)]),
+            ],
+        )
+        path = _write_schematic(program, theme, tmp_path / "s.xlsx")
+        layout, rows, col_of = _grid(program)
+        primary = next(ly for ly in layout.layers if ly.layer_id == "p")
+        r0, r1 = sheet_rows(rows, primary.y0, primary.y1)
+        assert r1 - r0 + 1 >= 2
+
+        # not narrow in x (a full 1.0-wide column): the label stays wrapped,
+        # not shrunk — the row floor and the narrow-merge fix are orthogonal
+        ws = load_workbook(path)["T Schematic"]
+        anchor = ws.cell(row=r0, column=col_of[layout.columns[0].ex0])
+        assert anchor.alignment.wrap_text is True
+        assert anchor.alignment.shrink_to_fit is not True
+
+    def test_row_floor_reaches_a_stepped_follows_underlying_run(self, tmp_path):
+        """A follows-underlying layer's LayerBlock.y0/y1 is only nominally
+        the layer's full height — its stepped-bottom runs (what's actually
+        drawn, one per underlying column) can each be a thin fraction of
+        that. Two GL columns with a near-total underlying give the umbrella
+        a wide-but-y-thin stepped run there; a third Property column with a
+        small underlying gives it a narrow-but-y-tall run elsewhere — so the
+        wide (anchor-winning) run is also the thin one, exactly the case a
+        nominal-layer-span floor would miss and a per-rendered-rect floor
+        catches."""
+        theme = load_theme(None)
+        program = Program(
+            insured="T", program="T", placement=Placement.BOUND,
+            period=Period(start=date(2026, 1, 1), end=date(2027, 1, 1)),
+            lines=[Line(id="gl1", name="GL1"), Line(id="gl2", name="GL2"),
+                   Line(id="prop", name="Prop")],
+            layers=[
+                Layer(id="gl1-p", name="GL1 Primary", applies_to=["gl1"], attach=0,
+                      limit=999_998_000,
+                      participants=[Participant(carrier="A", share_bps=10_000)]),
+                Layer(id="gl2-p", name="GL2 Primary", applies_to=["gl2"], attach=0,
+                      limit=999_998_000,
+                      participants=[Participant(carrier="A", share_bps=10_000)]),
+                Layer(id="prop-p", name="Prop Primary", applies_to=["prop"], attach=0,
+                      limit=1_000_000,
+                      participants=[Participant(carrier="B", share_bps=10_000)]),
+                Layer(id="umb", name="Umbrella", applies_to=["gl1", "gl2", "prop"],
+                      attach=0, limit=1_000_000_000, follows_underlying=True,
+                      participants=[Participant(carrier="C", share_bps=10_000)]),
+            ],
+        )
+        path = _write_schematic(program, theme, tmp_path / "s.xlsx")
+        layout, rows, col_of = _grid(program)
+        block = next(b for b in layout.participants if b.layer_id == "umb")
+        anchor_rect = max(block.rects, key=lambda r: r.width)
+        assert anchor_rect.x1 - anchor_rect.x0 > 1.125  # the wide GL1+GL2 run won
+        r0, r1 = sheet_rows(rows, anchor_rect.y0, anchor_rect.y1)
+        assert r1 - r0 + 1 >= 2
+
+        ws = load_workbook(path)["T Schematic"]
+        anchor = ws.cell(row=r0, column=col_of[anchor_rect.x0])
+        assert anchor.value  # the anchor rect really is the one carrying text
+
+    def test_quantize_boundaries_floors_a_labeled_span_to_two_rows(self):
+        """Pure-function proof of the floor mechanism, same style as
+        TestQuantizeBoundaries above: without label_spans, y=0.001 gets the
+        existing 1-row strict-monotonic floor; with a label_spans entry
+        naming (0.0, 0.001), it must additionally clear row_floor rows."""
+        bare = quantize_boundaries([0.0, 0.001, 1.0], total_rows=100)
+        assert bare[0.001] - bare[0.0] == 1
+
+        floored = quantize_boundaries(
+            [0.0, 0.001, 1.0], total_rows=100, label_spans=[(0.0, 0.001)],
+        )
+        assert floored[0.001] - floored[0.0] >= 2
+
+    def test_group_band_bottom_border_survives_a_three_column_span(self, tmp_path):
+        theme = load_theme(None)
+        program = _three_column_group_program()
+        path = _write_schematic(program, theme, tmp_path / "s.xlsx")
+        layout, _, col_of = _grid(program)
+        band = next(b for b in layout.groups if b.label == "Casualty")
+        c0, c1 = col_of[band.x0], col_of[band.x1] - 1
+        assert c1 - c0 == 2  # a genuine 3-column band, not the 2-column case
+        interior = c0 + 1
+        ref = f"{get_column_letter(interior)}{GROUP_ROW}"
+        assert _bottom_border_hex(path, "sheet2.xml", ref) == _argb(theme.chrome.accent)

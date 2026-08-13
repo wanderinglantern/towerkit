@@ -228,7 +228,7 @@ class TestWorkbookOrchestration:
 # Content golden WITH the schematic sheet (same core.xml-exclusion mechanism
 # as GOLDEN_SHA above; same regeneration rule — deliberate change or
 # openpyxl bump only, never to make a refactor pass).
-SCHEMATIC_GOLDEN_SHA = "be31d1f3892b301575b62dd133d757a40cea373739263791449c79b038533ef9"
+SCHEMATIC_GOLDEN_SHA = "7635464efd6a6afa0cf46b523f92ff7bbd846b36bb7279e0c4bd825d4ce0152b"
 
 
 def test_schematic_golden_content(program, theme, tmp_path):
