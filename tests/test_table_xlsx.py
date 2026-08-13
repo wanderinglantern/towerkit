@@ -47,3 +47,20 @@ def test_row_height_hook(theme, tmp_path: Path):
     )
     ws = load_workbook(path).active
     assert ws.row_dimensions[3].height == 44.0
+
+
+def test_title_sanitized_for_illegal_sheet_chars(theme, tmp_path: Path):
+    # openpyxl raises ValueError for / \ ? * [ ] : in a sheet title —
+    # write_table is the authority, so no caller can crash on a name like
+    # "A/B Partners". This must not raise, and the surviving title must
+    # still be recognizably the client name.
+    path = write_table(
+        COLS, SECTIONS, title="A/B [test]: weird?", theme=theme,
+        out_path=tmp_path / "sanitized.xlsx",
+    )
+    wb = load_workbook(path)
+    title = wb.active.title
+    assert title == "A B test weird"
+    for char in "/\\?*[]:":
+        assert char not in title
+    assert len(title) <= 31

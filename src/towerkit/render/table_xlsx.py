@@ -32,6 +32,20 @@ def _argb(hex_colour: str) -> str:
 _PINNED_W3CDTF = b"1980-01-01T00:00:00Z"
 _MODIFIED_RE = re.compile(rb"(<dcterms:modified[^>]*>)[^<]*(</dcterms:modified>)")
 
+_ILLEGAL_SHEET_CHARS = re.compile(r"[\\/?*\[\]:]")
+_MULTI_SPACE = re.compile(r" {2,}")
+
+
+def _sanitize_sheet_title(title: str) -> str:
+    """openpyxl raises ValueError for `/ \\ ? * [ ] :` in sheet titles and
+    caps them at 31 chars. This is the authority for every write_table
+    caller — sanitize here so no caller can crash on a client/program name
+    that happens to contain one of these (e.g. "A/B Partners"). Illegal
+    characters become a space (not dropped, so words don't collide),
+    doubled spaces collapse, and the result is trimmed before the cap."""
+    cleaned = _MULTI_SPACE.sub(" ", _ILLEGAL_SHEET_CHARS.sub(" ", title)).strip()
+    return cleaned[:31].rstrip()
+
 
 def _normalize_zip(data: bytes, out_path: Path) -> None:
     """Rewrite the archive with epoch timestamps and fixed compression so
@@ -92,7 +106,7 @@ def write_table(
 
     wb = Workbook()
     ws = wb.active
-    ws.title = title
+    ws.title = _sanitize_sheet_title(title)
     for i, col in enumerate(columns, start=1):
         ws.column_dimensions[get_column_letter(i)].width = col.width
     for i, col in enumerate(columns, start=1):
