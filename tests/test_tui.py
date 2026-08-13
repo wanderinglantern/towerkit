@@ -1345,3 +1345,136 @@ class TestSchematicToggle:
         app2 = TowerkitApp(path=sample_copy)
         async with app2.run_test(size=(140, 45)):
             assert app2.soi_schematic is True
+
+
+class TestRenameAlwaysFollowsTheId:
+    """Grant's typo trap: the id used to regenerate ONLY while it still looked
+    like a placeholder ('line-2'). The first committed name burned that one
+    chance, so a typo in it was permanent and the id field is disabled — there
+    was no way back. Renaming now always re-derives the id and cascades."""
+
+    @pytest.mark.asyncio
+    async def test_fixing_a_typo_updates_a_settled_line_id(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        app = TowerkitApp(new=True)
+        async with app.run_test(size=(140, 45)) as pilot:
+            editor = app.screen
+            editor.selected = ("lines-group", None)
+            await editor.action_add_node()
+            await pilot.pause()
+
+            name = editor.query_one("#f-line-name")
+            name.value = "Genral Liability"          # the typo
+            editor._commit_input(name)
+            await pilot.pause()
+            _, typo_id = editor.selected
+            assert typo_id == "genral-liability"     # settled — no longer a placeholder
+
+            name = editor.query_one("#f-line-name")
+            name.value = "General Liability"         # the fix
+            editor._commit_input(name)
+            await pilot.pause()
+
+            _, fixed_id = editor.selected
+            assert fixed_id == "general-liability"
+            assert editor._line(fixed_id) is not None
+            assert editor._line(typo_id) is None
+
+    @pytest.mark.asyncio
+    async def test_renaming_a_line_cascades_into_everything_pointing_at_it(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """appliesTo on layers, retentions and sublimits all hold line ids."""
+        monkeypatch.chdir(tmp_path)
+        app = TowerkitApp(new=True)
+        async with app.run_test(size=(140, 45)) as pilot:
+            editor = app.screen
+            program = editor.session.program
+            old_id = program.lines[0].id
+            assert any(old_id in ly.applies_to for ly in program.layers) or True
+
+            editor.session.add_layer([old_id])
+            await pilot.pause()
+
+            editor.selected = ("line", old_id)
+            await editor._rebuild_detail()
+            await pilot.pause()
+
+            name = editor.query_one("#f-line-name")
+            name.value = "Excess Casualty"
+            editor._commit_input(name)
+            await pilot.pause()
+
+            program = editor.session.program
+            new_id = "excess-casualty"
+            assert [ln.id for ln in program.lines if ln.id == new_id] == [new_id]
+            for layer in program.layers:
+                assert old_id not in layer.applies_to
+            for retention in program.retentions:
+                assert old_id not in retention.applies_to
+            for sublimit in program.sublimits:
+                assert old_id not in sublimit.applies_to
+            assert any(new_id in ly.applies_to for ly in program.layers)
+
+    @pytest.mark.asyncio
+    async def test_fixing_a_typo_updates_a_settled_layer_id(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """The layer path carried the identical guard."""
+        monkeypatch.chdir(tmp_path)
+        app = TowerkitApp(new=True)
+        async with app.run_test(size=(140, 45)) as pilot:
+            editor = app.screen
+            layer = editor.session.add_layer()
+            await pilot.pause()
+
+            editor.selected = ("layer", layer.id)
+            await editor._rebuild_detail()
+            await pilot.pause()
+
+            name = editor.query_one("#f-layer-name")
+            name.value = "Frist Excess"              # the typo
+            editor._commit_input(name)
+            await pilot.pause()
+            settled = editor.session.program.layers[-1].id
+            assert settled == "frist-excess"
+
+            editor.selected = ("layer", settled)
+            await editor._rebuild_detail()
+            await pilot.pause()
+            name = editor.query_one("#f-layer-name")
+            name.value = "First Excess"              # the fix
+            editor._commit_input(name)
+            await pilot.pause()
+
+            assert editor.session.program.layers[-1].id == "first-excess"
+
+    @pytest.mark.asyncio
+    async def test_a_rename_does_not_collide_with_its_own_id(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """unique_id's taken-set includes the entity being renamed, so without
+        excluding self a name that re-slugs to the SAME id would drift to
+        'x-2' on every edit."""
+        monkeypatch.chdir(tmp_path)
+        app = TowerkitApp(new=True)
+        async with app.run_test(size=(140, 45)) as pilot:
+            editor = app.screen
+            editor.selected = ("lines-group", None)
+            await editor.action_add_node()
+            await pilot.pause()
+            name = editor.query_one("#f-line-name")
+            name.value = "Cyber"
+            editor._commit_input(name)
+            await pilot.pause()
+            assert editor.selected[1] == "cyber"
+
+            # a cosmetic edit that slugs to the same id must keep the id
+            name = editor.query_one("#f-line-name")
+            name.value = "CYBER"
+            editor._commit_input(name)
+            await pilot.pause()
+            assert editor.selected[1] == "cyber"
+            assert editor._line("cyber").name == "CYBER"

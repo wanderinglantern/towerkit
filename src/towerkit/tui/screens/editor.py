@@ -59,7 +59,7 @@ from ...money import (
 )
 from ...theme import load_theme
 from ...validate import Diagnostic
-from ..session import PLACEHOLDER_ID, EditSession, slugify
+from ..session import EditSession, slugify
 from ..theme import (
     AMBER,
     DIM,
@@ -1007,8 +1007,11 @@ class EditorScreen(Screen):
 
                 def rename(p: Program) -> None:
                     layer.name = value
-                    if PLACEHOLDER_ID.match(layer.id):
-                        layer.id = self.session.unique_id(slugify(value))
+                    # Same rule as lines: the id follows the name rather than
+                    # freezing after the first commit. Nothing in the file
+                    # points at a layer id — appliesTo always holds LINE ids —
+                    # so there is nothing to cascade here.
+                    layer.id = self.session.unique_id(slugify(value), exclude=layer.id)
 
                 self._mutate_and_refresh(rename)
                 if self.selected == ("layer", event.row_key):
@@ -1175,25 +1178,31 @@ class EditorScreen(Screen):
             return
         value = widget.value.strip()
         if widget.id == "f-line-name" and value and value != line.name:
-            if PLACEHOLDER_ID.match(line.id):
-                # auto-generate the id from the name, cascading references
-                old, new_id = line.id, self.session.unique_id(slugify(value))
+            # The id ALWAYS follows the name, cascading every reference. This
+            # used to be gated on the id still looking like a placeholder
+            # ("line-2"), which meant the first committed name burned the one
+            # chance to set it — a typo in that name was then permanent, and
+            # the id field is deliberately not editable. appliesTo on layers,
+            # retentions and sublimits is the complete set of things in the
+            # file holding a line id (model.py:94/115/126).
+            old = line.id
+            new_id = self.session.unique_id(slugify(value), exclude=old)
 
-                def rename_line(p: Program) -> None:
-                    line.name = value
-                    line.id = new_id
-                    for ly in p.layers:
-                        ly.applies_to = [new_id if x == old else x for x in ly.applies_to]
-                    for r in p.retentions:
-                        r.applies_to = [new_id if x == old else x for x in r.applies_to]
-                    for s in p.sublimits:
-                        s.applies_to = [new_id if x == old else x for x in s.applies_to]
+            def rename_line(p: Program) -> None:
+                line.name = value
+                line.id = new_id
+                if new_id == old:  # cosmetic edit, same slug — nothing to cascade
+                    return
+                for ly in p.layers:
+                    ly.applies_to = [new_id if x == old else x for x in ly.applies_to]
+                for r in p.retentions:
+                    r.applies_to = [new_id if x == old else x for x in r.applies_to]
+                for s in p.sublimits:
+                    s.applies_to = [new_id if x == old else x for x in s.applies_to]
 
-                self._mutate_and_refresh(rename_line)
-                self.selected = ("line", new_id)
-                self._select_tree_node(self.selected)
-            else:
-                self._mutate_and_refresh(lambda p: setattr(line, "name", value))
+            self._mutate_and_refresh(rename_line)
+            self.selected = ("line", new_id)
+            self._select_tree_node(self.selected)
         elif widget.id == "f-line-abbr":
             self._mutate_and_refresh(lambda p: setattr(line, "abbr", value or None))
         elif widget.id == "f-line-group":
@@ -1210,8 +1219,11 @@ class EditorScreen(Screen):
             if value and value != layer.name:
                 def rename(p: Program) -> None:
                     layer.name = value
-                    if PLACEHOLDER_ID.match(layer.id):
-                        layer.id = self.session.unique_id(slugify(value))
+                    # Same rule as lines: the id follows the name rather than
+                    # freezing after the first commit. Nothing in the file
+                    # points at a layer id — appliesTo always holds LINE ids —
+                    # so there is nothing to cascade here.
+                    layer.id = self.session.unique_id(slugify(value), exclude=layer.id)
 
                 self._mutate_and_refresh(rename)
                 self.selected = ("layer", layer.id)

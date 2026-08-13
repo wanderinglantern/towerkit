@@ -40,9 +40,6 @@ def blank_program() -> Program:
     )
 
 
-PLACEHOLDER_ID = re.compile(r"^(layer|line|retention|sublimit)(-\d+)?$")
-
-
 def ordinal(n: int) -> str:
     if 10 <= n % 100 <= 20:
         suffix = "th"
@@ -137,10 +134,15 @@ class EditSession:
 
     # -- structural edits used by the editor ---------------------------------
 
-    def unique_id(self, prefix: str) -> str:
+    def unique_id(self, prefix: str, exclude: str | None = None) -> str:
+        """`exclude` is the id of the thing being renamed. Without it a
+        cosmetic edit that re-slugs to the id the entity ALREADY has would
+        collide with itself and drift to 'cyber-2', then 'cyber-3', on every
+        subsequent edit."""
         taken = {layer.id for layer in self.program.layers} | {
             line.id for line in self.program.lines
         }
+        taken.discard(exclude)
         if prefix not in taken:
             return prefix
         n = 2
