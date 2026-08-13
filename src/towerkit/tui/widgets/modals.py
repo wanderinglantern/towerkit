@@ -97,6 +97,7 @@ class RenderOptions:
     show_premiums: bool
     cell_premiums: bool
     cell_dates: bool
+    soi_schematic: bool = False
 
 
 class RenderOptionsModal(ModalScreen[RenderOptions | None]):
@@ -124,6 +125,7 @@ class RenderOptionsModal(ModalScreen[RenderOptions | None]):
         show_premiums: bool,
         cell_premiums: bool = False,
         cell_dates: bool = False,
+        soi_schematic: bool = False,
         themes_dir: Path | None = None,
     ) -> None:
         super().__init__()
@@ -132,6 +134,7 @@ class RenderOptionsModal(ModalScreen[RenderOptions | None]):
         self.show_premiums = show_premiums
         self.cell_premiums = cell_premiums
         self.cell_dates = cell_dates
+        self.soi_schematic = soi_schematic
         self.themes_dir = themes_dir
 
     def compose(self) -> ComposeResult:
@@ -164,6 +167,11 @@ class RenderOptionsModal(ModalScreen[RenderOptions | None]):
                 self.cell_dates,
                 id="opt-cell-dates",
             )
+            yield Checkbox(
+                "Include schematic worksheet in SOI export",
+                self.soi_schematic,
+                id="opt-soi-schematic",
+            )
             yield Label("[b]enter[/b] apply · [b]esc[/b] cancel", classes="modal-hint")
             with Horizontal():
                 yield Button("Cancel", id="cancel")
@@ -192,6 +200,7 @@ class RenderOptionsModal(ModalScreen[RenderOptions | None]):
             show_premiums=self.query_one("#opt-premiums", Checkbox).value,
             cell_premiums=self.query_one("#opt-cell-premiums", Checkbox).value,
             cell_dates=self.query_one("#opt-cell-dates", Checkbox).value,
+            soi_schematic=self.query_one("#opt-soi-schematic", Checkbox).value,
         )
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
