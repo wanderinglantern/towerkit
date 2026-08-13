@@ -8,7 +8,7 @@ import pytest
 from openpyxl import load_workbook
 from test_soi import make_program
 
-from towerkit.render.soi_xlsx import write_soi
+from towerkit.render.soi_xlsx import render_soi_sheet, write_soi, write_soi_workbook
 from towerkit.soi import build_soi, sheet_title
 from towerkit.theme import load_theme
 
@@ -168,3 +168,71 @@ def _content_hash(xlsx_path: Path) -> str:
 def test_refactor_golden_content(program, theme, tmp_path):
     path = _write(program, theme, tmp_path / "golden.xlsx")
     assert _content_hash(path) == GOLDEN_SHA
+
+
+def test_render_soi_sheet_into_an_open_workbook(program, theme, tmp_path):
+    """The bookkit composition shape: a table sheet plus an SOI sheet in one
+    workbook, one finalize."""
+    from openpyxl import Workbook
+
+    from towerkit.render.table_xlsx import finalize_workbook, sanitize_sheet_title
+    from towerkit.soi import build_soi
+
+    wb = Workbook()
+    ws = wb.active
+    assert ws is not None
+    ws.title = "Open Items"  # stand-in for bookkit's table sheet
+    soi_ws = wb.create_sheet(sanitize_sheet_title("Schedule of Insurance"))
+    render_soi_sheet(soi_ws, build_soi(program), theme=theme)
+    path = finalize_workbook(wb, tmp_path / "multi.xlsx")
+    loaded = load_workbook(path)
+    assert loaded.sheetnames == ["Open Items", "Schedule of Insurance"]
+    sheet = loaded["Schedule of Insurance"]
+    assert [c.value for c in sheet[1]][:2] == ["Insured", "Line of Coverage"]
+    assert sheet["A2"].value == "Casualty"          # section band renders
+    assert sheet.freeze_panes == "A2"
+    assert sheet.row_dimensions[3].height >= 36.0   # SOI row-height heuristic applied
+
+
+class TestWorkbookOrchestration:
+    def test_off_is_byte_identical_to_write_soi(self, program, theme, tmp_path):
+        legacy = _write(program, theme, tmp_path / "legacy.xlsx")
+        combined = write_soi_workbook(
+            program, theme=theme, out_path=tmp_path / "combined.xlsx",
+            include_schematic=False,
+        )
+        assert combined.read_bytes() == legacy.read_bytes()
+
+    def test_off_still_matches_the_golden(self, program, theme, tmp_path):
+        path = write_soi_workbook(program, theme=theme, out_path=tmp_path / "g.xlsx")
+        assert _content_hash(path) == GOLDEN_SHA
+
+    def test_on_appends_the_schematic_sheet(self, program, theme, tmp_path):
+        path = write_soi_workbook(
+            program, theme=theme, out_path=tmp_path / "s.xlsx", include_schematic=True
+        )
+        assert load_workbook(path).sheetnames == [
+            "Casualty SOI - 26-27", "Casualty Schematic",
+        ]
+
+    def test_on_two_runs_byte_identical(self, program, theme, tmp_path):
+        a = write_soi_workbook(
+            program, theme=theme, out_path=tmp_path / "a.xlsx", include_schematic=True
+        )
+        b = write_soi_workbook(
+            program, theme=theme, out_path=tmp_path / "b.xlsx", include_schematic=True
+        )
+        assert a.read_bytes() == b.read_bytes()
+
+
+# Content golden WITH the schematic sheet (same core.xml-exclusion mechanism
+# as GOLDEN_SHA above; same regeneration rule — deliberate change or
+# openpyxl bump only, never to make a refactor pass).
+SCHEMATIC_GOLDEN_SHA = "7635464efd6a6afa0cf46b523f92ff7bbd846b36bb7279e0c4bd825d4ce0152b"
+
+
+def test_schematic_golden_content(program, theme, tmp_path):
+    path = write_soi_workbook(
+        program, theme=theme, out_path=tmp_path / "sg.xlsx", include_schematic=True
+    )
+    assert _content_hash(path) == SCHEMATIC_GOLDEN_SHA

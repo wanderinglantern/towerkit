@@ -31,6 +31,7 @@ class TowerkitApp(App):
         self.show_premiums = True
         self.cell_premiums = False
         self.cell_dates = False
+        self.soi_schematic = False
 
     def on_mount(self) -> None:
         # chrome only — rendered charts and the tower preview keep the Marsh

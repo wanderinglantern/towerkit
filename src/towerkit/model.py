@@ -135,6 +135,7 @@ class RenderSettings(_Model):
     show_premiums: bool = Field(alias="showPremiums", default=True)
     cell_premiums: bool = Field(alias="cellPremiums", default=False)
     cell_dates: bool = Field(alias="cellDates", default=False)
+    soi_schematic: bool = Field(alias="soiSchematic", default=False)
 
 
 class Program(_Model):
@@ -235,7 +236,9 @@ _PARTICIPANT_KEYS = ("carrier", "share")
 _RETENTION_KEYS = ("appliesTo", "type", "amount", "aggregate", "vehicle", "notes")
 _SUBLIMIT_KEYS = ("name", "amount", "appliesTo", "notes")
 _PERIOD_KEYS = ("start", "end")
-_RENDER_KEYS = ("theme", "showTotals", "showPremiums", "cellPremiums", "cellDates")
+_RENDER_KEYS = (
+    "theme", "showTotals", "showPremiums", "cellPremiums", "cellDates", "soiSchematic",
+)
 
 
 def _ordered(raw: dict[str, Any], keys: tuple[str, ...]) -> dict[str, Any]:
@@ -265,6 +268,10 @@ def program_to_jsonable(program: Program) -> dict[str, Any]:
                     "showPremiums": program.render.show_premiums,
                     "cellPremiums": program.render.cell_premiums,
                     "cellDates": program.render.cell_dates,
+                    # emitted only when true (the followsUnderlying pattern):
+                    # untouched programs re-save byte-identically, and older
+                    # towerkit wheels only reject files that USE the feature
+                    "soiSchematic": program.render.soi_schematic or None,
                 },
                 _RENDER_KEYS,
             )

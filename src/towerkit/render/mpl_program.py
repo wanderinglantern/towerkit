@@ -22,10 +22,20 @@ from matplotlib.patheffects import withStroke
 
 from ..layout import Rect, TowerLayout, build_layout
 from ..model import Program
-from ..money import format_money, format_money_compact, format_share, premium_share
+from ..money import format_money, format_money_compact
 from ..scale import DEFAULT_GAMMA
 from ..theme import Theme, contrast_text
 from .common import rc_params, save_figure
+from .labels import (
+    block_premium_label,
+    group_label,
+    heading_blocks,
+    layer_heading,
+    participant_label,
+    retention_label,
+    unplaced_label,
+)
+from .labels import layer_terms as layer_terms
 
 GUTTER_LEFT = 1.35  # data units reserved left of the tower for dollar labels
 SUPERSCRIPTS = "¹²³⁴⁵⁶⁷⁸⁹"
@@ -101,13 +111,10 @@ def draw_tower(
     # layer titles read as the first line of the leftmost cell's text stack
     follows = {ly.id for ly in program.layers if ly.follows_underlying}
     titles = {
-        layer.layer_id: (
-            f"{layer.name}{(note_markers or {}).get(layer.layer_id, '')} — "
-            + (
-                f"{format_money_compact(layer.limit)} xs underlying"
-                if layer.layer_id in follows
-                else layer_terms(layer.attach, layer.limit)
-            )
+        layer.layer_id: layer_heading(
+            layer,
+            follows=layer.layer_id in follows,
+            marker=(note_markers or {}).get(layer.layer_id, ""),
         )
         for layer in tower.layers
     }
@@ -118,14 +125,7 @@ def draw_tower(
 
     # the layer title rides the WIDEST cell of each layer — a narrow lead
     # share must not doom the name
-    def _width(b) -> float:
-        return max((r.width for r in b.rects), default=0.0)
-
-    heading_block: dict[str, int] = {}
-    for index, block in enumerate(tower.participants):
-        best = heading_block.get(block.layer_id)
-        if best is None or _width(block) > _width(tower.participants[best]):
-            heading_block[block.layer_id] = index
+    heading_block = heading_blocks(tower.participants)
 
     # participant blocks
     for index, block in enumerate(tower.participants):
@@ -147,8 +147,7 @@ def draw_tower(
         premium = None
         if cell_premiums and block.carrier is not None:
             owner = next(ly for ly in tower.layers if ly.layer_id == block.layer_id)
-            if owner.premium is not None:
-                premium = premium_share(owner.premium, block.share_bps)
+            premium = block_premium_label(owner.premium, block.share_bps)
         term = None
         if cell_dates:
             owner_model = next(ly for ly in program.layers if ly.id == block.layer_id)
@@ -185,9 +184,7 @@ def draw_tower(
     # retention blocks, typed fills, never a carrier colour
     for ret in tower.retentions:
         fill = theme.retention_fill(ret.type)
-        label = f"{ret.type.upper()} {format_money_compact(ret.amount)}"
-        if ret.vehicle:
-            label = f"{label} ({ret.vehicle})"
+        label = retention_label(ret.type, ret.amount, ret.vehicle)
         for rect in ret.rects:
             ax.add_patch(
                 Rectangle(
@@ -219,22 +216,12 @@ def draw_tower(
             [band.x0, band.x1], [band_y, band_y],
             color=chrome.accent, linewidth=1.6, solid_capstyle="butt",
         )
-        rollup = f"{band.label} — Limit {format_money_compact(band.limit)}"
-        if band.premium:
-            rollup += f" · Premium {format_money_compact(band.premium)}"
+        rollup = group_label(band)
         ax.text(
             (band.x0 + band.x1) / 2, band_y - 0.012, rollup,
             ha="center", va="top", fontsize=9, color=chrome.accent,
         )
     return tower
-
-
-def layer_terms(attach: int, limit: int) -> str:
-    """Market convention: a primary is quoted by its limit alone — 'xs $0'
-    is meaningless and reads as an error on a chart."""
-    if attach > 0:
-        return f"{format_money_compact(limit)} xs {format_money_compact(attach)}"
-    return format_money_compact(limit)
 
 
 def _term_text(period) -> str:
@@ -249,7 +236,7 @@ def _participant_label(
     block,
     theme: Theme,
     colours: dict[str, str],
-    premium: int | None = None,
+    premium: str | None = None,
     heading: str | None = None,
     term: str | None = None,
     pending: bool = False,
@@ -258,20 +245,15 @@ def _participant_label(
     if rect is None:
         return
     if block.carrier is None:
-        if pending:
-            text_colour = theme.chrome.ink
-            body = "To be placed"
-        else:
-            text_colour = theme.chrome.muted
-            body = f"{format_share(block.share_bps)} open"
+        text_colour = theme.chrome.ink if pending else theme.chrome.muted
+        body = unplaced_label(block.share_bps, pending)
         candidates = [body, ""]
         if heading:
             candidates = [f"{heading}\n{body}", *candidates]
     else:
         face = colours[block.carrier]
         text_colour = contrast_text(face, theme.chrome.background, theme.chrome.ink)
-        share = format_share(block.share_bps)
-        full = f"{block.carrier} {share}"
+        full = participant_label(block.carrier, block.share_bps)
         # every name form, one-line and wrapped — "Indian Harbor Insurance
         # Company" must wrap rather than degrade to an initial
         name_forms = [full]
@@ -285,7 +267,7 @@ def _participant_label(
         # extra lines ride along with EVERY name form, richest stack first:
         # term between the carrier/share and the premium, per the layout
         # convention; poorer stacks follow so something always fits
-        prem_line = format_money_compact(premium) if premium is not None else None
+        prem_line = premium
         suffixes: list[list[str]] = []
         if term and prem_line:
             suffixes.append([term, prem_line])

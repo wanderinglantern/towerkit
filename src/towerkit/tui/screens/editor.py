@@ -126,9 +126,11 @@ Data sheets
 
 Output
   r          render (SVG+PNG to dist/)
-  t          render options: theme, totals, premiums,
-             per-cell premium and policy term (saved with the file)
-  x          export SOI workbook (.xlsx to dist/)
+  t          render options: theme, totals, premiums, per-cell
+             premium and policy term, SOI schematic sheet
+             (saved with the file)
+  x          export SOI workbook (.xlsx to dist/; adds the
+             schematic worksheet when enabled under t)
 
 Files
   ctrl+s     save (canonical JSON; prompts if errors exist)
@@ -277,6 +279,7 @@ class EditorScreen(Screen):
             _opts(self).show_premiums = stored.show_premiums
             _opts(self).cell_premiums = stored.cell_premiums
             _opts(self).cell_dates = stored.cell_dates
+            _opts(self).soi_schematic = stored.soi_schematic
         self.refresh_all()
         await self._rebuild_detail()
         self.query_one("#structure", Tree).focus()
@@ -1704,6 +1707,7 @@ class EditorScreen(Screen):
             _opts(self).show_premiums = options.show_premiums
             _opts(self).cell_premiums = options.cell_premiums
             _opts(self).cell_dates = options.cell_dates
+            _opts(self).soi_schematic = options.soi_schematic
             self.apply_theme(Path(options.theme) if options.theme else None)
             from ...model import RenderSettings
 
@@ -1713,6 +1717,7 @@ class EditorScreen(Screen):
                 show_premiums=options.show_premiums,
                 cell_premiums=options.cell_premiums,
                 cell_dates=options.cell_dates,
+                soi_schematic=options.soi_schematic,
             )
             # persist with the program so next session opens the same way
             self.session.mutate(lambda p: setattr(p, "render", settings))
@@ -1722,6 +1727,7 @@ class EditorScreen(Screen):
             RenderOptionsModal(
                 self.theme_path, _opts(self).show_totals, _opts(self).show_premiums,
                 _opts(self).cell_premiums, getattr(_opts(self), "cell_dates", False),
+                getattr(_opts(self), "soi_schematic", False),
             ),
             on_choice,
         )
@@ -1735,17 +1741,17 @@ class EditorScreen(Screen):
                 severity="error",
             )
             return
-        from ...render.soi_xlsx import write_soi
-        from ...soi import build_soi, default_filename, sheet_title
+        from ...render.soi_xlsx import write_soi_workbook
+        from ...soi import default_filename
 
         program = self.session.program
         try:
-            written = write_soi(
-                build_soi(program),
-                title=sheet_title(program),
+            written = write_soi_workbook(
+                program,
                 theme=self.tower_theme,
                 out_path=Path("dist") / default_filename(program),
                 show_premiums=_opts(self).show_premiums,
+                include_schematic=getattr(_opts(self), "soi_schematic", False),
             )
         except Exception as exc:
             self.notify(f"export failed: {exc}", severity="error")

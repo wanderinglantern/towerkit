@@ -89,6 +89,26 @@ def test_render_settings_round_trip(tmp_path) -> None:
     assert reloaded.render.show_premiums is False
 
 
+def test_soi_schematic_round_trips_and_is_omitted_when_off(tmp_path) -> None:
+    from towerkit.model import RenderSettings, dump_program
+    from towerkit.validate import validate_file
+
+    program = load_program(SAMPLE)
+    program.render = RenderSettings(soi_schematic=True)
+    target = tmp_path / "p.json"
+    dump_program(program, target)
+    assert '"soiSchematic": true' in target.read_text()
+    reloaded = load_program(target)
+    assert reloaded.render is not None and reloaded.render.soi_schematic is True
+    _, diags = validate_file(target)
+    assert diags.ok  # the schema accepts the new key
+
+    # OFF is the default and is NOT written — existing files re-save unchanged
+    program.render = RenderSettings()
+    dump_program(program, target)
+    assert "soiSchematic" not in target.read_text()
+
+
 def test_soi_detail_fields_round_trip() -> None:
     program = load_program(SAMPLE)
     layer = program.layers[0]

@@ -64,3 +64,40 @@ def test_title_sanitized_for_illegal_sheet_chars(theme, tmp_path: Path):
     for char in "/\\?*[]:":
         assert char not in title
     assert len(title) <= 31
+
+
+def test_two_sheet_workbook_single_normalize(theme, tmp_path: Path):
+    from openpyxl import Workbook
+
+    from towerkit.render.table_xlsx import finalize_workbook, render_table_sheet
+
+    def build(path: Path) -> Path:
+        wb = Workbook()
+        ws = wb.active
+        assert ws is not None
+        ws.title = "First"
+        render_table_sheet(ws, COLS, SECTIONS, theme=theme)
+        second = wb.create_sheet("Second")
+        render_table_sheet(second, COLS, SECTIONS, theme=theme)
+        return finalize_workbook(wb, path)
+
+    a = build(tmp_path / "a.xlsx")
+    wb = load_workbook(a)
+    assert wb.sheetnames == ["First", "Second"]
+    assert [c.value for c in wb["Second"][1]] == ["Item", "Amount"]  # styled body on sheet 2
+    assert wb["Second"].freeze_panes == "A2"
+    # one finalize → still deterministic
+    assert a.read_bytes() == build(tmp_path / "b.xlsx").read_bytes()
+
+
+def test_finalize_pins_modified_timestamp(theme, tmp_path: Path):
+    import zipfile
+
+    from openpyxl import Workbook
+
+    from towerkit.render.table_xlsx import finalize_workbook
+
+    path = finalize_workbook(Workbook(), tmp_path / "p.xlsx")
+    with zipfile.ZipFile(path) as z:
+        core = z.read("docProps/core.xml").decode()
+    assert "1980-01-01T00:00:00Z</dcterms:modified>" in core
