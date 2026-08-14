@@ -1543,6 +1543,8 @@ class EditorScreen(Screen):
             self.session.mutate(lambda p: edit.remove_line(p, key))
             await after()
         elif kind == "layer":
+            if self._layer(key) is None:
+                return
             self.session.mutate(lambda p: edit.remove_layer(p, key))
             await after()
         elif kind == "retention" and key < len(program.retentions):
