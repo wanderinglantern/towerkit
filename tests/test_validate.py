@@ -315,6 +315,66 @@ class TestCliExitCodes:
         assert result.returncode == 1
 
 
+def _stat(**kw) -> Layer:
+    base = dict(
+        id="wc-stat", name="Workers Compensation", applies_to=["wc"],
+        attach=0, limit=0, statutory=True,
+        participants=[Participant(carrier="Travelers", share_bps=10_000)],
+    )
+    return Layer(**{**base, **kw})
+
+
+def _wc_program(*layers: Layer) -> Program:
+    return make_program(
+        lines=[Line(id="wc", name="Workers Compensation")],
+        layers=list(layers),
+        retentions=[],
+    )
+
+
+class TestStatutoryRules:
+    def test_statutory_layer_is_exempt_from_the_positive_limit_rule(self) -> None:
+        assert "layer-limit" not in codes(_wc_program(_stat()))
+
+    def test_statutory_with_a_limit_is_an_error(self) -> None:
+        assert "statutory-limit" in codes(_wc_program(_stat(limit=1_000_000)))
+
+    def test_statutory_with_an_attachment_is_an_error(self) -> None:
+        assert "statutory-attach" in codes(_wc_program(_stat(attach=500_000)))
+
+    def test_statutory_cannot_follow_underlying(self) -> None:
+        assert "statutory-follows" in codes(_wc_program(_stat(follows_underlying=True)))
+
+    def test_statutory_line_reports_no_phantom_gap(self) -> None:
+        """A line covered only by a statutory layer is fully covered. Left alone,
+        the limit > 0 filter drops it from the stack and the line reads as empty —
+        which would tint the WC column danger-red in the live preview."""
+        found = codes(_wc_program(_stat()))
+        assert "line-empty" not in found
+        assert "line-base" not in found
+        assert "line-gap" not in found
+
+    def test_statutory_line_rejects_a_second_layer(self) -> None:
+        program = _wc_program(
+            _stat(),
+            Layer(
+                id="wc-xs", name="WC Excess", applies_to=["wc"],
+                attach=0, limit=1_000_000,
+                participants=[Participant(carrier="A", share_bps=10_000)],
+            ),
+        )
+        assert "statutory-line-shared" in codes(program)
+
+    def test_statutory_unplaced_is_reported_as_a_share_not_dollars(self) -> None:
+        program = _wc_program(
+            _stat(participants=[Participant(carrier="Travelers", share_bps=6_000)])
+        )
+        messages = [d.message for d in validate_program(program).items]
+        unplaced = next(m for m in messages if "open" in m or "unplaced" in m)
+        assert "$0" not in unplaced
+        assert "40% open" in unplaced
+
+
 class TestLayerPolicyData:
     def test_backwards_period_is_error(self) -> None:
         from datetime import date as _date

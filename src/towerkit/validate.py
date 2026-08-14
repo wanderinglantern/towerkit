@@ -167,7 +167,31 @@ def _check_unique_ids(program: Program, diags: Diagnostics) -> None:
 
 def _check_layer(layer: Layer, line_ids: list[str], diags: Diagnostics) -> None:
     ref = ("layer", layer.id)
-    if layer.limit <= 0:
+    if layer.statutory:
+        # statutory => limit == 0 is the invariant the whole design rests on:
+        # it is what keeps the layer out of every dollar total by construction
+        if layer.limit != 0:
+            diags.error(
+                "statutory-limit",
+                f"{layer.name}: statutory cover has no dollar limit, but limit "
+                f"is {format_money(layer.limit)}",
+                ref,
+            )
+        if layer.attach != 0:
+            diags.error(
+                "statutory-attach",
+                f"{layer.name}: statutory cover owns its column from $0, but "
+                f"attaches at {format_money(layer.attach)}",
+                ref,
+            )
+        if layer.follows_underlying:
+            diags.error(
+                "statutory-follows",
+                f"{layer.name}: statutory cover cannot follow underlying — "
+                f"nothing sits beneath it",
+                ref,
+            )
+    elif layer.limit <= 0:
         diags.error("layer-limit", f"{layer.name}: non-positive limit {layer.limit}", ref)
     seen: set[str] = set()
     for lid in layer.applies_to:
@@ -198,6 +222,13 @@ def _check_layer(layer: Layer, line_ids: list[str], diags: Diagnostics) -> None:
         diags.error(
             "layer-oversigned",
             f"{layer.name}: shares sum to {signed / 100:.2f}% — over-signed",
+            ref,
+        )
+    elif signed < BPS_SCALE and layer.statutory:
+        # no dollar limit to apportion: quantify the hole as a share
+        diags.warn(
+            "layer-unplaced",
+            f"{layer.name}: {signed / 100:g}% placed — {(BPS_SCALE - signed) / 100:g}% open",
             ref,
         )
     elif signed < BPS_SCALE and layer.limit > 0:
@@ -245,11 +276,24 @@ def _effective_attach(program: Program, layer: Layer, line_id: str) -> int:
 
 
 def _check_line_stack(program: Program, line_id: str, diags: Diagnostics) -> None:
-    stack = [
-        layer for layer in program.layers_for_line(line_id) if layer.limit > 0
-    ]
-    stack.sort(key=lambda ly: _effective_attach(program, ly, line_id))
     line = next(ln for ln in program.lines if ln.id == line_id)
+    covering = program.layers_for_line(line_id)
+    statutory = [ly for ly in covering if ly.statutory]
+    stack = [ly for ly in covering if not ly.statutory and ly.limit > 0]
+    if statutory:
+        # A statutory bar owns its column floor to top. Base/gap/overlap are
+        # dollar questions and do not apply; the only error possible here is
+        # something ELSE trying to share the column, which would draw straight
+        # through the full-height bar.
+        if stack:
+            diags.error(
+                "statutory-line-shared",
+                f"{line_id}: {statutory[0].name} is statutory and covers the whole "
+                f"column, but {stack[0].name!r} also covers {line.name}",
+                ("line", line_id),
+            )
+        return
+    stack.sort(key=lambda ly: _effective_attach(program, ly, line_id))
     if not stack:
         diags.error("line-empty", f"{line_id}: no layers cover {line.name}", ("line", line_id))
         return
