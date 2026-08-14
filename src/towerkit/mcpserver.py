@@ -388,7 +388,10 @@ def _line_edit(
         if group is not None:
             edit.set_line_group(program, current, group or None)
         if abbr is not None:
-            next(ln for ln in program.lines if ln.id == current).abbr = abbr or None
+            line = next((ln for ln in program.lines if ln.id == current), None)
+            if line is None:
+                raise KeyError(f"no line {current!r}")
+            line.abbr = abbr or None
         result.append(current)
 
     out = _write(programs, name, f"edited line {line_id}", do)

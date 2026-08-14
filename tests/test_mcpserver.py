@@ -230,6 +230,23 @@ class TestDesignTools:
         assert target not in [ln["id"] for ln in after["lines"]]
         assert not [ly for ly in after["layers"] if ly["id"] in solo]
 
+    def test_line_edit_with_unknown_line_id_and_only_abbr_refuses_cleanly(
+        self, roots
+    ) -> None:
+        """Regression: an unknown line_id with ONLY abbr set used to look the
+        line up via next() with no default, raising a bare StopIteration that
+        escaped _write's except clause instead of the standard refused
+        message. rename_line/set_line_group guard with KeyError, but their
+        checks only ran when line_name or group were also supplied — the
+        abbr-only path had no guard at all."""
+        programs = Programs(roots)
+        _program_read(programs, "atomic-2026")
+        path = roots[0] / "atomic-2026.json"
+        before = path.read_bytes()
+        with pytest.raises(ValueError, match="refused"):
+            _line_edit(programs, "atomic-2026", "ghost-line", abbr="XX")
+        assert path.read_bytes() == before
+
     def test_line_edit_renames_and_line_move_reorders(self, roots) -> None:
         programs = Programs(roots)
         read = _program_read(programs, "atomic-2026")
