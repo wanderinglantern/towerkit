@@ -1529,12 +1529,35 @@ editor's visible-validation rule exists to prevent."
 
 ---
 
-### Task 11: Full gate and changelog
+### Task 11: Schema-copy sync test, full gate, changelog
 
 **Files:**
-- Modify: `changelog.md`
+- Modify: `tests/test_conventions.py`, `changelog.md`
 
-- [ ] **Step 1: Run the full gate**
+- [ ] **Step 1: Pin the two schema copies together**
+
+There are TWO copies of the program schema: `schema/program.schema.json` (published reference) and `src/towerkit/schema/program.schema.json` (packaged). `validate.py:313` loads the **packaged** one via `resources.files("towerkit")`, so that is the copy used at runtime — but nothing keeps them in sync. A field added to only the reference copy makes runtime validation silently disagree with the model, which is how `statutory` nearly shipped broken.
+
+Add to `tests/test_conventions.py`:
+
+```python
+def test_schema_copies_are_identical() -> None:
+    """validate.py loads the PACKAGED schema via resources.files('towerkit');
+    the root copy is the published reference. A field added to only one makes
+    runtime validation disagree with model.py, and no other test would catch
+    it — the canonical round-trip never goes through jsonschema."""
+    import json
+
+    root = json.loads((REPO / "schema" / "program.schema.json").read_text("utf-8"))
+    packaged = json.loads(
+        (REPO / "src" / "towerkit" / "schema" / "program.schema.json").read_text("utf-8")
+    )
+    assert root == packaged
+```
+
+Use whatever repo-root constant `tests/test_conventions.py` already defines; if it has none, derive it as `Path(__file__).parent.parent`.
+
+- [ ] **Step 2: Run the full gate**
 
 ```bash
 uv run --group dev pytest -q > /tmp/pytest.txt 2>&1; echo "exit=$?"; tail -20 /tmp/pytest.txt
@@ -1544,7 +1567,7 @@ uv run --group dev mypy src/towerkit
 
 Expected: 1 failed (the pre-existing `test_connector.py` environmental failure), all else passed; ruff clean; mypy clean.
 
-- [ ] **Step 2: Render a real statutory program end to end**
+- [ ] **Step 3: Render a real statutory program end to end**
 
 Build a scratch program with a WC statutory column and an EL column with a $1M limit, then:
 
@@ -1555,11 +1578,11 @@ Build a scratch program with a WC statutory column and an EL column with a $1M l
 
 Open both. Confirm: the WC bar runs floor to top with a chevron top and no flat top line; EL is unaffected; the SOI Limits cell reads `Statutory`; program totals show EL's $1M only.
 
-- [ ] **Step 3: Update the changelog**
+- [ ] **Step 4: Update the changelog**
 
 Add an entry describing the feature, the `statutory ⇒ limit == 0` invariant, and the silent exclusion from limit totals.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add changelog.md
