@@ -248,3 +248,31 @@ def test_the_refusal_says_how_to_fix_it(
     message = str(caught.value)
     assert "--programs" in message
     assert "BOOKCTL" in message
+
+
+def test_check_reports_a_missing_mcp_package_instead_of_crashing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A venv built before mcp>=2.0 landed is the common state after a pull.
+
+    --check is the tool you reach for when something is wrong, so it must
+    diagnose that rather than add a ModuleNotFoundError traceback to it.
+    """
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    programs = tmp_path / "programs"
+    programs.mkdir()
+    (programs / "atomic-2027.json").write_text("{}")
+    # Both halves are needed: `from . import mcpserver` resolves by attribute
+    # on the package before consulting sys.modules, so an earlier test's real
+    # import would satisfy it and this would quietly stop testing anything.
+    import towerkit
+
+    monkeypatch.delattr(towerkit, "mcpserver", raising=False)
+    monkeypatch.setitem(sys.modules, "towerkit.mcpserver", None)
+
+    report = connector.check([programs])
+
+    stdout = next(c for c in report.checks if c.label == "stdout")
+    assert stdout.ok is False
+    assert "install.sh" in stdout.detail
+    assert report.ok is False

@@ -156,7 +156,15 @@ def _root(index: int, path: Path) -> CheckResult:
 
 def _stdout(roots: list[Path]) -> CheckResult:
     """stdout is the MCP wire; anything printed at startup corrupts it."""
-    from . import mcpserver
+    try:
+        from . import mcpserver
+    except ImportError as exc:
+        # Usually a venv built before mcp>=2.0 landed: `git pull` brings the
+        # code, not the dependency. --check is what you run when something is
+        # already wrong, so it must name the fix rather than add a traceback.
+        return CheckResult(
+            "stdout", False, f"cannot import the server ({exc}) — re-run ./install.sh"
+        )
 
     buffer = io.StringIO()
     with contextlib.redirect_stdout(buffer):
