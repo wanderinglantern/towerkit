@@ -259,6 +259,10 @@ def _label_spans(
         (ret.rects[0].y0, ret.rects[0].y1, label_row_floor(1))
         for ret in layout.retentions if ret.rects
     )
+    # the caret band carries text, so quantization must not collapse it
+    spans.extend(
+        (band.y0, band.y1, label_row_floor(1)) for band in layout.chevrons
+    )
     return spans
 
 
@@ -281,6 +285,9 @@ def x_boundaries(layout: TowerLayout) -> tuple[float, ...]:
         for rect in retention.rects:
             edges.add(rect.x0)
             edges.add(rect.x1)
+    for band in layout.chevrons:
+        edges.add(band.x0)
+        edges.add(band.x1)
     return tuple(sorted(edges))
 
 
@@ -301,6 +308,9 @@ def y_boundaries(layout: TowerLayout) -> tuple[float, ...]:
         for rect in retention.rects:
             ys.add(rect.y0)
             ys.add(rect.y1)
+    for band in layout.chevrons:
+        ys.add(band.y0)
+        ys.add(band.y1)
     return tuple(sorted(ys))
 
 
@@ -469,12 +479,17 @@ def add_schematic_sheet(
             )
         else:
             anchor_text, shrink = "\n".join(lines), False
+        border = Border(left=edge, right=edge, top=edge, bottom=edge)
+        if layer_by_id[block.layer_id].statutory:
+            # the chevron band IS this bar's top edge; a line here would close
+            # the box and read as bounded cover
+            border = Border(left=edge, right=edge, bottom=edge)
         for rect in block.rects:
             _block(
                 ws, rect, rows, col_of, col_of_close,
                 text=anchor_text if rect is anchor_rect else "",
                 fill=fill,
-                border=Border(left=edge, right=edge, top=edge, bottom=edge),
+                border=border,
                 font=Font(name=chrome.font, size=8, color=_argb(text_colour)),
                 shrink=shrink if rect is anchor_rect else False,
                 occupied=occupied,
@@ -496,6 +511,19 @@ def add_schematic_sheet(
                 font=Font(name=chrome.font, size=7, color=_argb(chrome.ink)),
                 occupied=occupied,
             )
+
+    # statutory chevron band: fills its merged width with carets, no fill and
+    # no border — it stands in for the bar's top edge, it is not a block
+    for band in layout.chevrons:
+        width_units = band.width * chars_per_unit
+        _block(
+            ws, band, rows, col_of, col_of_close,
+            text="^" * max(3, int(width_units)),
+            fill=None,
+            border=Border(),
+            font=Font(name=chrome.font, size=8, color=_argb(chrome.ink)),
+            occupied=occupied,
+        )
 
     _axis_lines(ws, rows, chrome, last_col)
     _gridlines(ws, layout, rows, chrome, last_col, occupied)

@@ -24,6 +24,7 @@ from towerkit.render.schematic_xlsx import (
     HEADER_TWO_LINE_HEIGHT,
     LINE_ROW,
     SPACER_UNITS,
+    TOTAL_ROWS,
     _label_spans,
     add_schematic_sheet,
     label_row_floor,
@@ -828,3 +829,66 @@ class TestProvenanceFooter:
         assert footer_cell.row > bottom_row
         assert footer_cell.fill.patternType is None
         assert _fill_hex(path, "sheet2.xml", footer_cell.coordinate) is None
+
+
+def _statutory_program() -> Program:
+    return Program(
+        insured="T",
+        program="T",
+        placement=Placement.BOUND,
+        period=Period(start=date(2026, 1, 1), end=date(2027, 1, 1)),
+        lines=[Line(id="wc", name="Workers Compensation")],
+        layers=[Layer(
+            id="wc-stat", name="Workers Compensation", applies_to=["wc"],
+            attach=0, limit=0, statutory=True,
+            participants=[Participant(carrier="Travelers", share_bps=10_000)],
+        )],
+    )
+
+
+class TestStatutory:
+    def test_caret_band_is_written_above_the_tower(self, marsh) -> None:
+        wb = Workbook()
+        wb.remove(wb.active)
+        add_schematic_sheet(wb, _statutory_program(), marsh)
+        ws = wb.worksheets[0]
+        carets = [
+            c.value for row in ws.iter_rows() for c in row
+            if isinstance(c.value, str) and set(c.value) == {"^"}
+        ]
+        assert carets, "no caret band written"
+
+    def test_statutory_block_has_no_top_border(self, marsh) -> None:
+        wb = Workbook()
+        wb.remove(wb.active)
+        add_schematic_sheet(wb, _statutory_program(), marsh)
+        ws = wb.worksheets[0]
+        filled = [
+            c for row in ws.iter_rows() for c in row
+            if c.fill is not None and c.fill.fgColor is not None
+            and c.border.left is not None and c.border.left.style == "thin"
+        ]
+        assert filled
+        assert all(c.border.top is None or c.border.top.style is None for c in filled)
+
+    def test_existing_programs_keep_their_geometry(self, program, marsh) -> None:
+        """The band is added only when a statutory layer exists. A program
+        without one must quantize to exactly the rows it did before.
+
+        `max(rows.values()) == TOTAL_ROWS` alone is NOT mutation-sensitive
+        here: quantize_boundaries always maps whatever the largest distinct
+        boundary happens to be to TOTAL_ROWS, so a leaked extra edge past
+        y=1.0 (e.g. the chevron band's own y1=1.04, if x/y_boundaries ever
+        stopped gating on `layout.chevrons`) would silently re-satisfy this
+        assertion while shifting every other row underneath it — exactly
+        the "band leaked into geometry it should not touch" failure this
+        test exists to catch. Pin the known top boundary (1.0) to
+        TOTAL_ROWS explicitly so such a leak is caught here, not just by
+        the golden-SHA test."""
+        layout = build_layout(program)
+        assert layout.chevrons == ()
+        ys = y_boundaries(layout)
+        assert ys[-1] == 1.0
+        rows = quantize_boundaries(ys)
+        assert rows[1.0] == TOTAL_ROWS
+        assert max(rows.values()) == TOTAL_ROWS
