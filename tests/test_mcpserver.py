@@ -41,6 +41,8 @@ from towerkit.mcpserver import (
     _line_move,
     _line_remove,
     _program_check,
+    _program_clone_renewal,
+    _program_create,
     _program_list,
     _program_read,
     _program_revert_write,
@@ -356,6 +358,96 @@ class TestDesignTools:
             )
 
 
+class TestCreation:
+    def test_create_writes_a_canonical_file_and_reports_it_is_empty(self, roots) -> None:
+        programs = Programs(roots)
+        out = _program_create(
+            programs,
+            "prospect-2027",
+            insured="Prospect Co",
+            program="Casualty",
+            placement="proposed",
+            period_from="1/1/27",
+            period_to="1/1/28",
+            lines=["General Liability", "Auto Liability"],
+        )
+        path = roots[0] / "prospect-2027.json"
+        assert path.exists()
+        from towerkit.model import dumps_program
+
+        assert path.read_text("utf-8") == dumps_program(load_program(path))
+        assert {d["code"] for d in out["errors"]} == {"line-empty"}
+        assert load_program(path).period.start.isoformat() == "2027-01-01"
+
+    def test_create_refuses_an_existing_file(self, roots) -> None:
+        programs = Programs(roots)
+        with pytest.raises(ValueError, match="already exists"):
+            _program_create(
+                programs,
+                "atomic-2026",
+                insured="X",
+                program="Y",
+                placement="bound",
+                period_from="1/1/26",
+                period_to="1/1/27",
+                lines=["GL"],
+            )
+
+    def test_create_refuses_outside_the_roots(self, roots) -> None:
+        programs = Programs(roots)
+        with pytest.raises(ValueError, match="outside"):
+            _program_create(
+                programs,
+                "../escape",
+                insured="X",
+                program="Y",
+                placement="bound",
+                period_from="1/1/26",
+                period_to="1/1/27",
+                lines=["GL"],
+            )
+
+    def test_create_rejects_an_unreadable_date(self, roots) -> None:
+        programs = Programs(roots)
+        with pytest.raises(ValueError, match="date"):
+            _program_create(
+                programs,
+                "bad-dates",
+                insured="X",
+                program="Y",
+                placement="bound",
+                period_from="whenever",
+                period_to="1/1/27",
+                lines=["GL"],
+            )
+        assert not (roots[0] / "bad-dates.json").exists()
+
+    def test_clone_as_renewal_bumps_the_period_and_proposes(self, roots) -> None:
+        programs = Programs(roots)
+        _program_clone_renewal(programs, "atomic-2026", "atomic-2027")
+        source = load_program(roots[0] / "atomic-2026.json")
+        clone = load_program(roots[0] / "atomic-2027.json")
+        assert clone.period.start.year == source.period.start.year + 1
+        assert clone.placement.value == "proposed"
+        assert len(clone.layers) == len(source.layers)
+
+    def test_a_created_program_is_immediately_writable(self, roots) -> None:
+        """Creation notes the sha, so the caller does not have to read back
+        a file it just wrote before editing it."""
+        programs = Programs(roots)
+        _program_create(
+            programs,
+            "fresh-2027",
+            insured="Fresh",
+            program="Property",
+            placement="proposed",
+            period_from="1/1/27",
+            period_to="1/1/28",
+            lines=["Property"],
+        )
+        _line_add(programs, "fresh-2027", "Cyber")  # no raise
+
+
 async def test_tools_are_registered_and_callable_over_the_protocol(roots) -> None:
     from mcp.client import Client
 
@@ -382,6 +474,8 @@ async def test_tools_are_registered_and_callable_over_the_protocol(roots) -> Non
             "layer_remove",
             "layer_lines",
             "layer_follows",
+            "program_create",
+            "program_clone_renewal",
         } <= names
         result = await client.call_tool("program_read", {"name": "atomic-2026"})
         assert not result.is_error

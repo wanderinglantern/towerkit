@@ -25,7 +25,7 @@ import json
 import os
 import secrets
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -33,7 +33,8 @@ from mcp.server.mcpserver import MCPServer
 from pydantic import ValidationError
 
 from . import edit
-from .model import Program, dumps_program, load_program, loads_program
+from .dates import parse_flexible_date
+from .model import Period, Placement, Program, dumps_program, load_program, loads_program
 from .money import parse_money
 from .validate import Diagnostic, validate_program
 
@@ -624,6 +625,87 @@ def _program_revert_write(programs: Programs, write_ref: str) -> dict[str, Any]:
     raise ValueError(f"no snapshot for {write_ref} under the program roots")
 
 
+def _parse_date(value: str, field: str) -> date:
+    parsed = parse_flexible_date(value)
+    if parsed is None:
+        raise ValueError(f"can't read {value!r} as a date for {field}")
+    return parsed
+
+
+def _program_create(
+    programs: Programs,
+    name: str,
+    insured: str,
+    program: str,
+    placement: str,
+    period_from: str,
+    period_to: str,
+    lines: list[str],
+) -> dict[str, Any]:
+    """Start a program from nothing: an insured, a period, and its coverage
+    lines. This does not go through `_write` — a brand-new file has by
+    definition never been read this session, and `_write` refuses exactly
+    that — so it does its own write, mirroring `_write`'s invariants by
+    hand: resolve through the sandbox, refuse an existing file, hard-gate on
+    a canonical dump that re-loads, write atomically, then note() the sha so
+    the caller can edit the file it just created without a redundant read.
+    It will report line-empty for every line until layers cover them — that
+    is expected, keep building."""
+    path = programs.resolve(name, must_exist=False)
+    if path.exists():
+        raise ValueError(f"{name} already exists — edit it, or pick another name")
+    fresh = Program(
+        insured=insured,
+        program=program,
+        placement=Placement(placement),
+        period=Period(
+            start=_parse_date(period_from, "period_from"),
+            end=_parse_date(period_to, "period_to"),
+        ),
+        lines=[],
+    )
+    for line_name in lines:
+        edit.add_line(fresh, line_name)
+    text = dumps_program(fresh)
+    loads_program(text)  # proves the file we are about to write is loadable
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _atomic_write(path, text)
+    programs.note(path)
+    diags = validate_program(fresh)
+    return {
+        "created": name,
+        "file": str(path),
+        "lines": [ln.id for ln in fresh.lines],
+        "errors": _diag(diags.errors),
+        "warnings": _diag(diags.warnings),
+    }
+
+
+def _program_clone_renewal(programs: Programs, source: str, dest: str) -> dict[str, Any]:
+    """Copy a program forward a year as a proposed renewal — the most common
+    starting point for next year's design. Same do-it-by-hand write as
+    `_program_create`, for the same reason: `dest` has never been read."""
+    source_path = programs.resolve(source)
+    dest_path = programs.resolve(dest, must_exist=False)
+    if dest_path.exists():
+        raise ValueError(f"{dest} already exists — pick another name")
+    clone = load_program(source_path).clone_as_renewal()
+    text = dumps_program(clone)
+    loads_program(text)  # proves the file we are about to write is loadable
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+    _atomic_write(dest_path, text)
+    programs.note(dest_path)
+    diags = validate_program(clone)
+    return {
+        "created": dest,
+        "from": source,
+        "file": str(dest_path),
+        "period": _period(clone),
+        "errors": _diag(diags.errors),
+        "warnings": _diag(diags.warnings),
+    }
+
+
 def build_server(roots: list[Path] | None = None) -> MCPServer:
     programs = Programs(roots)
     server = MCPServer(
@@ -816,6 +898,30 @@ def _register_write_tools(server: MCPServer, programs: Programs) -> None:
         derived state, reseating itself on the highest underlying top. This
         is how a shared umbrella sits over columns with differing limits."""
         return _layer_follows(programs, name, layer_id, follows)
+
+    @server.tool()
+    async def program_create(
+        name: str,
+        insured: str,
+        program: str,
+        placement: str,
+        period_from: str,
+        period_to: str,
+        lines: list[str],
+    ) -> dict[str, Any]:
+        """Start a program from nothing: an insured, a period, and its
+        coverage lines. It will report line-empty for every line until
+        layers cover them — that is expected, keep building. `placement` is
+        bound or proposed. Numeric dates are month/day/year."""
+        return _program_create(
+            programs, name, insured, program, placement, period_from, period_to, lines
+        )
+
+    @server.tool()
+    async def program_clone_renewal(source: str, dest: str) -> dict[str, Any]:
+        """Copy a program forward a year as a proposed renewal — the most
+        common starting point for next year's design."""
+        return _program_clone_renewal(programs, source, dest)
 
 
 def serve(roots: list[Path] | None = None) -> None:
