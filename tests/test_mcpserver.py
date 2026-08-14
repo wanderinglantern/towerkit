@@ -33,12 +33,25 @@ import pytest
 
 from towerkit.mcpserver import (
     Programs,
+    _layer_follows,
+    _layer_lines,
+    _layer_remove,
+    _line_add,
+    _line_edit,
+    _line_move,
+    _line_remove,
     _program_check,
     _program_list,
     _program_read,
     _program_revert_write,
     _program_view,
     _restack,
+    _retention_add,
+    _retention_edit,
+    _retention_remove,
+    _sublimit_add,
+    _sublimit_edit,
+    _sublimit_remove,
     _write,
     build_server,
 )
@@ -197,6 +210,135 @@ class TestRevert:
         assert len(list(snapdir.glob("TKW-*.meta.json"))) == 3
 
 
+class TestDesignTools:
+    def test_line_add_lands_and_reports_that_it_is_empty(self, roots) -> None:
+        programs = Programs(roots)
+        _program_read(programs, "atomic-2026")
+        out = _line_add(programs, "atomic-2026", "Cyber", abbr="CYB")
+        assert out["added"] == "cyber"
+        assert any(d["code"] == "line-empty" for d in out["errors"])
+        read = _program_read(programs, "atomic-2026")
+        assert "cyber" in [ln["id"] for ln in read["lines"]]
+
+    def test_line_remove_takes_stranded_layers_with_it(self, roots) -> None:
+        programs = Programs(roots)
+        read = _program_read(programs, "atomic-2026")
+        target = read["lines"][0]["id"]
+        solo = [ly["id"] for ly in read["layers"] if ly["appliesTo"] == [target]]
+        _line_remove(programs, "atomic-2026", target)
+        after = _program_read(programs, "atomic-2026")
+        assert target not in [ln["id"] for ln in after["lines"]]
+        assert not [ly for ly in after["layers"] if ly["id"] in solo]
+
+    def test_line_edit_renames_and_line_move_reorders(self, roots) -> None:
+        programs = Programs(roots)
+        read = _program_read(programs, "atomic-2026")
+        line_id = read["lines"][0]["id"]
+        out = _line_edit(programs, "atomic-2026", line_id, line_name="General Liability X")
+        new_id = out["line_id"]
+        after = _program_read(programs, "atomic-2026")
+        assert new_id in [ln["id"] for ln in after["lines"]]
+        if len(after["lines"]) > 1:
+            before_order = [ln["id"] for ln in after["lines"]]
+            _line_move(programs, "atomic-2026", new_id, 1)
+            moved = _program_read(programs, "atomic-2026")
+            moved_order = [ln["id"] for ln in moved["lines"]]
+            assert moved_order != before_order or before_order[-1] == new_id
+
+    def test_retention_add_parses_human_money(self, roots) -> None:
+        programs = Programs(roots)
+        read = _program_read(programs, "atomic-2026")
+        line_id = read["lines"][0]["id"]
+        out = _retention_add(programs, "atomic-2026", [line_id], "sir", "500k", aggregate="2m")
+        assert out["index"] == len(read["retentions"])
+        after = _program_read(programs, "atomic-2026")
+        assert after["retentions"][out["index"]]["amount"] == 500_000
+        assert after["retentions"][out["index"]]["aggregate"] == 2_000_000
+
+    def test_retention_edit_guards_against_a_shifted_index(self, roots) -> None:
+        programs = Programs(roots)
+        read = _program_read(programs, "atomic-2026")
+        assert read["retentions"], "fixture must carry a retention"
+        with pytest.raises(ValueError, match="expecting"):
+            _retention_edit(
+                programs, "atomic-2026", 0, amount="1m", expecting_lines=["ghost-line"]
+            )
+
+    def test_retention_edit_applies_when_the_guard_matches(self, roots) -> None:
+        programs = Programs(roots)
+        read = _program_read(programs, "atomic-2026")
+        current = read["retentions"][0]
+        _retention_edit(
+            programs, "atomic-2026", 0, amount="750k", expecting_lines=current["appliesTo"]
+        )
+        after = _program_read(programs, "atomic-2026")
+        assert after["retentions"][0]["amount"] == 750_000
+
+    def test_retention_remove_guards_and_then_removes(self, roots) -> None:
+        programs = Programs(roots)
+        read = _program_read(programs, "atomic-2026")
+        current = read["retentions"][0]
+        count = len(read["retentions"])
+        with pytest.raises(ValueError, match="expecting"):
+            _retention_remove(programs, "atomic-2026", 0, expecting_lines=["ghost-line"])
+        _retention_remove(
+            programs, "atomic-2026", 0, expecting_lines=current["appliesTo"]
+        )
+        after = _program_read(programs, "atomic-2026")
+        assert len(after["retentions"]) == count - 1
+
+    def test_layer_lines_rejects_an_unknown_line_and_writes_nothing(self, roots) -> None:
+        programs = Programs(roots)
+        read = _program_read(programs, "atomic-2026")
+        path = roots[0] / "atomic-2026.json"
+        before = path.read_bytes()
+        with pytest.raises(ValueError, match="refused"):
+            _layer_lines(programs, "atomic-2026", read["layers"][0]["id"], ["ghost"])
+        assert path.read_bytes() == before
+
+    def test_layer_follows_heals_the_attachment(self, roots) -> None:
+        programs = Programs(roots)
+        read = _program_read(programs, "atomic-2026")
+        top = max(read["layers"], key=lambda ly: ly["attach"])
+        _layer_follows(programs, "atomic-2026", top["id"], True)
+        after = _program_read(programs, "atomic-2026")
+        healed = next(ly for ly in after["layers"] if ly["id"] == top["id"])
+        assert healed["followsUnderlying"] is True
+
+    def test_layer_remove_reports_line_gap(self, roots) -> None:
+        programs = Programs(roots)
+        read = _program_read(programs, "atomic-2026")
+        layer_id = read["layers"][0]["id"]
+        out = _layer_remove(programs, "atomic-2026", layer_id)
+        after = _program_read(programs, "atomic-2026")
+        assert layer_id not in [ly["id"] for ly in after["layers"]]
+        assert isinstance(out["errors"], list)
+
+    def test_sublimit_round_trip(self, roots) -> None:
+        programs = Programs(roots)
+        read = _program_read(programs, "atomic-2026")
+        line_id = read["lines"][0]["id"]
+        out = _sublimit_add(programs, "atomic-2026", "Flood", "5m", [line_id])
+        index = out["index"]
+        _sublimit_edit(
+            programs, "atomic-2026", index, amount="10m", expecting_name="Flood"
+        )
+        after = _program_read(programs, "atomic-2026")
+        assert after["sublimits"][index]["amount"] == 10_000_000
+        _sublimit_remove(programs, "atomic-2026", index, expecting_name="Flood")
+        assert len(_program_read(programs, "atomic-2026")["sublimits"]) == index
+
+    def test_sublimit_edit_guards_against_a_shifted_index(self, roots) -> None:
+        programs = Programs(roots)
+        read = _program_read(programs, "atomic-2026")
+        line_id = read["lines"][0]["id"]
+        out = _sublimit_add(programs, "atomic-2026", "Flood", "5m", [line_id])
+        with pytest.raises(ValueError, match="expecting"):
+            _sublimit_edit(
+                programs, "atomic-2026", out["index"], amount="1m", expecting_name="Not Flood"
+            )
+
+
 async def test_tools_are_registered_and_callable_over_the_protocol(roots) -> None:
     from mcp.client import Client
 
@@ -210,10 +352,28 @@ async def test_tools_are_registered_and_callable_over_the_protocol(roots) -> Non
             "program_check",
             "restack",
             "program_revert_write",
+            "line_add",
+            "line_edit",
+            "line_move",
+            "line_remove",
+            "retention_add",
+            "retention_edit",
+            "retention_remove",
+            "sublimit_add",
+            "sublimit_edit",
+            "sublimit_remove",
+            "layer_remove",
+            "layer_lines",
+            "layer_follows",
         } <= names
         result = await client.call_tool("program_read", {"name": "atomic-2026"})
         assert not result.is_error
         assert result.structured_content["lines"]
+        result = await client.call_tool(
+            "line_add", {"name": "atomic-2026", "line_name": "Cyber Protocol"}
+        )
+        assert not result.is_error
+        assert result.structured_content["added"] == "cyber-protocol"
         result = await client.call_tool("restack", {"name": "atomic-2026"})
         assert not result.is_error
         assert result.structured_content["write_ref"].startswith("TKW-")

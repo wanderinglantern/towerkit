@@ -34,6 +34,7 @@ from pydantic import ValidationError
 
 from . import edit
 from .model import Program, dumps_program, load_program, loads_program
+from .money import parse_money
 from .validate import Diagnostic, validate_program
 
 DEFAULT_ROOT = Path("programs")
@@ -343,6 +344,265 @@ def _restack(programs: Programs, name: str) -> dict[str, Any]:
     return _write(programs, name, "restacked the tower", edit.restack)
 
 
+def _guard_index(items: list[Any], index: int, what: str) -> None:
+    if not 0 <= index < len(items):
+        raise ValueError(
+            f"no {what} at index {index} — there are {len(items)}; re-read and retry"
+        )
+
+
+def _line_add(
+    programs: Programs,
+    name: str,
+    line_name: str,
+    abbr: str | None = None,
+    group: str | None = None,
+) -> dict[str, Any]:
+    """Add a coverage line — a new column in the tower. It will report
+    line-empty until a layer covers it."""
+    added: list[str] = []
+
+    def do(program: Program) -> None:
+        added.append(edit.add_line(program, line_name, abbr, group).id)
+
+    out = _write(programs, name, f"added line {line_name!r}", do)
+    return {**out, "added": added[0]}
+
+
+def _line_edit(
+    programs: Programs,
+    name: str,
+    line_id: str,
+    line_name: str | None = None,
+    abbr: str | None = None,
+    group: str | None = None,
+) -> dict[str, Any]:
+    """Rename a line (the id follows the name, cascading everywhere it is
+    referenced), set its abbreviation, or set its coverage group."""
+    result: list[str] = []
+
+    def do(program: Program) -> None:
+        current = line_id
+        if line_name is not None:
+            current = edit.rename_line(program, current, line_name).id
+        if group is not None:
+            edit.set_line_group(program, current, group or None)
+        if abbr is not None:
+            next(ln for ln in program.lines if ln.id == current).abbr = abbr or None
+        result.append(current)
+
+    out = _write(programs, name, f"edited line {line_id}", do)
+    return {**out, "line_id": result[0]}
+
+
+def _line_move(programs: Programs, name: str, line_id: str, delta: int) -> dict[str, Any]:
+    """Move a line left (-1) or right (+1). Array order is column order."""
+
+    def do(program: Program) -> None:
+        edit.move_line(program, line_id, delta)
+
+    return _write(programs, name, f"moved line {line_id} by {delta}", do)
+
+
+def _line_remove(programs: Programs, name: str, line_id: str) -> dict[str, Any]:
+    """Remove a line. Anything left covering nothing — layers, retentions,
+    sublimits — goes with it."""
+
+    def do(program: Program) -> None:
+        edit.remove_line(program, line_id)
+
+    return _write(programs, name, f"removed line {line_id}", do)
+
+
+def _retention_add(
+    programs: Programs,
+    name: str,
+    applies_to: list[str],
+    type: str,
+    amount: str,
+    aggregate: str | None = None,
+    vehicle: str | None = None,
+    notes: str | None = None,
+) -> dict[str, Any]:
+    """What the insured pays below the tower. `type` is deductible, sir, or
+    captive; a captive needs a named vehicle. Money in dollars
+    ('500k', '$1,000,000')."""
+    index: list[int] = []
+
+    def do(program: Program) -> None:
+        edit.add_retention(
+            program,
+            applies_to,
+            type,
+            parse_money(amount),
+            aggregate=parse_money(aggregate) if aggregate else None,
+            vehicle=vehicle,
+            notes=notes,
+        )
+        index.append(len(program.retentions) - 1)
+
+    out = _write(programs, name, f"added a {type} retention", do)
+    return {**out, "index": index[0]}
+
+
+def _retention_edit(
+    programs: Programs,
+    name: str,
+    index: int,
+    expecting_lines: list[str],
+    applies_to: list[str] | None = None,
+    type: str | None = None,
+    amount: str | None = None,
+    aggregate: str | None = None,
+    vehicle: str | None = None,
+    notes: str | None = None,
+) -> dict[str, Any]:
+    """Edit the retention at `index` from a program_read. Retentions have no
+    ids, so `expecting_lines` guards against the list having shifted: it
+    must match what the read reported."""
+
+    def do(program: Program) -> None:
+        _guard_index(program.retentions, index, "retention")
+        actual = list(program.retentions[index].applies_to)
+        if actual != list(expecting_lines):
+            raise ValueError(
+                f"retention {index} now applies to {actual}, not "
+                f"expecting_lines={list(expecting_lines)} — re-read and retry"
+            )
+        edit.edit_retention(
+            program,
+            index,
+            applies_to=applies_to,
+            type=type,
+            amount=parse_money(amount) if amount else None,
+            aggregate=parse_money(aggregate) if aggregate else None,
+            vehicle=vehicle,
+            notes=notes,
+        )
+
+    return _write(programs, name, f"edited retention {index}", do)
+
+
+def _retention_remove(
+    programs: Programs, name: str, index: int, expecting_lines: list[str]
+) -> dict[str, Any]:
+    """Remove the retention at `index`, guarded by the lines it covers."""
+
+    def do(program: Program) -> None:
+        _guard_index(program.retentions, index, "retention")
+        actual = list(program.retentions[index].applies_to)
+        if actual != list(expecting_lines):
+            raise ValueError(
+                f"retention {index} now applies to {actual}, not "
+                f"expecting_lines={list(expecting_lines)} — re-read and retry"
+            )
+        edit.remove_retention(program, index)
+
+    return _write(programs, name, f"removed retention {index}", do)
+
+
+def _sublimit_add(
+    programs: Programs,
+    name: str,
+    sublimit_name: str,
+    amount: str,
+    applies_to: list[str],
+    notes: str | None = None,
+) -> dict[str, Any]:
+    """A named cap inside the tower — flood, quake, a per-location limit."""
+    index: list[int] = []
+
+    def do(program: Program) -> None:
+        edit.add_sublimit(program, sublimit_name, parse_money(amount), applies_to, notes)
+        index.append(len(program.sublimits) - 1)
+
+    out = _write(programs, name, f"added sublimit {sublimit_name!r}", do)
+    return {**out, "index": index[0]}
+
+
+def _sublimit_edit(
+    programs: Programs,
+    name: str,
+    index: int,
+    expecting_name: str,
+    sublimit_name: str | None = None,
+    amount: str | None = None,
+    applies_to: list[str] | None = None,
+    notes: str | None = None,
+) -> dict[str, Any]:
+    """Edit the sublimit at `index`, guarded by the name the read reported."""
+
+    def do(program: Program) -> None:
+        _guard_index(program.sublimits, index, "sublimit")
+        actual = program.sublimits[index].name
+        if actual != expecting_name:
+            raise ValueError(
+                f"sublimit {index} is now {actual!r}, not "
+                f"expecting_name={expecting_name!r} — re-read and retry"
+            )
+        edit.edit_sublimit(
+            program,
+            index,
+            name=sublimit_name,
+            amount=parse_money(amount) if amount else None,
+            applies_to=applies_to,
+            notes=notes,
+        )
+
+    return _write(programs, name, f"edited sublimit {index}", do)
+
+
+def _sublimit_remove(
+    programs: Programs, name: str, index: int, expecting_name: str
+) -> dict[str, Any]:
+    """Remove the sublimit at `index`, guarded by its name."""
+
+    def do(program: Program) -> None:
+        _guard_index(program.sublimits, index, "sublimit")
+        actual = program.sublimits[index].name
+        if actual != expecting_name:
+            raise ValueError(
+                f"sublimit {index} is now {actual!r}, not "
+                f"expecting_name={expecting_name!r} — re-read and retry"
+            )
+        edit.remove_sublimit(program, index)
+
+    return _write(programs, name, f"removed sublimit {index}", do)
+
+
+def _layer_remove(programs: Programs, name: str, layer_id: str) -> dict[str, Any]:
+    """Remove a layer from the stack. Expect line-gap until you restack."""
+
+    def do(program: Program) -> None:
+        edit.remove_layer(program, layer_id)
+
+    return _write(programs, name, f"removed layer {layer_id}", do)
+
+
+def _layer_lines(
+    programs: Programs, name: str, layer_id: str, line_ids: list[str]
+) -> dict[str, Any]:
+    """Set which coverage lines a layer spans — how wide its block is."""
+
+    def do(program: Program) -> None:
+        edit.set_applies_to(program, layer_id, line_ids)
+
+    return _write(programs, name, f"set {layer_id} to cover {', '.join(line_ids)}", do)
+
+
+def _layer_follows(
+    programs: Programs, name: str, layer_id: str, follows: bool
+) -> dict[str, Any]:
+    """Mark a layer as following the underlying: its attachment becomes
+    derived state, reseating itself on the highest underlying top. This is
+    how a shared umbrella sits over columns with differing limits."""
+
+    def do(program: Program) -> None:
+        edit.set_follows_underlying(program, layer_id, follows)
+
+    return _write(programs, name, f"set followsUnderlying={follows} on {layer_id}", do)
+
+
 def _program_revert_write(programs: Programs, write_ref: str) -> dict[str, Any]:
     """Undo one write by restoring its pre-image — only while the file still
     holds exactly what that write produced.
@@ -420,6 +680,139 @@ def _register_write_tools(server: MCPServer, programs: Programs) -> None:
         """Undo one write by restoring its pre-image — only while the file
         still holds exactly what that write produced."""
         return _program_revert_write(programs, write_ref)
+
+    @server.tool()
+    async def line_add(
+        name: str, line_name: str, abbr: str | None = None, group: str | None = None
+    ) -> dict[str, Any]:
+        """Add a coverage line — a new column in the tower. It will report
+        line-empty until a layer covers it."""
+        return _line_add(programs, name, line_name, abbr, group)
+
+    @server.tool()
+    async def line_edit(
+        name: str,
+        line_id: str,
+        line_name: str | None = None,
+        abbr: str | None = None,
+        group: str | None = None,
+    ) -> dict[str, Any]:
+        """Rename a line (the id follows the name, cascading everywhere it is
+        referenced), set its abbreviation, or set its coverage group."""
+        return _line_edit(programs, name, line_id, line_name, abbr, group)
+
+    @server.tool()
+    async def line_move(name: str, line_id: str, delta: int) -> dict[str, Any]:
+        """Move a line left (-1) or right (+1). Array order is column order."""
+        return _line_move(programs, name, line_id, delta)
+
+    @server.tool()
+    async def line_remove(name: str, line_id: str) -> dict[str, Any]:
+        """Remove a line. Anything left covering nothing — layers, retentions,
+        sublimits — goes with it."""
+        return _line_remove(programs, name, line_id)
+
+    @server.tool()
+    async def retention_add(
+        name: str,
+        applies_to: list[str],
+        type: str,
+        amount: str,
+        aggregate: str | None = None,
+        vehicle: str | None = None,
+        notes: str | None = None,
+    ) -> dict[str, Any]:
+        """What the insured pays below the tower. `type` is deductible, sir,
+        or captive; a captive needs a named vehicle. Money in dollars
+        ('500k', '$1,000,000')."""
+        return _retention_add(
+            programs, name, applies_to, type, amount, aggregate, vehicle, notes
+        )
+
+    @server.tool()
+    async def retention_edit(
+        name: str,
+        index: int,
+        expecting_lines: list[str],
+        applies_to: list[str] | None = None,
+        type: str | None = None,
+        amount: str | None = None,
+        aggregate: str | None = None,
+        vehicle: str | None = None,
+        notes: str | None = None,
+    ) -> dict[str, Any]:
+        """Edit the retention at `index` from a program_read. Retentions have
+        no ids, so `expecting_lines` guards against the list having shifted:
+        it must match what the read reported."""
+        return _retention_edit(
+            programs,
+            name,
+            index,
+            expecting_lines,
+            applies_to,
+            type,
+            amount,
+            aggregate,
+            vehicle,
+            notes,
+        )
+
+    @server.tool()
+    async def retention_remove(
+        name: str, index: int, expecting_lines: list[str]
+    ) -> dict[str, Any]:
+        """Remove the retention at `index`, guarded by the lines it covers."""
+        return _retention_remove(programs, name, index, expecting_lines)
+
+    @server.tool()
+    async def sublimit_add(
+        name: str,
+        sublimit_name: str,
+        amount: str,
+        applies_to: list[str],
+        notes: str | None = None,
+    ) -> dict[str, Any]:
+        """A named cap inside the tower — flood, quake, a per-location limit."""
+        return _sublimit_add(programs, name, sublimit_name, amount, applies_to, notes)
+
+    @server.tool()
+    async def sublimit_edit(
+        name: str,
+        index: int,
+        expecting_name: str,
+        sublimit_name: str | None = None,
+        amount: str | None = None,
+        applies_to: list[str] | None = None,
+        notes: str | None = None,
+    ) -> dict[str, Any]:
+        """Edit the sublimit at `index`, guarded by the name the read reported."""
+        return _sublimit_edit(
+            programs, name, index, expecting_name, sublimit_name, amount, applies_to, notes
+        )
+
+    @server.tool()
+    async def sublimit_remove(
+        name: str, index: int, expecting_name: str
+    ) -> dict[str, Any]:
+        """Remove the sublimit at `index`, guarded by its name."""
+        return _sublimit_remove(programs, name, index, expecting_name)
+
+    @server.tool()
+    async def layer_remove(name: str, layer_id: str) -> dict[str, Any]:
+        """Remove a layer from the stack. Expect line-gap until you restack."""
+        return _layer_remove(programs, name, layer_id)
+
+    @server.tool()
+    async def layer_lines(name: str, layer_id: str, line_ids: list[str]) -> dict[str, Any]:
+        """Set which coverage lines a layer spans — how wide its block is."""
+        return _layer_lines(programs, name, layer_id, line_ids)
+
+    @server.tool()
+    async def layer_follows(name: str, layer_id: str, follows: bool) -> dict[str, Any]:
+        """Mark a layer as following the underlying: its attachment becomes
+        derived state, reseating itself on the highest underlying top. This
+        is how a shared umbrella sits over columns with differing limits."""
+        return _layer_follows(programs, name, layer_id, follows)
 
 
 def serve(roots: list[Path] | None = None) -> None:
