@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import errno
 import os
+import shutil
 from pathlib import Path
 
 import pytest
@@ -102,3 +103,39 @@ class TestAtomicWrite:
         atomic_write_bytes(b, "héllo".encode())
 
         assert a.read_bytes() == b.read_bytes()
+
+    def test_the_copy_fallback_works_when_hard_links_are_unavailable(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        # SMB/exFAT don't support hard links; os.link raises EXDEV there
+        target = tmp_path / "p.json"
+        target.write_text("v1", encoding="utf-8")
+
+        def _no_hardlinks(_src: str, _dst: str) -> None:
+            raise OSError(errno.EXDEV, "Cross-device link")
+
+        monkeypatch.setattr(os, "link", _no_hardlinks)
+
+        atomic_write_text(target, "v2")
+
+        assert target.read_text(encoding="utf-8") == "v2"
+        assert backup_path(target).read_text(encoding="utf-8") == "v1"
+
+    def test_a_totally_failed_backup_does_not_fail_the_write(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        # the sidecar is best-effort: even if both the hard link and the
+        # copy fallback fail, the main write must still land
+        target = tmp_path / "p.json"
+        target.write_text("v1", encoding="utf-8")
+
+        def _fail(*_args: object, **_kwargs: object) -> None:
+            raise OSError(errno.ENOSPC, "No space left on device")
+
+        monkeypatch.setattr(os, "link", _fail)
+        monkeypatch.setattr(shutil, "copyfile", _fail)
+
+        atomic_write_text(target, "v2")
+
+        assert target.read_text(encoding="utf-8") == "v2"
+        assert not backup_path(target).exists()
