@@ -188,7 +188,7 @@ def restore(path: Path, ref: str) -> None:
             f"towerkit editor, bookkit, or a later write) would be lost; revert "
             f"newer writes first"
         )
-    path.write_bytes(image.read_bytes())
+    _atomic_write_bytes(path, image.read_bytes())
 
 
 def _atomic_write(path: Path, text: str) -> None:
@@ -196,6 +196,16 @@ def _atomic_write(path: Path, text: str) -> None:
     never a truncated one."""
     tmp = path.with_name(f".{path.name}.tmp")
     tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def _atomic_write_bytes(path: Path, data: bytes) -> None:
+    """Bytes-oriented sibling of `_atomic_write`, used by `restore()`. The
+    pre-image is already-canonical UTF-8 JSON read straight off disk; a
+    text round-trip risks re-encoding it, so this writes the exact bytes
+    through the same same-directory temp + replace path instead."""
+    tmp = path.with_name(f".{path.name}.tmp")
+    tmp.write_bytes(data)
     os.replace(tmp, path)
 
 
@@ -437,7 +447,15 @@ def _line_edit(
 
 
 def _line_move(programs: Programs, name: str, line_id: str, delta: int) -> dict[str, Any]:
-    """Move a line left (-1) or right (+1). Array order is column order."""
+    """Move a line left (-1) or right (+1). Array order is column order.
+
+    `delta` must be exactly -1 or +1: `edit.move_line` is a swap of two
+    array elements, which only means "move" when the swap is between
+    neighbours. A larger delta would swap the line with something two or
+    more columns away and silently produce the wrong order, so it is
+    refused here rather than passed through."""
+    if abs(delta) != 1:
+        raise ValueError(f"delta must be -1 or +1 (a single step), got {delta}")
 
     def do(program: Program) -> None:
         edit.move_line(program, line_id, delta)
@@ -652,13 +670,28 @@ def _program_revert_write(programs: Programs, write_ref: str) -> dict[str, Any]:
     so for a nested name like `private/secret-2026` the snapshot lands in
     `<root>/private/.mcp-snapshots/`, not `<root>/.mcp-snapshots/`. Walk each
     root for a `.mcp-snapshots` dir at any depth rather than assuming one at
-    the top."""
+    the top.
+
+    `.mcp-snapshots/` is shared with bookkit's MCP, which prefixes its own
+    write refs `MCP-`. Refuse anything not carrying this server's `TKW-`
+    prefix before ever globbing for it — otherwise a bookkit ref handed to
+    this tool would restore bookkit's pre-image through towerkit's write
+    path."""
+    if not write_ref.startswith(_PREFIX):
+        raise ValueError(
+            f"{write_ref!r} is not a towerkit write ref (expected a {_PREFIX!r} "
+            f"prefix) — this tool only reverts its own writes"
+        )
     for root in programs.roots:
         for meta_file in root.rglob(f"{_SNAPDIR}/{write_ref}.meta.json"):
             target = Path(json.loads(meta_file.read_text())["path"])
             restore(target, write_ref)
             programs.note(target)
-            return {"reverted": write_ref, "file": str(target)}
+            return {
+                "reverted": write_ref,
+                "file": str(target),
+                "resync": run_hook(target),
+            }
     raise ValueError(f"no snapshot for {write_ref} under the program roots")
 
 
@@ -827,7 +860,8 @@ def _register_write_tools(server: MCPServer, programs: Programs) -> None:
 
     @server.tool()
     async def line_move(name: str, line_id: str, delta: int) -> dict[str, Any]:
-        """Move a line left (-1) or right (+1). Array order is column order."""
+        """Move a line left (-1) or right (+1). Array order is column order.
+        `delta` must be -1 or +1 — a single step; anything else is refused."""
         return _line_move(programs, name, line_id, delta)
 
     @server.tool()

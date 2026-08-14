@@ -65,7 +65,7 @@ So the mutations move into one module both surfaces call:
 lines:      add_line, rename_line, set_line_group, move_line, remove_line
 retentions: add_retention, edit_retention, remove_retention
 sublimits:  add_sublimit, edit_sublimit, remove_sublimit
-layers:     rename_layer, remove_layer, set_applies_to, set_follows_underlying
+layers:     remove_layer, set_applies_to, set_follows_underlying
 moved:      add_layer, restack, suggested_attach, unique_id, slugify
 ```
 
@@ -79,10 +79,15 @@ sublimit's `appliesTo`, and anything left with an empty list is removed
 too. `appliesTo` is `min_length=1`, so a partial cascade would raise on
 assignment rather than produce a diagnostic.
 
-`rename_line` and `rename_layer` keep the 67ac42f behaviour — the id
-follows the name, via `unique_id(slugify(name), exclude=current_id)`. Both
-exist in `edit` because the editor needs them; only `rename_line` gets an
-MCP tool, since bookkit's `program_layer_edit` already owns layer naming.
+`rename_line` keeps the 67ac42f behaviour — the id follows the name, via
+`unique_id(slugify(name), exclude=current_id)`. It is the only rename that
+moved into `edit`: the editor's layer rename stayed inline (`editor.py`,
+the `layers-sheet` cell edit and the layer detail form) because it re-slugs
+the id only while `PLACEHOLDER_ID` still matches, which is not what
+`unique_id`-based renaming does — a shared `rename_layer` would start
+churning layer ids on every rename, the opposite of what this extraction is
+for. There is no MCP consumer either: layer naming belongs to bookkit's
+`program_layer_edit`, not to this server.
 
 Guard test: nothing under `tui/` mutates `program.lines`, `.layers`,
 `.retentions`, or `.sublimits` directly. Same shape as bookkit's

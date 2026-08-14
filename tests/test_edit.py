@@ -175,13 +175,6 @@ class TestLayers:
         assert layer.limit == 5_000_000
         assert layer.participants == []
 
-    def test_rename_layer_id_follows_the_name(self) -> None:
-        program = _sample()
-        layer = edit.add_layer(program, [program.lines[0].id])
-        renamed = edit.rename_layer(program, layer.id, "Lead Umbrella")
-        assert renamed.id == "lead-umbrella"
-        assert renamed.name == "Lead Umbrella"
-
     def test_remove_layer(self) -> None:
         program = _sample()
         layer = edit.add_layer(program, [program.lines[0].id])

@@ -1629,6 +1629,12 @@ class EditorScreen(Screen):
                 target = Path("programs") / (
                     name if name.endswith(".json") else f"{name}.json"
                 )
+                if target.exists():
+                    self.notify(
+                        f"{target} already exists — pick another name",
+                        severity="error",
+                    )
+                    return
                 target.parent.mkdir(parents=True, exist_ok=True)
                 self.session.save(target)
                 self.notify(f"saved {target}")

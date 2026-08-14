@@ -186,13 +186,6 @@ def add_layer(program: Program, line_ids: list[str] | None = None) -> Layer:
     return layer
 
 
-def rename_layer(program: Program, layer_id: str, name: str) -> Layer:
-    layer = _layer(program, layer_id)
-    layer.name = name
-    layer.id = unique_id(program, slugify(name), exclude=layer_id)
-    return layer
-
-
 def remove_layer(program: Program, layer_id: str) -> None:
     _layer(program, layer_id)
     program.layers = [ly for ly in program.layers if ly.id != layer_id]

@@ -317,6 +317,47 @@ class TestEditor:
         assert program.layers[0].signed_bps == BPS_SCALE
 
     @pytest.mark.asyncio
+    async def test_save_as_refuses_an_existing_file_name(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """The prompt-branch of _do_save (session.path is None — Save As on
+        a brand-new program) must not silently clobber a whole existing
+        program file. It should refuse and leave both files untouched."""
+        monkeypatch.chdir(tmp_path)
+        programs_dir = tmp_path / "programs"
+        programs_dir.mkdir()
+        existing = programs_dir / "existing.json"
+        shutil.copy(SAMPLE, existing)
+        before = existing.read_bytes()
+
+        app = TowerkitApp(new=True)
+        async with app.run_test(size=(140, 45)) as pilot:
+            editor = app.screen
+            editor.selected = ("program", None)
+            await editor._rebuild_detail()
+            await pilot.pause()
+            insured = editor.query_one("#f-insured")
+            insured.value = "Should Not Land"
+            editor._commit_input(insured)
+            editor.action_save()
+            await pilot.pause()
+            from towerkit.tui.widgets.modals import ConfirmModal, PromptModal
+
+            if isinstance(app.screen, ConfirmModal):  # a blank program has errors
+                app.screen.query_one("#yes", Button).press()
+                await pilot.pause()
+
+            assert isinstance(app.screen, PromptModal)
+            prompt = app.screen.query_one("#prompt")
+            prompt.value = "existing"
+            await pilot.press("enter")
+            await pilot.pause()
+            # refused, not saved: back in the editor, nothing on disk moved
+            assert isinstance(app.screen, EditorScreen)
+            assert app.screen.session.path is None
+        assert existing.read_bytes() == before
+
+    @pytest.mark.asyncio
     async def test_save_over_a_changed_file_offers_a_choice(
         self, sample_copy, monkeypatch
     ) -> None:

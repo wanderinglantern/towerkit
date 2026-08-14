@@ -212,6 +212,27 @@ class TestRevert:
         assert (snapdir / "MCP-abc.json").exists()
         assert len(list(snapdir.glob("TKW-*.meta.json"))) == 3
 
+    def test_revert_runs_the_post_write_hook_and_reports_resync(
+        self, roots, monkeypatch
+    ) -> None:
+        """Same as any other successful write: a downstream projection cache
+        must be told the file changed again, and the caller must be able to
+        see whether that happened."""
+        monkeypatch.delenv("TOWERKIT_POST_WRITE_CMD", raising=False)
+        programs = Programs(roots)
+        _program_read(programs, "atomic-2026")
+        ref = _restack(programs, "atomic-2026")["write_ref"]
+        out = _program_revert_write(programs, ref)
+        assert out["resync"] == "not configured"
+
+    def test_revert_refuses_a_ref_that_is_not_this_servers_own(self, roots) -> None:
+        """.mcp-snapshots/ is shared with bookkit, which prefixes its refs
+        MCP-. Handed one of those, this tool must refuse rather than restore
+        a pre-image belonging to another tool's writes."""
+        programs = Programs(roots)
+        with pytest.raises(ValueError, match="TKW-"):
+            _program_revert_write(programs, "MCP-20260101T000000-abcd")
+
 
 class TestDesignTools:
     def test_line_add_lands_and_reports_that_it_is_empty(self, roots) -> None:
@@ -264,6 +285,22 @@ class TestDesignTools:
             moved = _program_read(programs, "atomic-2026")
             moved_order = [ln["id"] for ln in moved["lines"]]
             assert moved_order != before_order or before_order[-1] == new_id
+
+    def test_line_move_rejects_a_delta_other_than_one(self, roots) -> None:
+        """edit.move_line swaps two array elements, which only equals a
+        'move' when |delta| == 1. A larger delta would silently swap the
+        line with something two-or-more columns away instead of moving it
+        one step, so the MCP edge refuses it rather than passing it
+        through."""
+        programs = Programs(roots)
+        read = _program_read(programs, "atomic-2026")
+        line_id = read["lines"][0]["id"]
+        path = roots[0] / "atomic-2026.json"
+        before = path.read_bytes()
+        for bad in (0, 2, -2):
+            with pytest.raises(ValueError, match="delta"):
+                _line_move(programs, "atomic-2026", line_id, bad)
+        assert path.read_bytes() == before
 
     def test_retention_add_parses_human_money(self, roots) -> None:
         programs = Programs(roots)
