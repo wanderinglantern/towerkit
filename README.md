@@ -60,6 +60,23 @@ code changes without a new release. Maintainers rebuild the wheelhouse with
 TUI browser lists it alongside `programs/`, but nothing in it can reach the
 public repository or CI.
 
+### `towerctl mcp`
+
+A stdio MCP server for design-level assist: coverage lines, retentions,
+sublimits, and the shape of the layer stack.
+
+    towerctl mcp --programs ~/programs
+
+Validation errors do not block writes — a tower under construction is
+invalid by construction — so they come back in each tool's result instead.
+Writes refuse against a file the session has not read, or one that changed
+since it read it.
+
+Set `TOWERKIT_POST_WRITE_CMD` to have something re-read a file after every
+write; `{path}` is substituted:
+
+    export TOWERKIT_POST_WRITE_CMD='bookctl sync --path {path}'
+
 ## Design in one minute
 
 - **Lines are columns; layers carry `appliesTo`.** An umbrella spanning three

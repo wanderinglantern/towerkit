@@ -27,6 +27,7 @@ without a marker.
 from __future__ import annotations
 
 import shutil
+import sys
 from pathlib import Path
 
 import pytest
@@ -446,6 +447,74 @@ class TestCreation:
             lines=["Property"],
         )
         _line_add(programs, "fresh-2027", "Cyber")  # no raise
+
+
+class TestResyncHook:
+    def test_no_hook_configured_is_reported_not_hidden(self, roots, monkeypatch) -> None:
+        monkeypatch.delenv("TOWERKIT_POST_WRITE_CMD", raising=False)
+        programs = Programs(roots)
+        _program_read(programs, "atomic-2026")
+        assert _restack(programs, "atomic-2026")["resync"] == "not configured"
+
+    def test_the_hook_runs_with_the_path_substituted(
+        self, roots, tmp_path, monkeypatch
+    ) -> None:
+        marker = tmp_path / "hooked.txt"
+        monkeypatch.setenv(
+            "TOWERKIT_POST_WRITE_CMD",
+            f"{sys.executable} -c "
+            f"\"import sys,pathlib; pathlib.Path(r'{marker}').write_text(sys.argv[1])\" {{path}}",
+        )
+        programs = Programs(roots)
+        _program_read(programs, "atomic-2026")
+        out = _restack(programs, "atomic-2026")
+        assert out["resync"] == "ok"
+        assert marker.read_text().endswith("atomic-2026.json")
+
+    def test_a_failing_hook_never_undoes_the_write(self, roots, monkeypatch) -> None:
+        monkeypatch.setenv(
+            "TOWERKIT_POST_WRITE_CMD", f'{sys.executable} -c "raise SystemExit(3)"'
+        )
+        programs = Programs(roots)
+        _program_read(programs, "atomic-2026")
+        path = roots[0] / "atomic-2026.json"
+        out = _restack(programs, "atomic-2026")
+        assert out["resync"].startswith("failed")
+        assert (roots[0] / ".mcp-snapshots" / f"{out['write_ref']}.meta.json").exists()
+        assert load_program(path)  # and the file is still loadable
+
+    def test_creation_runs_the_hook_too(self, roots, tmp_path, monkeypatch) -> None:
+        marker = tmp_path / "created.txt"
+        monkeypatch.setenv(
+            "TOWERKIT_POST_WRITE_CMD",
+            f"{sys.executable} -c "
+            f"\"import sys,pathlib; pathlib.Path(r'{marker}').write_text(sys.argv[1])\" {{path}}",
+        )
+        programs = Programs(roots)
+        out = _program_create(
+            programs,
+            "hooked-2027",
+            insured="H",
+            program="P",
+            placement="proposed",
+            period_from="1/1/27",
+            period_to="1/1/28",
+            lines=["GL"],
+        )
+        assert out["resync"] == "ok"
+        assert marker.read_text().endswith("hooked-2027.json")
+
+    def test_clone_renewal_runs_the_hook_too(self, roots, tmp_path, monkeypatch) -> None:
+        marker = tmp_path / "cloned.txt"
+        monkeypatch.setenv(
+            "TOWERKIT_POST_WRITE_CMD",
+            f"{sys.executable} -c "
+            f"\"import sys,pathlib; pathlib.Path(r'{marker}').write_text(sys.argv[1])\" {{path}}",
+        )
+        programs = Programs(roots)
+        out = _program_clone_renewal(programs, "atomic-2026", "atomic-2027")
+        assert out["resync"] == "ok"
+        assert marker.read_text().endswith("atomic-2027.json")
 
 
 async def test_tools_are_registered_and_callable_over_the_protocol(roots) -> None:

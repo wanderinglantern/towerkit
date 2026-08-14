@@ -24,6 +24,8 @@ import hashlib
 import json
 import os
 import secrets
+import shlex
+import subprocess
 from collections.abc import Callable
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -42,10 +44,44 @@ DEFAULT_ROOT = Path("programs")
 SNAPSHOT_KEEP = 20
 _SNAPDIR = ".mcp-snapshots"
 _PREFIX = "TKW-"
+HOOK_ENV = "TOWERKIT_POST_WRITE_CMD"
+HOOK_TIMEOUT = 30
 
 
 def file_sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def run_hook(path: Path) -> str:
+    """Best-effort notification that a program file changed.
+
+    towerkit does not know what is downstream — bookkit sets this to
+    `bookctl sync --path {path}` so its projection cache follows. It NEVER
+    fails the write: by the time this runs the file on disk is already
+    correct, and rolling a good write back over a hook failure would be a
+    worse lie than a stale cache. So: no shell (the command comes from an
+    env var — split it with shlex, never build a shell string), a timeout,
+    and every exception the subprocess can throw is caught and reported in
+    the outcome instead of raised.
+
+    The template is split BEFORE `{path}` is substituted into each part, on
+    purpose: splitting after substitution would break a path containing
+    spaces ('/Users/x/My Programs/y.json') into multiple argv entries, and
+    would let a crafted path inject extra arguments."""
+    template = os.environ.get(HOOK_ENV)
+    if not template:
+        return "not configured"
+    command = [part.replace("{path}", str(path)) for part in shlex.split(template)]
+    try:
+        done = subprocess.run(
+            command, capture_output=True, text=True, timeout=HOOK_TIMEOUT, check=False
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return f"failed: {exc}"
+    if done.returncode != 0:
+        detail = (done.stderr or done.stdout or "").strip().splitlines()
+        return f"failed: exit {done.returncode}" + (f" — {detail[-1]}" if detail else "")
+    return "ok"
 
 
 class Programs:
@@ -211,6 +247,7 @@ def _write(
         "wrote": name,
         "summary": summary,
         "write_ref": ref,
+        "resync": run_hook(path),
         "errors": _diag(diags.errors),
         "warnings": _diag(diags.warnings),
     }
@@ -676,6 +713,7 @@ def _program_create(
         "created": name,
         "file": str(path),
         "lines": [ln.id for ln in fresh.lines],
+        "resync": run_hook(path),
         "errors": _diag(diags.errors),
         "warnings": _diag(diags.warnings),
     }
@@ -701,6 +739,7 @@ def _program_clone_renewal(programs: Programs, source: str, dest: str) -> dict[s
         "from": source,
         "file": str(dest_path),
         "period": _period(clone),
+        "resync": run_hook(dest_path),
         "errors": _diag(diags.errors),
         "warnings": _diag(diags.warnings),
     }
