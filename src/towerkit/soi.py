@@ -38,7 +38,9 @@ def _covered_lines(layer: Layer, program: Program) -> list[Line]:
 def limits_text(layer: Layer, program: Program) -> str:
     if layer.limits_detail:
         return layer.limits_detail
-    if layer.follows_underlying:
+    if layer.statutory:
+        base = "Statutory"
+    elif layer.follows_underlying:
         base = f"{format_money(layer.limit)} xs underlying"
     elif layer.attach == 0:
         base = format_money(layer.limit)  # primaries by limit alone, never "xs $0"
