@@ -60,20 +60,44 @@ code changes without a new release. Maintainers rebuild the wheelhouse with
 TUI browser lists it alongside `programs/`, but nothing in it can reach the
 public repository or CI.
 
-### `towerctl mcp`
+## MCP connector (design assist)
 
-A stdio MCP server for design-level assist: coverage lines, retentions,
-sublimits, and the shape of the layer stack.
+The `towerctl mcp` command exposes an MCP server for a design assistant.
+Configure it with these settings:
 
-    towerctl mcp --programs ~/programs
+- Name: `towerkit`
+- Command: `towerctl`
+- Arguments: `mcp --programs <dir>` (space-separate extra roots; defaults to
+  `./programs`, which is wrong for a server the client launches from its own
+  working directory — always pass it)
+- Environment: `TOWERKIT_POST_WRITE_CMD` (only to notify something downstream
+  after each write)
+- Mode: both
 
-Validation errors do not block writes — a tower under construction is
-invalid by construction — so they come back in each tool's result instead.
-Writes refuse against a file the session has not read, or one that changed
-since it read it.
+Smoke check: `towerctl mcp` starts silently, waits on stdin, and can be stopped
+with Ctrl+C. Any output to stdout on startup is a bug.
+
+The assistant designs the tower: read a program, draw it, add and remove
+coverage lines, set retentions and sublimits, change which lines a layer spans,
+mark a layer follows-underlying, restack, and start a program from scratch or as
+next year's renewal. Book facts — premiums, market shares, policy dates — belong
+to bookkit's connector, not this one.
+
+Two rules shape every write. **Validation errors do not block a write**: a tower
+under construction is invalid by construction, so a new line reports `line-empty`
+and a half-built stack reports `line-gap`, and those come back in the tool's
+result while the write lands. Only a file towerkit could not load is refused.
+And **a write refuses against a file this session has not read, or one that
+changed since it read it** — re-read and retry. The TUI editor refuses the
+mirror image: it will not save over a file that moved underneath it, offering
+reload, overwrite, or keep editing.
+
+Every write leaves a pre-image in `.mcp-snapshots/` beside the program;
+`program_revert_write` puts one back, but only while the file still holds
+exactly what that write produced.
 
 Set `TOWERKIT_POST_WRITE_CMD` to have something re-read a file after every
-write; `{path}` is substituted:
+write; `{path}` is substituted, and the command never fails the write:
 
     export TOWERKIT_POST_WRITE_CMD='bookctl sync --path {path}'
 
