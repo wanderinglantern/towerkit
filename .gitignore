@@ -13,3 +13,4 @@ handoffs/
 changelog.md
 CLAUDE.md
 .install-pypi.log
+.claude/worktrees/
