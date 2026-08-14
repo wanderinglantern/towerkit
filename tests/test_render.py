@@ -230,6 +230,56 @@ class TestLayerNameReliability:
         assert "Umbrella Excess" in out.read_text()
 
 
+def _wc_program():
+    from datetime import date
+
+    from towerkit.model import Layer, Line, Participant, Period, Placement, Program
+
+    return Program(
+        insured="T",
+        program="T",
+        placement=Placement.BOUND,
+        period=Period(start=date(2026, 1, 1), end=date(2027, 1, 1)),
+        lines=[Line(id="wc", name="Workers Compensation")],
+        layers=[Layer(
+            id="wc-stat", name="Workers Compensation", applies_to=["wc"],
+            attach=0, limit=0, statutory=True,
+            participants=[Participant(carrier="Travelers", share_bps=10_000)],
+        )],
+    )
+
+
+def test_statutory_svg_is_byte_identical_across_runs(theme, tmp_path) -> None:
+    """The project rule, exercised on the new code path."""
+    program = _wc_program()
+    a = render_program(program, theme, tmp_path / "a", "tower", ["svg"])[0]
+    b = render_program(program, theme, tmp_path / "b", "tower", ["svg"])[0]
+    assert a.read_bytes() == b.read_bytes()
+
+
+def test_statutory_draws_no_closed_outline_box(theme) -> None:
+    """The chevron REPLACES the top edge. A closed Rectangle plus carets
+    would read as a bounded bar wearing a hat."""
+    from towerkit.render.mpl_program import draw_tower  # noqa: I001 — sets MPL env first
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    from matplotlib.figure import Figure
+    from matplotlib.patches import Rectangle
+
+    fig = Figure()
+    FigureCanvasAgg(fig)  # a bare Figure() has no renderer; _fit_text needs one
+    ax = fig.add_subplot()
+    tower = draw_tower(ax, _wc_program(), theme)
+    assert tower.chevrons
+    stat = next(b for b in tower.layers if b.statutory)
+    unfilled_full_height = [
+        p for p in ax.patches
+        if isinstance(p, Rectangle)
+        and abs(p.get_height() - (stat.y1 - stat.y0)) < 1e-9
+        and p.get_facecolor()[3] == 0.0
+    ]
+    assert unfilled_full_height == []
+
+
 def test_available_themes_includes_packaged_from_any_cwd(tmp_path, monkeypatch) -> None:
     from towerkit.theme import available_themes
 

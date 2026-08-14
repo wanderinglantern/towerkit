@@ -40,6 +40,10 @@ from .labels import layer_terms as layer_terms
 GUTTER_LEFT = 1.35  # data units reserved left of the tower for dollar labels
 SUPERSCRIPTS = "¹²³⁴⁵⁶⁷⁸⁹"
 
+# Chevron teeth per 1.0 of column width, so teeth stay the same visual size
+# whatever the column count (Grant: the carets read as "continues upward").
+CHEVRON_TEETH_PER_UNIT = 8.0
+
 
 def render_program(
     program: Program,
@@ -161,9 +165,20 @@ def draw_tower(
             pending=block.layer_id in pending,
         )
 
-    # layer outlines: solid for placed layers, dashed for pending ones
+    # layer outlines: solid for placed layers, dashed for pending ones.
+    # A statutory layer is drawn open-topped — its top edge is the chevron
+    # band below, not a line.
     for layer in tower.layers:
         is_pending = layer.layer_id in pending
+        if layer.statutory:
+            for outline in layer.outlines:
+                ax.plot(
+                    [outline.x0, outline.x0, outline.x1, outline.x1],
+                    [outline.y1, outline.y0, outline.y0, outline.y1],
+                    color=chrome.ink, linewidth=1.1, zorder=3,
+                    solid_capstyle="butt",
+                )
+            continue
         for outline in layer.outlines:
             ax.add_patch(
                 Rectangle(
@@ -174,6 +189,16 @@ def draw_tower(
                     zorder=3,
                 )
             )
+
+    # the chevron band: a zigzag standing in for the top edge of unlimited cover
+    for chevron in tower.chevrons:
+        teeth = max(3, round(chevron.width * CHEVRON_TEETH_PER_UNIT))
+        xs = [chevron.x0 + chevron.width * i / (2 * teeth) for i in range(2 * teeth + 1)]
+        ys = [chevron.y0 if i % 2 == 0 else chevron.y1 for i in range(2 * teeth + 1)]
+        ax.plot(
+            xs, ys, color=chrome.ink, linewidth=1.1, zorder=3,
+            solid_capstyle="butt", solid_joinstyle="miter",
+        )
 
     # heavy zero line
     ax.plot(
