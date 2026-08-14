@@ -89,6 +89,7 @@ class LayerBlock:
     y0: float
     y1: float
     outlines: tuple[Rect, ...]  # one per run
+    statutory: bool = False  # no dollar limit: drawn floor to top, off-scale
 
 
 @dataclass(frozen=True)
@@ -134,23 +135,31 @@ def build_layout(program: Program, gamma: float = DEFAULT_GAMMA) -> TowerLayout:
     drawable = [
         layer
         for layer in program.layers
-        if layer.limit > 0 and any(lid in order for lid in layer.applies_to)
+        if (layer.limit > 0 or layer.statutory)
+        and any(lid in order for lid in layer.applies_to)
     ]
+    # Statutory cover has no dollar top, so it contributes NO breakpoints:
+    # scale.py's global map is built from the dollar-scaled layers alone and
+    # is bit-identical whether or not a statutory layer is present.
+    scaled = [layer for layer in drawable if not layer.statutory]
     # a follows-underlying layer has a stepped bottom: one y per column,
     # sitting on that column's stack — all of them become breakpoints
     stepped: dict[str, dict[str, int]] = {
         layer.id: program.underlying_tops(layer)
-        for layer in drawable
+        for layer in scaled
         if layer.follows_underlying
     }
     extra_points = [top for tops in stepped.values() for top in tops.values()]
-    ymap = build_y_map(drawable, gamma=gamma, extra_points=extra_points)
+    ymap = build_y_map(scaled, gamma=gamma, extra_points=extra_points)
 
     layer_blocks: list[LayerBlock] = []
     participant_blocks: list[ParticipantBlock] = []
     for layer in drawable:
         runs = _runs(columns, sorted({order[lid] for lid in layer.applies_to if lid in order}))
-        y0, y1 = ymap.y(layer.attach), ymap.y(layer.top)
+        if layer.statutory:
+            y0, y1 = 0.0, 1.0  # the whole column; the chevron band marks "continues"
+        else:
+            y0, y1 = ymap.y(layer.attach), ymap.y(layer.top)
         bottoms = None
         if layer.id in stepped:
             bottoms = {
@@ -188,6 +197,7 @@ def build_layout(program: Program, gamma: float = DEFAULT_GAMMA) -> TowerLayout:
                 y0=y0,
                 y1=y1,
                 outlines=outlines,
+                statutory=layer.statutory,
             )
         )
         participant_blocks.extend(blocks)

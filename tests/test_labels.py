@@ -12,10 +12,10 @@ from towerkit.render.labels import (
 )
 
 
-def _layer(name: str, attach: int, limit: int) -> LayerBlock:
+def _layer(name: str, attach: int, limit: int, statutory: bool = False) -> LayerBlock:
     return LayerBlock(
         layer_id="x", name=name, attach=attach, limit=limit, premium=None,
-        signed_bps=10_000, y0=0.0, y1=1.0, outlines=(),
+        signed_bps=10_000, y0=0.0, y1=1.0, outlines=(), statutory=statutory,
     )
 
 
@@ -36,6 +36,11 @@ def test_layer_heading_matches_graphic() -> None:
     assert layer_heading(excess, follows=True) == "1st Excess — $4M xs underlying"
     assert layer_heading(excess, follows=False, marker="¹") == "1st Excess¹ — $4M xs $1M"
     assert layer_heading(_layer("Primary", 0, 5_000_000), follows=False) == "Primary — $5M"
+
+
+def test_layer_heading_statutory() -> None:
+    block = _layer("Workers Compensation", 0, 0, statutory=True)
+    assert layer_heading(block, follows=False) == "Workers Compensation — Statutory"
 
 
 def test_participant_and_unplaced_labels() -> None:

@@ -22,11 +22,14 @@ def layer_terms(attach: int, limit: int, statutory: bool = False) -> str:
 
 
 def layer_heading(layer: LayerBlock, follows: bool, marker: str = "") -> str:
-    terms = (
-        f"{format_money_compact(layer.limit)} xs underlying"
-        if follows
-        else layer_terms(layer.attach, layer.limit)
-    )
+    # Statutory is checked first because the two are mutually exclusive —
+    # nothing underlies a statutory bar.
+    if layer.statutory:
+        terms = layer_terms(layer.attach, layer.limit, statutory=True)
+    elif follows:
+        terms = f"{format_money_compact(layer.limit)} xs underlying"
+    else:
+        terms = layer_terms(layer.attach, layer.limit)
     return f"{layer.name}{marker} — {terms}"
 
 
