@@ -160,6 +160,20 @@ class TestRevert:
         _program_revert_write(programs, ref)
         assert path.read_bytes() == before
 
+    def test_revert_finds_snapshots_for_a_nested_program(self, roots) -> None:
+        """snapshot() writes beside the program file, so a nested name like
+        private/secret-2026 puts its snapshots under
+        <root>/private/.mcp-snapshots/, not <root>/.mcp-snapshots/. The
+        revert lookup must find them there too."""
+        programs = Programs(roots)
+        _program_read(programs, "private/secret-2026")
+        path = roots[0] / "private" / "secret-2026.json"
+        before = path.read_bytes()
+        ref = _restack(programs, "private/secret-2026")["write_ref"]
+        assert (roots[0] / "private" / ".mcp-snapshots" / f"{ref}.meta.json").exists()
+        _program_revert_write(programs, ref)
+        assert path.read_bytes() == before
+
     def test_revert_refuses_after_a_later_edit(self, roots) -> None:
         programs = Programs(roots)
         _program_read(programs, "atomic-2026")

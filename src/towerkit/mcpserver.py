@@ -345,16 +345,19 @@ def _restack(programs: Programs, name: str) -> dict[str, Any]:
 
 def _program_revert_write(programs: Programs, write_ref: str) -> dict[str, Any]:
     """Undo one write by restoring its pre-image — only while the file still
-    holds exactly what that write produced."""
+    holds exactly what that write produced.
+
+    `snapshot()` writes beside the program file (`path.parent / _SNAPDIR`),
+    so for a nested name like `private/secret-2026` the snapshot lands in
+    `<root>/private/.mcp-snapshots/`, not `<root>/.mcp-snapshots/`. Walk each
+    root for a `.mcp-snapshots` dir at any depth rather than assuming one at
+    the top."""
     for root in programs.roots:
-        snapdir = root / _SNAPDIR
-        meta_file = snapdir / f"{write_ref}.meta.json"
-        if not meta_file.exists():
-            continue
-        target = Path(json.loads(meta_file.read_text())["path"])
-        restore(target, write_ref)
-        programs.note(target)
-        return {"reverted": write_ref, "file": str(target)}
+        for meta_file in root.rglob(f"{_SNAPDIR}/{write_ref}.meta.json"):
+            target = Path(json.loads(meta_file.read_text())["path"])
+            restore(target, write_ref)
+            programs.note(target)
+            return {"reverted": write_ref, "file": str(target)}
     raise ValueError(f"no snapshot for {write_ref} under the program roots")
 
 
