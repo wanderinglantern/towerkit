@@ -36,9 +36,13 @@ from towerkit.mcpserver import (
     _program_check,
     _program_list,
     _program_read,
+    _program_revert_write,
     _program_view,
+    _restack,
+    _write,
     build_server,
 )
+from towerkit.model import load_program
 
 SAMPLE = Path(__file__).parent.parent / "programs" / "atomic-2026.json"
 
@@ -94,13 +98,108 @@ class TestSeeing:
         assert out["warnings"][0]["ref"]
 
 
+class TestWriteCycle:
+    def test_a_write_needs_a_read_first(self, roots) -> None:
+        programs = Programs(roots)
+        with pytest.raises(ValueError, match="read"):
+            _restack(programs, "atomic-2026")
+
+    def test_list_does_not_arm_the_write_guard(self, roots) -> None:
+        """program_list returns summaries, never the structure a write is
+        reasoned from — merely listing must not license a write to a file
+        this session has never actually read."""
+        programs = Programs(roots)
+        _program_list(programs)
+        with pytest.raises(ValueError, match="read"):
+            _restack(programs, "atomic-2026")
+
+    def test_a_write_refuses_when_the_file_moved(self, roots) -> None:
+        programs = Programs(roots)
+        _program_read(programs, "atomic-2026")
+        path = roots[0] / "atomic-2026.json"
+        before = path.read_bytes()
+        path.write_text(path.read_text("utf-8") + " ", encoding="utf-8")
+        with pytest.raises(ValueError, match="changed on disk"):
+            _restack(programs, "atomic-2026")
+        assert path.read_text("utf-8") == before.decode() + " "  # untouched by us
+
+    def test_a_write_lands_canonically_and_re_arms_the_guard(self, roots) -> None:
+        programs = Programs(roots)
+        _program_read(programs, "atomic-2026")
+        out = _restack(programs, "atomic-2026")
+        assert out["write_ref"].startswith("TKW-")
+        path = roots[0] / "atomic-2026.json"
+        from towerkit.model import dumps_program
+
+        assert path.read_text("utf-8") == dumps_program(load_program(path))
+        _restack(programs, "atomic-2026")  # guard re-armed; no raise
+
+    def test_a_model_invalid_write_is_refused_and_the_file_is_untouched(
+        self, roots
+    ) -> None:
+        programs = Programs(roots)
+        _program_read(programs, "atomic-2026")
+        path = roots[0] / "atomic-2026.json"
+        before = path.read_bytes()
+
+        def poison(program):
+            program.layers[0].applies_to = []  # min_length=1 → ValidationError
+
+        with pytest.raises(ValueError, match="refused"):
+            _write(programs, "atomic-2026", "poison", poison)
+        assert path.read_bytes() == before
+
+
+class TestRevert:
+    def test_revert_restores_byte_identically(self, roots) -> None:
+        programs = Programs(roots)
+        _program_read(programs, "atomic-2026")
+        path = roots[0] / "atomic-2026.json"
+        before = path.read_bytes()
+        ref = _restack(programs, "atomic-2026")["write_ref"]
+        _program_revert_write(programs, ref)
+        assert path.read_bytes() == before
+
+    def test_revert_refuses_after_a_later_edit(self, roots) -> None:
+        programs = Programs(roots)
+        _program_read(programs, "atomic-2026")
+        ref = _restack(programs, "atomic-2026")["write_ref"]
+        path = roots[0] / "atomic-2026.json"
+        path.write_text(path.read_text("utf-8") + " ", encoding="utf-8")
+        with pytest.raises(ValueError, match="changed since"):
+            _program_revert_write(programs, ref)
+
+    def test_snapshots_share_the_directory_with_bookkit_and_prune_only_their_own(
+        self, roots
+    ) -> None:
+        programs = Programs(roots)
+        snapdir = roots[0] / ".mcp-snapshots"
+        snapdir.mkdir(exist_ok=True)
+        (snapdir / "MCP-abc.json").write_text("{}")  # bookkit's, not ours
+        _program_read(programs, "atomic-2026")
+        for _ in range(3):
+            _restack(programs, "atomic-2026")
+        assert (snapdir / "MCP-abc.json").exists()
+        assert len(list(snapdir.glob("TKW-*.meta.json"))) == 3
+
+
 async def test_tools_are_registered_and_callable_over_the_protocol(roots) -> None:
     from mcp.client import Client
 
     server = build_server(roots)
     async with Client(server) as client:
         names = {t.name for t in (await client.list_tools()).tools}
-        assert {"program_list", "program_read", "program_view", "program_check"} <= names
+        assert {
+            "program_list",
+            "program_read",
+            "program_view",
+            "program_check",
+            "restack",
+            "program_revert_write",
+        } <= names
         result = await client.call_tool("program_read", {"name": "atomic-2026"})
         assert not result.is_error
         assert result.structured_content["lines"]
+        result = await client.call_tool("restack", {"name": "atomic-2026"})
+        assert not result.is_error
+        assert result.structured_content["write_ref"].startswith("TKW-")
