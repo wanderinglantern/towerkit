@@ -25,7 +25,7 @@
 - **`scale.py` and `layout.py` must not import plotting libraries** (existing test enforces this); `atomicio.py` must import nothing beyond the stdlib.
 - **Backup/rollback story for this plan:** these changes only ever *add* durability — no schema migration, no rewrite of on-disk files, no format change. The one new on-disk artifact is a `.<name>.json.bak` sidecar written beside each program on save. Task 1 adds it to `.gitignore` in the same commit that creates it.
 - **When gating a commit on tests in a shell chain, never pipe pytest into `tail`/`grep` before the `&&`** — the pipe eats the exit code. Redirect to a file, gate on the command, tail the file.
-- Run the suite with `uv run --group dev pytest -q`. Baseline before starting: **501 passed, 1 failed** — `tests/test_connector.py::test_roots_fall_back_to_bookkits_configuration` fails environmentally (no `bookctl` on this machine) and is not yours to fix.
+- Run the suite with `uv run --group dev pytest -q`. Verified baseline in this worktree: **501 passed, 0 failed.** Every task must keep it at 0 failures — any failure you see is yours. (An earlier draft of this plan recorded a `test_connector` environmental failure; it does not reproduce here, so treat a green suite as the only acceptable state.)
 
 ---
 
@@ -304,7 +304,7 @@ programs/.mcp-snapshots/
 - [ ] **Step 6: Confirm nothing else broke, then commit**
 
 Run: `uv run --group dev pytest -q > /tmp/tk-t1.txt 2>&1 && tail -5 /tmp/tk-t1.txt`
-Expected: the passed count rises by the 8 new tests and the failed count stays at exactly 1 — the same environmental `test_connector` failure from the baseline. Any second failure is yours.
+Expected: the passed count rises by the 8 new tests and the failed count stays at **0**. Any failure is yours.
 
 ```bash
 git add src/towerkit/atomicio.py tests/test_atomicio.py .gitignore
@@ -452,7 +452,7 @@ Expected: no findings.
 - [ ] **Step 7: Full suite, then commit**
 
 Run: `uv run --group dev pytest -q > /tmp/tk-t2.txt 2>&1 && tail -5 /tmp/tk-t2.txt`
-Expected: the failed count is still exactly 1 (the environmental `test_connector` one). This is the riskiest task in the plan — it changes how every program file in the project is written — so a clean `test_canonical.py` and `test_mcpserver.py` here is the gate for continuing.
+Expected: **0 failures.** This is the riskiest task in the plan — it changes how every program file in the project is written — so a clean `test_canonical.py` and `test_mcpserver.py` here is the gate for continuing.
 
 ```bash
 git add src/towerkit/model.py src/towerkit/mcpserver.py src/towerkit/tui/session.py tests/test_edit.py
@@ -1106,7 +1106,7 @@ Expected: PASS.
 - [ ] **Step 6: Full suite, then commit**
 
 Run: `uv run --group dev pytest -q > /tmp/tk-t6.txt 2>&1 && tail -5 /tmp/tk-t6.txt`
-Expected: all green except the environmental `test_connector` failure.
+Expected: all green, 0 failures.
 
 Run: `uv run --group dev ruff check src tests && uv run --group dev mypy src/towerkit`
 Expected: no findings.
@@ -1124,7 +1124,7 @@ success."
 
 ## Verification before calling this done
 
-- [ ] `uv run --group dev pytest -q` — everything green but the known environmental `test_connector` failure. Redirect to a file; do not pipe into `tail` before a `&&`.
+- [ ] `uv run --group dev pytest -q` — 0 failures. Redirect to a file; do not pipe into `tail` before a `&&`.
 - [ ] `uv run --group dev ruff check src tests`
 - [ ] `uv run --group dev mypy src/towerkit`
 - [ ] `uv run towerctl validate programs/*.json` — still ✓, proving no on-disk program was disturbed.
