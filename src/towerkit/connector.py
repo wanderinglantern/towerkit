@@ -57,12 +57,32 @@ class CheckReport:
         return all(check.ok for check in self.checks)
 
 
+def _sibling_repo_bookctl() -> Path:
+    """~/Developer/towerkit and ~/Developer/bookkit side by side, each with its
+    own ./.venv. bookkit's pyproject already depends on `../towerkit`, so the
+    mirror-image guess describes a layout this project already assumes."""
+    root = Path(__file__).resolve().parents[2]
+    return root.parent / "bookkit" / ".venv" / "bin" / "bookctl"
+
+
 def _find_bookctl() -> str | None:
-    """Beside this interpreter first: bookkit's install.sh puts bookctl and
-    towerctl in the same venv, and neither lands on PATH."""
-    sibling = Path(sys.executable).parent / "bookctl"
-    if sibling.is_file():
-        return str(sibling)
+    """PATH is the least likely place to find it, not the first.
+
+    bookctl is deliberately not on PATH — the repo-root script is an sh
+    wrapper around ./.venv/bin/bookctl, which is the entire reason
+    --connector-info exists. An earlier version looked only beside this
+    interpreter and then on PATH, which on a real machine found neither, so
+    the borrow always refused with "no program roots".
+    """
+    override = os.environ.get("BOOKCTL")
+    if override:
+        return override if Path(override).is_file() else None
+    for candidate in (
+        Path(sys.executable).parent / "bookctl",  # same venv, if installed together
+        _sibling_repo_bookctl(),
+    ):
+        if candidate.is_file():
+            return str(candidate)
     return shutil.which("bookctl")
 
 
@@ -100,7 +120,12 @@ def fields(roots: Sequence[Path] | None = None) -> ConnectorFields:
     chosen = list(roots) if roots else bookkit_roots()
     resolved = [Path(r).expanduser().resolve() for r in chosen]
     if not resolved:
-        raise NoRoots("no program roots — pass --programs or configure bookctl roots")
+        raise NoRoots(
+            "no program roots. Pass --programs <dir> [<dir>…], or point BOOKCTL at "
+            "bookkit's ./.venv/bin/bookctl so the roots you set with `bookctl roots` "
+            "can be read (bookctl is not on PATH, so it is only found automatically "
+            "in this venv or in a ../bookkit checkout)."
+        )
     return ConnectorFields(
         name="towerkit",
         command=str(Path(sys.executable).parent / "towerctl"),

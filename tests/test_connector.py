@@ -198,3 +198,53 @@ def test_cli_check_exit_code_reflects_the_verdict(
 
     (programs / "atomic-2027.json").write_text("{}")
     assert main(["mcp", "--check", "--programs", str(programs)]) == 0
+
+
+def test_bookctl_is_found_via_the_BOOKCTL_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The escape hatch for any layout the guesses do not cover."""
+    import json
+
+    programs = tmp_path / "programs"
+    programs.mkdir()
+    bindir = _fake_bookctl(tmp_path, json.dumps({"roots": [str(programs)]}))
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    monkeypatch.setenv("BOOKCTL", str(bindir / "bookctl"))
+
+    assert connector.fields().arguments == ["mcp", "--programs", str(programs.resolve())]
+
+
+def test_bookctl_is_found_in_the_sibling_bookkit_checkout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The layout that actually exists on Grant's machines: ~/Developer/towerkit
+    and ~/Developer/bookkit side by side, each with its own ./.venv. bookctl is
+    on no PATH — that is the whole reason this command exists — so looking only
+    there found nothing and refused.
+    """
+    import json
+
+    programs = tmp_path / "programs"
+    programs.mkdir()
+    bindir = _fake_bookctl(tmp_path, json.dumps({"roots": [str(programs)]}))
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    monkeypatch.delenv("BOOKCTL", raising=False)
+    monkeypatch.setattr(connector, "_sibling_repo_bookctl", lambda: bindir / "bookctl")
+
+    assert connector.fields().arguments == ["mcp", "--programs", str(programs.resolve())]
+
+
+def test_the_refusal_says_how_to_fix_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """"no program roots" alone sent Grant back to ask what to type."""
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    monkeypatch.delenv("BOOKCTL", raising=False)
+
+    with pytest.raises(connector.NoRoots) as caught:
+        connector.fields()
+
+    message = str(caught.value)
+    assert "--programs" in message
+    assert "BOOKCTL" in message
