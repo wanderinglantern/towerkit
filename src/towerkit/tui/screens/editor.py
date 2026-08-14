@@ -47,9 +47,7 @@ from ...model import (
     Participant,
     Placement,
     Program,
-    Retention,
     RetentionType,
-    Sublimit,
 )
 from ...money import (
     BPS_SCALE,
@@ -1059,9 +1057,7 @@ class EditorScreen(Screen):
             return
         if self.selected == ("layer", layer_id):
             self.selected = ("program", None)
-        self._mutate_and_refresh(
-            lambda p: setattr(p, "layers", [ly for ly in p.layers if ly.id != layer_id])
-        )
+        self._mutate_and_refresh(lambda p: edit.remove_layer(p, layer_id))
         await self._flush_sheet_rebuild("layers-sheet")
 
     @on(SheetTable.RowSelected, "#layers-sheet")
@@ -1178,20 +1174,14 @@ class EditorScreen(Screen):
         if widget.id == "f-line-name" and value and value != line.name:
             if PLACEHOLDER_ID.match(line.id):
                 # auto-generate the id from the name, cascading references
-                old, new_id = line.id, self.session.unique_id(slugify(value))
+                old = line.id
+                new_id: list[str] = []
 
-                def rename_line(p: Program) -> None:
-                    line.name = value
-                    line.id = new_id
-                    for ly in p.layers:
-                        ly.applies_to = [new_id if x == old else x for x in ly.applies_to]
-                    for r in p.retentions:
-                        r.applies_to = [new_id if x == old else x for x in r.applies_to]
-                    for s in p.sublimits:
-                        s.applies_to = [new_id if x == old else x for x in s.applies_to]
+                def do(p: Program) -> None:
+                    new_id.append(edit.rename_line(p, old, value).id)
 
-                self._mutate_and_refresh(rename_line)
-                self.selected = ("line", new_id)
+                self._mutate_and_refresh(do)
+                self.selected = ("line", new_id[0])
                 self._select_tree_node(self.selected)
             else:
                 self._mutate_and_refresh(lambda p: setattr(line, "name", value))
@@ -1491,11 +1481,18 @@ class EditorScreen(Screen):
         kind, key = self.selected
         program = self.session.program
         if kind in ("lines-group", "line"):
-            new_id = self.session.unique_id("line")
-            self._mutate_and_refresh(
-                lambda p: p.lines.append(Line(id=new_id, name="New Line")),
-            )
-            self.selected = ("line", new_id)
+            created: list[str] = []
+
+            def add_line(p: Program) -> None:
+                # placeholder id, not slugified from the throwaway display
+                # name: PLACEHOLDER_ID must still match so the first real
+                # name commit (in _commit_line_field) re-slugs it.
+                new_line = edit.add_line(p, "New Line")
+                new_line.id = edit.unique_id(p, "line", exclude=new_line.id)
+                created.append(new_line.id)
+
+            self._mutate_and_refresh(add_line)
+            self.selected = ("line", created[0])
             self._select_tree_node(self.selected)
             await self._rebuild_detail()
         elif kind in ("layers-group", "layer"):
@@ -1515,15 +1512,9 @@ class EditorScreen(Screen):
         elif kind in ("retentions-group", "retention"):
             covered = {lid for r in program.retentions for lid in r.applies_to}
             uncovered = [ln.id for ln in program.lines if ln.id not in covered]
-            target = uncovered[:1] or [program.lines[0].id] if program.lines else ["gl"]
+            target = (uncovered[:1] or [program.lines[0].id]) if program.lines else ["gl"]
             self._mutate_and_refresh(
-                lambda p: p.retentions.append(
-                    Retention(
-                        applies_to=target,
-                        type=RetentionType.DEDUCTIBLE,
-                        amount=250_000,
-                    )
-                ),
+                lambda p: edit.add_retention(p, target, RetentionType.DEDUCTIBLE, 250_000)
             )
             self.selected = ("retention", len(program.retentions) - 1)
             self._select_tree_node(self.selected)
@@ -1531,9 +1522,7 @@ class EditorScreen(Screen):
         elif kind in ("sublimits-group", "sublimit"):
             first = [program.lines[0].id] if program.lines else ["gl"]
             self._mutate_and_refresh(
-                lambda p: p.sublimits.append(
-                    Sublimit(name="New Sublimit", amount=1_000_000, applies_to=first)
-                ),
+                lambda p: edit.add_sublimit(p, "New Sublimit", 1_000_000, first)
             )
             self.selected = ("sublimit", len(program.sublimits) - 1)
             self._select_tree_node(self.selected)
@@ -1549,41 +1538,18 @@ class EditorScreen(Screen):
             await self._rebuild_detail()
 
         if kind == "line":
-            line = self._line(key)
-            if line is None:
+            if self._line(key) is None:
                 return
-
-            def drop_line(p: Program) -> None:
-                p.lines = [ln for ln in p.lines if ln.id != key]
-                for layer in p.layers:
-                    layer.applies_to = [lid for lid in layer.applies_to if lid != key] or (
-                        layer.applies_to
-                    )
-                p.retentions = [
-                    r for r in p.retentions
-                    if [lid for lid in r.applies_to if lid != key]
-                ]
-                for r in p.retentions:
-                    r.applies_to = [lid for lid in r.applies_to if lid != key]
-                p.sublimits = [
-                    s for s in p.sublimits
-                    if [lid for lid in s.applies_to if lid != key]
-                ]
-                for s in p.sublimits:
-                    s.applies_to = [lid for lid in s.applies_to if lid != key]
-
-            self.session.mutate(drop_line)
+            self.session.mutate(lambda p: edit.remove_line(p, key))
             await after()
         elif kind == "layer":
-            self.session.mutate(
-                lambda p: setattr(p, "layers", [ly for ly in p.layers if ly.id != key])
-            )
+            self.session.mutate(lambda p: edit.remove_layer(p, key))
             await after()
         elif kind == "retention" and key < len(program.retentions):
-            self.session.mutate(lambda p: p.retentions.pop(key))
+            self.session.mutate(lambda p: edit.remove_retention(p, key))
             await after()
         elif kind == "sublimit" and key < len(program.sublimits):
-            self.session.mutate(lambda p: p.sublimits.pop(key))
+            self.session.mutate(lambda p: edit.remove_sublimit(p, key))
             await after()
 
     # -- top-level actions -----------------------------------------------------
@@ -1598,18 +1564,18 @@ class EditorScreen(Screen):
         index = next((i for i, ln in enumerate(lines) if ln.id == key), None)
         if index is None:
             return
-        target = index + delta
-        if not 0 <= target < len(lines):
+        target = None
+
+        def do(p: Program) -> None:
+            nonlocal target
+            target = edit.move_line(p, key, delta)
+
+        self.session.mutate(do)
+        if target is None or target == index:
             return
-
-        def swap(p: Program) -> None:
-            p.lines[index], p.lines[target] = p.lines[target], p.lines[index]
-
-        self.session.mutate(swap)
         self.refresh_all()
         self._select_tree_node(("line", key))
-        position = target + 1
-        self.notify(f"{lines[target].name} → column {position} of {len(lines)}")
+        self.notify(f"{lines[target].name} → column {target + 1} of {len(lines)}")
 
     async def action_undo(self) -> None:
         if self.session.undo():
