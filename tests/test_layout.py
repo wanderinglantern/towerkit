@@ -479,3 +479,43 @@ class TestStatutory:
         )
         assert tower.ymap.breakpoints == (0, 5_000_000)
         assert next(b for b in tower.layers if b.layer_id == "wc-stat").y1 == 1.0
+
+    def test_chevron_band_sits_above_the_tower(self) -> None:
+        from towerkit.layout import CHEVRON_BAND
+
+        tower = build_layout(
+            make_program(
+                ["gl", "wc"],
+                [
+                    layer("gl-primary", ["gl"], 0, 5_000_000, [("A", 10_000)]),
+                    statutory_layer("wc-stat", ["wc"], [("C", 10_000)]),
+                ],
+            )
+        )
+        assert len(tower.chevrons) == 1
+        band = tower.chevrons[0]
+        assert (band.y0, band.y1) == (1.0, 1.0 + CHEVRON_BAND)
+        stat = next(b for b in tower.layers if b.layer_id == "wc-stat")
+        assert (band.x0, band.x1) == (stat.outlines[0].x0, stat.outlines[0].x1)
+
+    def test_no_chevrons_without_statutory_cover(self) -> None:
+        """The band is added ONLY when a statutory layer exists, so every
+        existing program's geometry — and its golden hash — is untouched."""
+        tower = build_layout(
+            make_program(["gl"], [layer("gl-primary", ["gl"], 0, 5_000_000, [("A", 10_000)])])
+        )
+        assert tower.chevrons == ()
+
+    def test_one_chevron_per_run(self) -> None:
+        """A statutory layer spanning non-contiguous columns is several runs,
+        and each needs its own band."""
+        tower = build_layout(
+            make_program(
+                ["wc", "gl", "wc2"],
+                [
+                    layer("gl-primary", ["gl"], 0, 5_000_000, [("A", 10_000)]),
+                    statutory_layer("stat", ["wc", "wc2"], [("C", 10_000)]),
+                ],
+            )
+        )
+        assert len(tower.chevrons) == 2

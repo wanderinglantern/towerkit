@@ -29,6 +29,11 @@ COL_WIDTH = 1.0
 GUTTER = 0.25
 HALF_GUTTER = GUTTER / 2  # 0.125: exact in binary, like every column edge
 RETENTION_BAND = 0.18  # height of the retention band, in tower-height units
+# Height of the chevron band drawn ABOVE a statutory bar, in the same units.
+# It is geometry, not decoration: ascii.py's rule is that a drawing decision
+# needing geometry not already in the layout belongs here, so all three
+# renderers consume the same rects instead of each inventing a band.
+CHEVRON_BAND = 0.04
 
 
 @dataclass(frozen=True)
@@ -124,6 +129,7 @@ class TowerLayout:
     groups: tuple[GroupBand, ...]
     width: float
     retention_band: float
+    chevrons: tuple[Rect, ...] = ()  # one per statutory run, above y=1.0
 
 
 def build_layout(program: Program, gamma: float = DEFAULT_GAMMA) -> TowerLayout:
@@ -156,10 +162,14 @@ def build_layout(program: Program, gamma: float = DEFAULT_GAMMA) -> TowerLayout:
 
     layer_blocks: list[LayerBlock] = []
     participant_blocks: list[ParticipantBlock] = []
+    chevron_rects: list[Rect] = []
     for layer in drawable:
         runs = _runs(columns, sorted({order[lid] for lid in layer.applies_to if lid in order}))
         if layer.statutory:
             y0, y1 = 0.0, 1.0  # the whole column; the chevron band marks "continues"
+            chevron_rects.extend(
+                Rect(run.x0, 1.0, run.x1, 1.0 + CHEVRON_BAND) for run in runs
+            )
         else:
             y0, y1 = ymap.y(layer.attach), ymap.y(layer.top)
         bottoms = None
@@ -237,6 +247,7 @@ def build_layout(program: Program, gamma: float = DEFAULT_GAMMA) -> TowerLayout:
         width=width,
         # no retentions drawn → no band, so column labels hug the towers
         retention_band=RETENTION_BAND if retention_blocks else 0.0,
+        chevrons=tuple(chevron_rects),
     )
 
 
