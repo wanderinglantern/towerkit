@@ -3,6 +3,9 @@ the TUI editor and the MCP server."""
 
 from __future__ import annotations
 
+import errno
+import os
+import shutil
 from pathlib import Path
 
 import pytest
@@ -219,3 +222,40 @@ class TestLayers:
         assert healed[0].attach == 0
         for below, above in zip(healed, healed[1:], strict=False):
             assert above.attach == below.top
+
+
+class TestDurableWrites:
+    def test_dump_program_never_truncates_on_a_failed_write(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        target = tmp_path / "atomic-2026.json"
+        shutil.copy(SAMPLE, target)
+        before = target.read_bytes()
+
+        def _enospc(_fd: int) -> None:
+            raise OSError(errno.ENOSPC, "No space left on device")
+
+        monkeypatch.setattr(os, "fsync", _enospc)
+
+        from towerkit.model import dump_program
+
+        with pytest.raises(OSError):
+            dump_program(_sample(), target)
+
+        assert target.read_bytes() == before
+        assert load_program(target).insured  # still a loadable program
+
+    def test_a_save_keeps_the_previous_contents_aside(self, tmp_path) -> None:
+        from towerkit.atomicio import backup_path
+        from towerkit.model import dump_program
+
+        target = tmp_path / "atomic-2026.json"
+        shutil.copy(SAMPLE, target)
+        original = target.read_bytes()
+
+        program = _sample()
+        program.insured = "Changed Co"
+        dump_program(program, target)
+
+        assert load_program(target).insured == "Changed Co"
+        assert backup_path(target).read_bytes() == original

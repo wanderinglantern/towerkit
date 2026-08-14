@@ -21,6 +21,7 @@ from typing import Annotated, Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from .atomicio import atomic_write_text
 from .money import bps_to_json_number, share_to_bps
 
 SCHEMA_ID = "https://towerkit.dev/schema/program.schema.json"
@@ -358,7 +359,9 @@ def dumps_program(program: Program) -> str:
 
 
 def dump_program(program: Program, path: Path | str) -> None:
-    Path(path).write_text(dumps_program(program), encoding="utf-8")
+    """Canonical JSON, written durably — a failed write costs the new
+    contents, never the old ones. See `towerkit.atomicio`."""
+    atomic_write_text(path, dumps_program(program))
 
 
 def parse_program_json(text: str) -> Any:

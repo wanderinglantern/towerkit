@@ -35,6 +35,7 @@ from mcp.server.mcpserver import MCPServer
 from pydantic import ValidationError
 
 from . import edit
+from .atomicio import atomic_write_bytes, atomic_write_text
 from .dates import parse_flexible_date
 from .model import Period, Placement, Program, dumps_program, load_program, loads_program
 from .money import parse_money
@@ -192,21 +193,16 @@ def restore(path: Path, ref: str) -> None:
 
 
 def _atomic_write(path: Path, text: str) -> None:
-    """Same-directory temp + replace: a crash mid-write leaves the old file,
-    never a truncated one."""
-    tmp = path.with_name(f".{path.name}.tmp")
-    tmp.write_text(text, encoding="utf-8")
-    os.replace(tmp, path)
+    """Delegates to `towerkit.atomicio` — one definition of a safe write,
+    shared with the TUI and the CLI."""
+    atomic_write_text(path, text)
 
 
 def _atomic_write_bytes(path: Path, data: bytes) -> None:
-    """Bytes-oriented sibling of `_atomic_write`, used by `restore()`. The
-    pre-image is already-canonical UTF-8 JSON read straight off disk; a
-    text round-trip risks re-encoding it, so this writes the exact bytes
-    through the same same-directory temp + replace path instead."""
-    tmp = path.with_name(f".{path.name}.tmp")
-    tmp.write_bytes(data)
-    os.replace(tmp, path)
+    """Bytes-oriented sibling, used by `restore()`. The pre-image is
+    already-canonical UTF-8 JSON read straight off disk; a text round-trip
+    risks re-encoding it, so this writes the exact bytes."""
+    atomic_write_bytes(path, data)
 
 
 def _write(

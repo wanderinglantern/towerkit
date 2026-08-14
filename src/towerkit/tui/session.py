@@ -13,6 +13,7 @@ from datetime import date
 from pathlib import Path
 
 from .. import edit
+from ..atomicio import atomic_write_text
 from ..edit import ordinal, slugify, suggested_attach  # re-exported: editor.py imports these
 from ..model import (
     Layer,
@@ -136,7 +137,7 @@ class EditSession:
                 f"the file (losing this session's edits), or overwrite it"
             )
         text = dumps_program(self.program)
-        target.write_text(text, encoding="utf-8")
+        atomic_write_text(target, text)
         self.path = target
         self._saved_text = text
         self._disk_sha = _file_sha(target)
