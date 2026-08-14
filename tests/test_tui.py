@@ -11,7 +11,7 @@ import shutil
 from pathlib import Path
 
 import pytest
-from textual.widgets import Input
+from textual.widgets import Button, Input
 
 from towerkit.model import dumps_program, load_program
 from towerkit.money import BPS_SCALE
@@ -332,6 +332,10 @@ class TestEditor:
             await pilot.press("ctrl+s")
             await pilot.pause()
             assert isinstance(app.screen, StaleFileModal)
+            # default focus must land on the non-destructive choice: Reload
+            # and Overwrite both discard someone's work, Keep editing loses
+            # nothing — an unread Enter must not be able to throw work away
+            assert app.screen.query_one("#keep", Button).has_focus
             await pilot.press("escape")  # keep editing
             await pilot.pause()
             assert editor.session.program.insured == "Mine"  # nothing lost

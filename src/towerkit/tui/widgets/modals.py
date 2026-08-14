@@ -316,7 +316,10 @@ class StaleFileModal(ModalScreen[str]):
                 yield Button("Reload", id="reload", variant="primary")
 
     def on_mount(self) -> None:
-        self.query_one("#reload", Button).focus()
+        # Reload and Overwrite both destroy someone's work (local edits or the
+        # other writer's), so an unread Enter must not land on either — only
+        # "keep editing" loses nothing.
+        self.query_one("#keep", Button).focus()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         self.dismiss(event.button.id or "keep")
