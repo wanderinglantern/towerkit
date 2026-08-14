@@ -15,6 +15,7 @@ dependencies = [
     "dateparser>=1.4.2",
     "openpyxl>=3.1",
     "textual-autocomplete>=4.0",
+    "mcp>=2.0",
 ]
 
 [project.scripts]

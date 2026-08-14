@@ -122,6 +122,13 @@ def _build_parser() -> argparse.ArgumentParser:
     p_imp.add_argument("--edit", action="store_true", help="open the result in the TUI")
     p_imp.set_defaults(handler=_cmd_import)
 
+    p_mcp = sub.add_parser("mcp", help="stdio MCP server for design-level assist")
+    p_mcp.add_argument(
+        "--programs", type=Path, nargs="+", default=None,
+        help="program roots to serve (default: ./programs)",
+    )
+    p_mcp.set_defaults(handler=_cmd_mcp)
+
     return parser
 
 
@@ -283,6 +290,13 @@ def _cmd_import(args: argparse.Namespace) -> int:
         from .tui.app import TowerkitApp
 
         TowerkitApp(path=out, new=False, theme_path=None).run()
+    return 0
+
+
+def _cmd_mcp(args: argparse.Namespace) -> int:
+    from .mcpserver import serve
+
+    serve(args.programs)
     return 0
 
 
