@@ -122,6 +122,21 @@ def _build_parser() -> argparse.ArgumentParser:
     p_imp.add_argument("--edit", action="store_true", help="open the result in the TUI")
     p_imp.set_defaults(handler=_cmd_import)
 
+    p_mcp = sub.add_parser("mcp", help="stdio MCP server for design-level assist")
+    p_mcp.add_argument(
+        "--programs", type=Path, nargs="+", default=None,
+        help="program roots to serve (default: ./programs)",
+    )
+    p_mcp.add_argument(
+        "--connector-info", action="store_true",
+        help="print the Add MCP Connector field values instead of serving",
+    )
+    p_mcp.add_argument(
+        "--check", action="store_true",
+        help="verify the connector starts and finds programs; exit 1 if not",
+    )
+    p_mcp.set_defaults(handler=_cmd_mcp)
+
     return parser
 
 
@@ -283,6 +298,36 @@ def _cmd_import(args: argparse.Namespace) -> int:
         from .tui.app import TowerkitApp
 
         TowerkitApp(path=out, new=False, theme_path=None).run()
+    return 0
+
+
+def _cmd_mcp(args: argparse.Namespace) -> int:
+    from . import connector
+
+    if args.connector_info:
+        try:
+            found = connector.fields(args.programs)
+        except connector.NoRoots as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        env = ", ".join(f"{k}={v}" for k, v in found.env.items()) or "(none)"
+        print("Add MCP Connector — paste one line per field:\n")
+        print(f"  Name         {found.name}")
+        print(f"  Command      {found.command}")
+        print(f"  Arguments    {', '.join(found.arguments)}")
+        print(f"  Env Secrets  {env}")
+        print(f"  Mode         {found.mode}")
+        return 0
+
+    if args.check:
+        report = connector.check(args.programs)
+        for result in report.checks:
+            print(f"{'✓' if result.ok else '✗'} {result.label:<8}  {result.detail}")
+        return 0 if report.ok else 1
+
+    from .mcpserver import serve
+
+    serve(args.programs)
     return 0
 
 

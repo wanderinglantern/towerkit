@@ -41,14 +41,13 @@ from textual.widgets import (
     Tree,
 )
 
+from ... import edit
 from ...model import (
     Line,
     Participant,
     Placement,
     Program,
-    Retention,
     RetentionType,
-    Sublimit,
 )
 from ...money import (
     BPS_SCALE,
@@ -59,7 +58,7 @@ from ...money import (
 )
 from ...theme import load_theme
 from ...validate import Diagnostic
-from ..session import EditSession, slugify
+from ..session import EditSession, StaleFileError, slugify
 from ..theme import (
     AMBER,
     DIM,
@@ -90,6 +89,7 @@ from ..widgets.modals import (
     RenderOptions,
     RenderOptionsModal,
     SendLineModal,
+    StaleFileModal,
 )
 from ..widgets.preview import TowerPreview
 from ..widgets.sheet import SheetField, SheetTable
@@ -1061,9 +1061,7 @@ class EditorScreen(Screen):
             return
         if self.selected == ("layer", layer_id):
             self.selected = ("program", None)
-        self._mutate_and_refresh(
-            lambda p: setattr(p, "layers", [ly for ly in p.layers if ly.id != layer_id])
-        )
+        self._mutate_and_refresh(lambda p: edit.remove_layer(p, layer_id))
         await self._flush_sheet_rebuild("layers-sheet")
 
     @on(SheetTable.RowSelected, "#layers-sheet")
@@ -1182,26 +1180,17 @@ class EditorScreen(Screen):
             # used to be gated on the id still looking like a placeholder
             # ("line-2"), which meant the first committed name burned the one
             # chance to set it — a typo in that name was then permanent, and
-            # the id field is deliberately not editable. appliesTo on layers,
-            # retentions and sublimits is the complete set of things in the
-            # file holding a line id (model.py:94/115/126).
+            # the id field is deliberately not editable. edit.rename_line owns
+            # the cascade; appliesTo on layers, retentions and sublimits is the
+            # complete set of things in the file holding a line id.
             old = line.id
-            new_id = self.session.unique_id(slugify(value), exclude=old)
+            new_id: list[str] = []
 
-            def rename_line(p: Program) -> None:
-                line.name = value
-                line.id = new_id
-                if new_id == old:  # cosmetic edit, same slug — nothing to cascade
-                    return
-                for ly in p.layers:
-                    ly.applies_to = [new_id if x == old else x for x in ly.applies_to]
-                for r in p.retentions:
-                    r.applies_to = [new_id if x == old else x for x in r.applies_to]
-                for s in p.sublimits:
-                    s.applies_to = [new_id if x == old else x for x in s.applies_to]
+            def do(p: Program) -> None:
+                new_id.append(edit.rename_line(p, old, value).id)
 
-            self._mutate_and_refresh(rename_line)
-            self.selected = ("line", new_id)
+            self._mutate_and_refresh(do)
+            self.selected = ("line", new_id[0])
             self._select_tree_node(self.selected)
         elif widget.id == "f-line-abbr":
             self._mutate_and_refresh(lambda p: setattr(line, "abbr", value or None))
@@ -1502,11 +1491,18 @@ class EditorScreen(Screen):
         kind, key = self.selected
         program = self.session.program
         if kind in ("lines-group", "line"):
-            new_id = self.session.unique_id("line")
-            self._mutate_and_refresh(
-                lambda p: p.lines.append(Line(id=new_id, name="New Line")),
-            )
-            self.selected = ("line", new_id)
+            created: list[str] = []
+
+            def add_line(p: Program) -> None:
+                # placeholder id, not slugified from the throwaway display
+                # name — the first real name commit (in _commit_line_field)
+                # re-slugs it, and every commit after that does too.
+                new_line = edit.add_line(p, "New Line")
+                new_line.id = edit.unique_id(p, "line", exclude=new_line.id)
+                created.append(new_line.id)
+
+            self._mutate_and_refresh(add_line)
+            self.selected = ("line", created[0])
             self._select_tree_node(self.selected)
             await self._rebuild_detail()
         elif kind in ("layers-group", "layer"):
@@ -1526,15 +1522,9 @@ class EditorScreen(Screen):
         elif kind in ("retentions-group", "retention"):
             covered = {lid for r in program.retentions for lid in r.applies_to}
             uncovered = [ln.id for ln in program.lines if ln.id not in covered]
-            target = uncovered[:1] or [program.lines[0].id] if program.lines else ["gl"]
+            target = (uncovered[:1] or [program.lines[0].id]) if program.lines else ["gl"]
             self._mutate_and_refresh(
-                lambda p: p.retentions.append(
-                    Retention(
-                        applies_to=target,
-                        type=RetentionType.DEDUCTIBLE,
-                        amount=250_000,
-                    )
-                ),
+                lambda p: edit.add_retention(p, target, RetentionType.DEDUCTIBLE, 250_000)
             )
             self.selected = ("retention", len(program.retentions) - 1)
             self._select_tree_node(self.selected)
@@ -1542,9 +1532,7 @@ class EditorScreen(Screen):
         elif kind in ("sublimits-group", "sublimit"):
             first = [program.lines[0].id] if program.lines else ["gl"]
             self._mutate_and_refresh(
-                lambda p: p.sublimits.append(
-                    Sublimit(name="New Sublimit", amount=1_000_000, applies_to=first)
-                ),
+                lambda p: edit.add_sublimit(p, "New Sublimit", 1_000_000, first)
             )
             self.selected = ("sublimit", len(program.sublimits) - 1)
             self._select_tree_node(self.selected)
@@ -1560,41 +1548,20 @@ class EditorScreen(Screen):
             await self._rebuild_detail()
 
         if kind == "line":
-            line = self._line(key)
-            if line is None:
+            if self._line(key) is None:
                 return
-
-            def drop_line(p: Program) -> None:
-                p.lines = [ln for ln in p.lines if ln.id != key]
-                for layer in p.layers:
-                    layer.applies_to = [lid for lid in layer.applies_to if lid != key] or (
-                        layer.applies_to
-                    )
-                p.retentions = [
-                    r for r in p.retentions
-                    if [lid for lid in r.applies_to if lid != key]
-                ]
-                for r in p.retentions:
-                    r.applies_to = [lid for lid in r.applies_to if lid != key]
-                p.sublimits = [
-                    s for s in p.sublimits
-                    if [lid for lid in s.applies_to if lid != key]
-                ]
-                for s in p.sublimits:
-                    s.applies_to = [lid for lid in s.applies_to if lid != key]
-
-            self.session.mutate(drop_line)
+            self.session.mutate(lambda p: edit.remove_line(p, key))
             await after()
         elif kind == "layer":
-            self.session.mutate(
-                lambda p: setattr(p, "layers", [ly for ly in p.layers if ly.id != key])
-            )
+            if self._layer(key) is None:
+                return
+            self.session.mutate(lambda p: edit.remove_layer(p, key))
             await after()
         elif kind == "retention" and key < len(program.retentions):
-            self.session.mutate(lambda p: p.retentions.pop(key))
+            self.session.mutate(lambda p: edit.remove_retention(p, key))
             await after()
         elif kind == "sublimit" and key < len(program.sublimits):
-            self.session.mutate(lambda p: p.sublimits.pop(key))
+            self.session.mutate(lambda p: edit.remove_sublimit(p, key))
             await after()
 
     # -- top-level actions -----------------------------------------------------
@@ -1609,18 +1576,18 @@ class EditorScreen(Screen):
         index = next((i for i, ln in enumerate(lines) if ln.id == key), None)
         if index is None:
             return
-        target = index + delta
-        if not 0 <= target < len(lines):
+        target = None
+
+        def do(p: Program) -> None:
+            nonlocal target
+            target = edit.move_line(p, key, delta)
+
+        self.session.mutate(do)
+        if target is None or target == index:
             return
-
-        def swap(p: Program) -> None:
-            p.lines[index], p.lines[target] = p.lines[target], p.lines[index]
-
-        self.session.mutate(swap)
         self.refresh_all()
         self._select_tree_node(("line", key))
-        position = target + 1
-        self.notify(f"{lines[target].name} → column {position} of {len(lines)}")
+        self.notify(f"{lines[target].name} → column {target + 1} of {len(lines)}")
 
     async def action_undo(self) -> None:
         if self.session.undo():
@@ -1671,6 +1638,12 @@ class EditorScreen(Screen):
                 target = Path("programs") / (
                     name if name.endswith(".json") else f"{name}.json"
                 )
+                if target.exists():
+                    self.notify(
+                        f"{target} already exists — pick another name",
+                        severity="error",
+                    )
+                    return
                 target.parent.mkdir(parents=True, exist_ok=True)
                 self.session.save(target)
                 self.notify(f"saved {target}")
@@ -1678,9 +1651,36 @@ class EditorScreen(Screen):
 
             self.app.push_screen(PromptModal("File name (in programs/):"), on_name)
             return
-        self.session.save()
+        self._save_guarded()
+
+    def _save_guarded(self, then: Callable[[], None] | None = None) -> None:
+        """Every save that overwrites the loaded file goes through here.
+        StaleFileError is a question for the user, not an error to swallow."""
+        try:
+            self.session.save()
+        except StaleFileError:
+
+            def on_choice(choice: str | None) -> None:
+                if choice == "overwrite":
+                    self.session.save(force=True)
+                elif choice == "reload":
+                    self.session.reload()
+                    self.refresh_all()
+                    self.notify("reloaded from disk — your edits were discarded")
+                    return
+                else:
+                    return
+                self.notify(f"saved {self.session.path}")
+                self._refresh_title()
+                if then is not None:
+                    then()
+
+            self.app.push_screen(StaleFileModal(), on_choice)
+            return
         self.notify(f"saved {self.session.path}")
         self._refresh_title()
+        if then is not None:
+            then()
 
     def action_render(self) -> None:
         self._drain_focused_input()
@@ -1842,10 +1842,7 @@ class EditorScreen(Screen):
                     return
                 if move:
                     def apply_src(p: Program) -> None:
-                        p.lines = result.src_after.lines
-                        p.layers = result.src_after.layers
-                        p.retentions = result.src_after.retentions
-                        p.sublimits = result.src_after.sublimits
+                        edit.adopt(p, result.src_after)
 
                     self.session.mutate(apply_src)
                     # the moved line's node is gone from the tree; fall back
@@ -1915,9 +1912,7 @@ class EditorScreen(Screen):
                     "no file name yet — ctrl+s saves-as first", severity="warning"
                 )
                 return
-            self.session.save()
-            self.notify(f"saved {self.session.path}")
-            self.dismiss_editor()
+            self._save_guarded(then=self.dismiss_editor)
 
         self.app.push_screen(ExitChoiceModal(), on_choice)
 

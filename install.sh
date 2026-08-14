@@ -20,7 +20,11 @@ cd "$(dirname "$0")"
 
 WHEELHOUSE_URL="https://github.com/wanderinglantern/towerkit/releases/download/v0.2.0/towerkit-wheelhouse-macos.zip"
 PY="${PYTHON:-python3}"
-WHEELHOUSE_SHA256="cc41531923a3aa9b38345af510b191458be4b4302830774ca9af1c4ff9f2808b"
+# Bump this in the SAME commit that re-uploads the release asset. It was left
+# stale when mcp>=2.0 landed, so the fallback aborted with "altered in
+# transit" — a tamper warning about a file nobody tampered with — on exactly
+# the offline machines the fallback exists to serve.
+WHEELHOUSE_SHA256="060ce3b4fe874f278a70067d8e2a3b7888968a4b06db2effeff707d1b055b248"
 
 version=$("$PY" -c 'import sys; print("%d.%d" % sys.version_info[:2])')
 

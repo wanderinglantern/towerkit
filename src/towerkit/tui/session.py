@@ -7,11 +7,13 @@ strings, so undo/redo can never drift from what a save would write.
 
 from __future__ import annotations
 
-import re
+import hashlib
 from collections.abc import Callable
 from datetime import date
 from pathlib import Path
 
+from .. import edit
+from ..edit import ordinal, slugify, suggested_attach  # re-exported: editor.py imports these
 from ..model import (
     Layer,
     Line,
@@ -23,6 +25,30 @@ from ..model import (
     loads_program,
 )
 from ..validate import Diagnostics, validate_program
+
+__all__ = [
+    "EditSession",
+    "StaleFileError",
+    "blank_program",
+    "ordinal",
+    "slugify",
+    "suggested_attach",
+]
+
+
+class StaleFileError(RuntimeError):
+    """The file changed on disk since this session opened or last saved it.
+
+    `EditSession` holds a whole program in memory and writes it whole, so a
+    save over someone else's write is a silent total loss — bookkit's MCP
+    writes to these same files, and so does towerkit's own MCP server."""
+
+
+def _file_sha(path: Path) -> str | None:
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return None
 
 
 def blank_program() -> Program:
@@ -40,31 +66,6 @@ def blank_program() -> Program:
     )
 
 
-def ordinal(n: int) -> str:
-    if 10 <= n % 100 <= 20:
-        suffix = "th"
-    else:
-        suffix = {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
-    return f"{n}{suffix}"
-
-
-def slugify(name: str) -> str:
-    """'Primary D&O' → 'primary-do': ids nobody has to invent."""
-    slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
-    return slug or "item"
-
-
-def suggested_attach(program: Program, line_ids: list[str]) -> int:
-    """Default attachment for a new layer: the top of the existing stack for
-    those lines. Contiguity by construction beats contiguity by validation."""
-    tops = [
-        layer.top
-        for layer in program.layers
-        if layer.limit > 0 and any(lid in layer.applies_to for lid in line_ids)
-    ]
-    return max(tops, default=0)
-
-
 class EditSession:
     def __init__(self, program: Program, path: Path | None = None) -> None:
         self.program = program
@@ -72,6 +73,7 @@ class EditSession:
         self._undo: list[str] = []
         self._redo: list[str] = []
         self._saved_text: str | None = dumps_program(program) if path else None
+        self._disk_sha: str | None = _file_sha(path) if path else None
 
     @classmethod
     def open(cls, path: Path | str) -> EditSession:
@@ -88,10 +90,7 @@ class EditSession:
         layer's limit can never strand them."""
         before = dumps_program(self.program)
         fn(self.program)
-        for layer in self.program.layers:
-            if layer.follows_underlying:
-                tops = self.program.underlying_tops(layer)
-                layer.attach = max(tops.values(), default=0)
+        edit.heal_follows(self.program)
         after = dumps_program(self.program)
         if after != before:
             self._undo.append(before)
@@ -120,80 +119,57 @@ class EditSession:
     def diagnostics(self) -> Diagnostics:
         return validate_program(self.program)
 
-    def save(self, path: Path | None = None) -> Path:
+    def save(self, path: Path | None = None, force: bool = False) -> Path:
         """Write canonical JSON. Never silent about errors — the caller must
-        have confirmed if diagnostics().ok is False."""
+        have confirmed if diagnostics().ok is False.
+
+        Refuses to overwrite a file that changed since we opened or last
+        saved it, unless `force`. Saving AS a different path is not guarded:
+        that is a new destination, not a clobber of what we loaded."""
         target = path or self.path
         if target is None:
             raise ValueError("no path for save")
+        same_file = self.path is not None and target == self.path
+        if same_file and not force and _file_sha(target) != self._disk_sha:
+            raise StaleFileError(
+                f"{target} changed on disk since it was opened — reload to take "
+                f"the file (losing this session's edits), or overwrite it"
+            )
         text = dumps_program(self.program)
         target.write_text(text, encoding="utf-8")
         self.path = target
         self._saved_text = text
+        self._disk_sha = _file_sha(target)
         return target
+
+    def reload(self) -> None:
+        """Take what is on disk, discarding this session's edits and history."""
+        if self.path is None:
+            raise ValueError("nothing to reload from")
+        self.program = load_program(self.path)
+        self._undo.clear()
+        self._redo.clear()
+        self._saved_text = dumps_program(self.program)
+        self._disk_sha = _file_sha(self.path)
 
     # -- structural edits used by the editor ---------------------------------
 
     def unique_id(self, prefix: str, exclude: str | None = None) -> str:
-        """`exclude` is the id of the thing being renamed. Without it a
-        cosmetic edit that re-slugs to the id the entity ALREADY has would
-        collide with itself and drift to 'cyber-2', then 'cyber-3', on every
-        subsequent edit."""
-        taken = {layer.id for layer in self.program.layers} | {
-            line.id for line in self.program.lines
-        }
-        taken.discard(exclude)
-        if prefix not in taken:
-            return prefix
-        n = 2
-        while f"{prefix}-{n}" in taken:
-            n += 1
-        return f"{prefix}-{n}"
+        return edit.unique_id(self.program, prefix, exclude)
 
     def add_layer(self, line_ids: list[str] | None = None) -> Layer:
-        lines = line_ids or ([self.program.lines[0].id] if self.program.lines else [])
-        attach = suggested_attach(self.program, lines)
-        if attach == 0:
-            name = "New Layer"
-        else:
-            # count the excess layers already stacked on these lines:
-            # the new one is "1st Excess", "2nd Excess", …
-            n = sum(
-                1
-                for ly in self.program.layers
-                if ly.attach > 0
-                and ly.limit > 0
-                and any(lid in ly.applies_to for lid in lines)
-            )
-            name = f"{ordinal(n + 1)} Excess"
-        layer = Layer(
-            id=self.unique_id("layer"),
-            name=name,
-            applies_to=lines or ["gl"],
-            attach=attach,
-            limit=5_000_000,
-            participants=[],
-        )
-        self.mutate(lambda p: p.layers.append(layer))
+        layer: Layer | None = None
+
+        def do(p: Program) -> None:
+            nonlocal layer
+            layer = edit.add_layer(p, line_ids)
+
+        self.mutate(do)
+        assert layer is not None
         return layer
 
     def restack(self) -> None:
         """Recalculate every attachment from the stacking order: each layer
         lands on top of what its lines already carry. One keystroke heals a
         tower after limit edits — gaps and overlaps disappear."""
-
-        def reflow(p: Program) -> None:
-            tops: dict[str, int] = {line.id: 0 for line in p.lines}
-            ordered = sorted(
-                (ly for ly in p.layers if ly.limit > 0),
-                key=lambda ly: ly.attach,
-            )
-            for layer in ordered:
-                base = max(
-                    (tops.get(lid, 0) for lid in layer.applies_to), default=0
-                )
-                layer.attach = base
-                for lid in layer.applies_to:
-                    tops[lid] = base + layer.limit
-
-        self.mutate(reflow)
+        self.mutate(edit.restack)

@@ -11,7 +11,7 @@ import shutil
 from pathlib import Path
 
 import pytest
-from textual.widgets import Input
+from textual.widgets import Button, Input
 
 from towerkit.model import dumps_program, load_program
 from towerkit.money import BPS_SCALE
@@ -86,6 +86,37 @@ class TestSession:
         session = EditSession.open(SAMPLE)
         layer = session.add_layer(["pl"])
         assert layer.attach == 25_000_000  # contiguity by construction
+
+    def test_save_refuses_when_the_file_moved_underneath(self, sample_copy) -> None:
+        from towerkit.tui.session import StaleFileError
+
+        session = EditSession.open(sample_copy)
+        session.mutate(lambda p: setattr(p, "insured", "Mine"))
+        sample_copy.write_text(sample_copy.read_text("utf-8") + " ", encoding="utf-8")
+        with pytest.raises(StaleFileError):
+            session.save()
+
+    def test_forced_save_overwrites_and_re_arms_the_guard(self, sample_copy) -> None:
+        session = EditSession.open(sample_copy)
+        session.mutate(lambda p: setattr(p, "insured", "Mine"))
+        sample_copy.write_text(sample_copy.read_text("utf-8") + " ", encoding="utf-8")
+        session.save(force=True)
+        assert load_program(sample_copy).insured == "Mine"
+        session.mutate(lambda p: setattr(p, "insured", "Mine Again"))
+        session.save()  # the guard was re-armed by the forced save; no raise
+        assert load_program(sample_copy).insured == "Mine Again"
+
+    def test_reload_takes_the_file_and_drops_local_edits(self, sample_copy) -> None:
+        session = EditSession.open(sample_copy)
+        session.mutate(lambda p: setattr(p, "insured", "Mine"))
+        program = load_program(sample_copy)
+        program.insured = "Theirs"
+        sample_copy.write_text(dumps_program(program), encoding="utf-8")
+        session.reload()
+        assert session.program.insured == "Theirs"
+        assert not session.dirty
+        assert not session.undo()  # history belongs to the discarded edits
+        session.save()  # no raise: the guard re-armed on reload
 
 
 class TestInputHelpers:
@@ -284,6 +315,71 @@ class TestEditor:
         assert diags.ok, [str(d) for d in diags.errors]
         assert program.insured == "Scratch Built Co"
         assert program.layers[0].signed_bps == BPS_SCALE
+
+    @pytest.mark.asyncio
+    async def test_save_as_refuses_an_existing_file_name(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """The prompt-branch of _do_save (session.path is None — Save As on
+        a brand-new program) must not silently clobber a whole existing
+        program file. It should refuse and leave both files untouched."""
+        monkeypatch.chdir(tmp_path)
+        programs_dir = tmp_path / "programs"
+        programs_dir.mkdir()
+        existing = programs_dir / "existing.json"
+        shutil.copy(SAMPLE, existing)
+        before = existing.read_bytes()
+
+        app = TowerkitApp(new=True)
+        async with app.run_test(size=(140, 45)) as pilot:
+            editor = app.screen
+            editor.selected = ("program", None)
+            await editor._rebuild_detail()
+            await pilot.pause()
+            insured = editor.query_one("#f-insured")
+            insured.value = "Should Not Land"
+            editor._commit_input(insured)
+            editor.action_save()
+            await pilot.pause()
+            from towerkit.tui.widgets.modals import ConfirmModal, PromptModal
+
+            if isinstance(app.screen, ConfirmModal):  # a blank program has errors
+                app.screen.query_one("#yes", Button).press()
+                await pilot.pause()
+
+            assert isinstance(app.screen, PromptModal)
+            prompt = app.screen.query_one("#prompt")
+            prompt.value = "existing"
+            await pilot.press("enter")
+            await pilot.pause()
+            # refused, not saved: back in the editor, nothing on disk moved
+            assert isinstance(app.screen, EditorScreen)
+            assert app.screen.session.path is None
+        assert existing.read_bytes() == before
+
+    @pytest.mark.asyncio
+    async def test_save_over_a_changed_file_offers_a_choice(
+        self, sample_copy, monkeypatch
+    ) -> None:
+        from towerkit.tui.widgets.modals import StaleFileModal
+
+        monkeypatch.chdir(sample_copy.parent.parent)
+        app = TowerkitApp(path=sample_copy)
+        async with app.run_test(size=(140, 45)) as pilot:
+            editor = app.screen
+            assert isinstance(editor, EditorScreen)
+            editor.session.mutate(lambda p: setattr(p, "insured", "Mine"))
+            sample_copy.write_text(sample_copy.read_text("utf-8") + " ", encoding="utf-8")
+            await pilot.press("ctrl+s")
+            await pilot.pause()
+            assert isinstance(app.screen, StaleFileModal)
+            # default focus must land on the non-destructive choice: Reload
+            # and Overwrite both discard someone's work, Keep editing loses
+            # nothing — an unread Enter must not be able to throw work away
+            assert app.screen.query_one("#keep", Button).has_focus
+            await pilot.press("escape")  # keep editing
+            await pilot.pause()
+            assert editor.session.program.insured == "Mine"  # nothing lost
 
 
 class TestAppliesToLayout:

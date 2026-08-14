@@ -60,6 +60,82 @@ code changes without a new release. Maintainers rebuild the wheelhouse with
 TUI browser lists it alongside `programs/`, but nothing in it can reach the
 public repository or CI.
 
+## MCP connector (design assist)
+
+The `towerctl mcp` command exposes an MCP server for a design assistant. The
+connector panel is hand-entry, so ask for the values rather than typing them
+from memory — run this **on the machine the connector will run on**:
+
+```
+towerctl mcp --connector-info
+```
+
+It prints one line per field, ready to paste:
+
+```
+Add MCP Connector — paste one line per field:
+
+  Name         towerkit
+  Command      /Users/you/Developer/towerkit/.venv/bin/towerctl
+  Arguments    mcp, --programs, /Users/you/programs
+  Env Secrets  (none)
+  Mode         both
+```
+
+Three things that block a hand-typed connector, all handled above:
+
+- **Command is absolute.** `towerctl` is not on `PATH` — install.sh builds
+  `./.venv` inside the checkout — and the panel's launcher inherits neither
+  your `PATH` nor a shell alias, so a bare `towerctl` never starts.
+- **Arguments are comma-separated**, because that is what the panel splits on.
+  Written space-separated they arrive as a single argument, `--programs` is
+  never seen, and the server silently falls back to `./programs`.
+- **Program roots are always emitted.** The `./programs` default is wrong for
+  a server the client launches from its own working directory, and getting it
+  wrong is invisible: the server starts fine and reports an empty shelf. With
+  no roots to emit, `--connector-info` refuses (exit 2) rather than print a
+  config that fails that way. Pass `--programs <dir> [<dir>…]` to set them;
+  if bookkit is installed, they are read from `bookctl roots --json` so the
+  roots you configured once are not typed again.
+
+Then verify before you trust it:
+
+```
+towerctl mcp --check
+```
+
+It exits 0 only when the console script is executable, every root exists and
+holds at least one program file (with a count, so a wrong-but-present
+directory is obvious), and startup writes nothing to stdout — stdout is the
+MCP wire, and one stray `print` corrupts the protocol.
+
+Set `TOWERKIT_POST_WRITE_CMD` in Env Secrets only to notify something
+downstream after each write (e.g. `bookctl sync --path {path}`).
+
+The assistant designs the tower: read a program, draw it, add and remove
+coverage lines, set retentions and sublimits, change which lines a layer spans,
+mark a layer follows-underlying, restack, and start a program from scratch or as
+next year's renewal. Book facts — premiums, market shares, policy dates — belong
+to bookkit's connector, not this one.
+
+Two rules shape every write. **Validation errors do not block a write**: a tower
+under construction is invalid by construction, so a new line reports `line-empty`
+and a half-built stack reports `line-gap`, and those come back in the tool's
+result while the write lands. Only a file towerkit could not load is refused.
+And **a write refuses against a file this session has not read, or one that
+changed since it read it** — re-read and retry. The TUI editor refuses the
+mirror image: it will not save over a file that moved underneath it, offering
+reload, overwrite, or keep editing.
+
+Every write leaves a pre-image in `.mcp-snapshots/` beside the program;
+`program_revert_write` puts one back, but only while the file still holds
+exactly what that write produced.
+
+Set `TOWERKIT_POST_WRITE_CMD` to have something re-read a file after every
+write; `{path}` is substituted, and the command never fails the write:
+
+    export TOWERKIT_POST_WRITE_CMD='bookctl sync --path {path}'
+
 ## Design in one minute
 
 - **Lines are columns; layers carry `appliesTo`.** An umbrella spanning three
