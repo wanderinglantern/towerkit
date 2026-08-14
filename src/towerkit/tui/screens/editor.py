@@ -41,6 +41,7 @@ from textual.widgets import (
     Tree,
 )
 
+from ... import edit
 from ...model import (
     Line,
     Participant,
@@ -1830,10 +1831,7 @@ class EditorScreen(Screen):
                     return
                 if move:
                     def apply_src(p: Program) -> None:
-                        p.lines = result.src_after.lines
-                        p.layers = result.src_after.layers
-                        p.retentions = result.src_after.retentions
-                        p.sublimits = result.src_after.sublimits
+                        edit.adopt(p, result.src_after)
 
                     self.session.mutate(apply_src)
                     # the moved line's node is gone from the tree; fall back

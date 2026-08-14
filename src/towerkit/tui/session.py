@@ -12,6 +12,8 @@ from collections.abc import Callable
 from datetime import date
 from pathlib import Path
 
+from .. import edit
+from ..edit import ordinal, slugify, suggested_attach  # re-exported: editor.py imports these
 from ..model import (
     Layer,
     Line,
@@ -23,6 +25,15 @@ from ..model import (
     loads_program,
 )
 from ..validate import Diagnostics, validate_program
+
+__all__ = [
+    "EditSession",
+    "PLACEHOLDER_ID",
+    "blank_program",
+    "ordinal",
+    "slugify",
+    "suggested_attach",
+]
 
 
 def blank_program() -> Program:
@@ -41,31 +52,6 @@ def blank_program() -> Program:
 
 
 PLACEHOLDER_ID = re.compile(r"^(layer|line|retention|sublimit)(-\d+)?$")
-
-
-def ordinal(n: int) -> str:
-    if 10 <= n % 100 <= 20:
-        suffix = "th"
-    else:
-        suffix = {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
-    return f"{n}{suffix}"
-
-
-def slugify(name: str) -> str:
-    """'Primary D&O' → 'primary-do': ids nobody has to invent."""
-    slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
-    return slug or "item"
-
-
-def suggested_attach(program: Program, line_ids: list[str]) -> int:
-    """Default attachment for a new layer: the top of the existing stack for
-    those lines. Contiguity by construction beats contiguity by validation."""
-    tops = [
-        layer.top
-        for layer in program.layers
-        if layer.limit > 0 and any(lid in layer.applies_to for lid in line_ids)
-    ]
-    return max(tops, default=0)
 
 
 class EditSession:
@@ -91,10 +77,7 @@ class EditSession:
         layer's limit can never strand them."""
         before = dumps_program(self.program)
         fn(self.program)
-        for layer in self.program.layers:
-            if layer.follows_underlying:
-                tops = self.program.underlying_tops(layer)
-                layer.attach = max(tops.values(), default=0)
+        edit.heal_follows(self.program)
         after = dumps_program(self.program)
         if after != before:
             self._undo.append(before)
@@ -137,61 +120,22 @@ class EditSession:
 
     # -- structural edits used by the editor ---------------------------------
 
-    def unique_id(self, prefix: str) -> str:
-        taken = {layer.id for layer in self.program.layers} | {
-            line.id for line in self.program.lines
-        }
-        if prefix not in taken:
-            return prefix
-        n = 2
-        while f"{prefix}-{n}" in taken:
-            n += 1
-        return f"{prefix}-{n}"
+    def unique_id(self, prefix: str, exclude: str | None = None) -> str:
+        return edit.unique_id(self.program, prefix, exclude)
 
     def add_layer(self, line_ids: list[str] | None = None) -> Layer:
-        lines = line_ids or ([self.program.lines[0].id] if self.program.lines else [])
-        attach = suggested_attach(self.program, lines)
-        if attach == 0:
-            name = "New Layer"
-        else:
-            # count the excess layers already stacked on these lines:
-            # the new one is "1st Excess", "2nd Excess", …
-            n = sum(
-                1
-                for ly in self.program.layers
-                if ly.attach > 0
-                and ly.limit > 0
-                and any(lid in ly.applies_to for lid in lines)
-            )
-            name = f"{ordinal(n + 1)} Excess"
-        layer = Layer(
-            id=self.unique_id("layer"),
-            name=name,
-            applies_to=lines or ["gl"],
-            attach=attach,
-            limit=5_000_000,
-            participants=[],
-        )
-        self.mutate(lambda p: p.layers.append(layer))
+        layer: Layer | None = None
+
+        def do(p: Program) -> None:
+            nonlocal layer
+            layer = edit.add_layer(p, line_ids)
+
+        self.mutate(do)
+        assert layer is not None
         return layer
 
     def restack(self) -> None:
         """Recalculate every attachment from the stacking order: each layer
         lands on top of what its lines already carry. One keystroke heals a
         tower after limit edits — gaps and overlaps disappear."""
-
-        def reflow(p: Program) -> None:
-            tops: dict[str, int] = {line.id: 0 for line in p.lines}
-            ordered = sorted(
-                (ly for ly in p.layers if ly.limit > 0),
-                key=lambda ly: ly.attach,
-            )
-            for layer in ordered:
-                base = max(
-                    (tops.get(lid, 0) for lid in layer.applies_to), default=0
-                )
-                layer.attach = base
-                for lid in layer.applies_to:
-                    tops[lid] = base + layer.limit
-
-        self.mutate(reflow)
+        self.mutate(edit.restack)
