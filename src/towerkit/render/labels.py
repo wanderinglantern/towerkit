@@ -10,9 +10,12 @@ from ..layout import GroupBand, LayerBlock, ParticipantBlock
 from ..money import format_money_compact, format_share, premium_share
 
 
-def layer_terms(attach: int, limit: int) -> str:
+def layer_terms(attach: int, limit: int, statutory: bool = False) -> str:
     """Market convention: a primary is quoted by its limit alone — 'xs $0'
-    is meaningless and reads as an error on a chart."""
+    is meaningless and reads as an error on a chart. Statutory cover has no
+    limit to quote at all."""
+    if statutory:
+        return "Statutory"
     if attach > 0:
         return f"{format_money_compact(limit)} xs {format_money_compact(attach)}"
     return format_money_compact(limit)

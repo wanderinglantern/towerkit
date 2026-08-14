@@ -19,6 +19,12 @@ def _layer(name: str, attach: int, limit: int) -> LayerBlock:
     )
 
 
+def test_layer_terms_statutory_has_no_dollar_figure() -> None:
+    """Statutory cover has no limit to quote — a dollar figure here would be
+    a lie, and '$0' reads as a data error."""
+    assert layer_terms(0, 0, statutory=True) == "Statutory"
+
+
 def test_layer_terms_market_convention() -> None:
     assert layer_terms(0, 5_000_000) == "$5M"          # primary: never "xs $0"
     assert layer_terms(2_000_000, 25_000_000) == "$25M xs $2M"
