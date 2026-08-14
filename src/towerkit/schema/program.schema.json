@@ -178,6 +178,10 @@
           "description": "Integer dollars. Positivity is a semantic rule so drafts stay loadable.",
           "type": "integer"
         },
+        "statutory": {
+          "description": "Coverage with no dollar limit (WC statutory). limit must be 0; excluded from limit totals.",
+          "type": "boolean"
+        },
         "premium": {
           "$ref": "#/$defs/money"
         },
