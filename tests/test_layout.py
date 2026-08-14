@@ -461,3 +461,21 @@ class TestStatutory:
         blocks = [b for b in tower.participants if b.layer_id == "wc-stat"]
         assert [b.carrier for b in blocks] == ["A", "B"]
         assert all(r.y0 == 0.0 and r.y1 == 1.0 for b in blocks for r in b.rects)
+
+    def test_a_stale_limit_on_a_statutory_layer_is_still_off_the_scale(self) -> None:
+        """limit == 0 is a SEMANTIC rule, not a schema one, and build_layout
+        tolerates draft data — so a layer with the box ticked and a stale
+        limit must still contribute no breakpoints. This is the case that
+        distinguishes build_y_map(scaled) from build_y_map(drawable); with
+        limit == 0 the two are bit-identical and nothing would catch the
+        difference."""
+        stat = statutory_layer("wc-stat", ["wc"], [("C", 10_000)])
+        stat.limit = 7_000_000  # draft: box ticked, limit never cleared
+        tower = build_layout(
+            make_program(
+                ["gl", "wc"],
+                [layer("gl-primary", ["gl"], 0, 5_000_000, [("A", 10_000)]), stat],
+            )
+        )
+        assert tower.ymap.breakpoints == (0, 5_000_000)
+        assert next(b for b in tower.layers if b.layer_id == "wc-stat").y1 == 1.0

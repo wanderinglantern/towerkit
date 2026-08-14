@@ -128,8 +128,10 @@ class TowerLayout:
 
 def build_layout(program: Program, gamma: float = DEFAULT_GAMMA) -> TowerLayout:
     """Pure geometry for one program. Tolerates draft data (skips layers with
-    non-positive limits or no known lines) so the live preview never crashes;
-    correctness complaints are the validator's job."""
+    no known lines, and skips non-statutory layers with a non-positive limit
+    — a statutory layer is admitted regardless of its limit, since that
+    field is a stale/unused leftover once the box is ticked) so the live
+    preview never crashes; correctness complaints are the validator's job."""
     columns = _columns(program)
     order = {col.line_id: col.index for col in columns}
     drawable = [
