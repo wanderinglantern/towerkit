@@ -1401,46 +1401,72 @@ with no statutory layer have no band, so existing goldens are untouched."
 
 - [ ] **Step 1: Write the failing tests**
 
-Add to `tests/test_tui.py`. **`_app_with_layer` and `_select_layer` below are illustrative names, not existing helpers** — this file has an established pilot-test idiom (see its `sample_copy` fixture and the neighbouring editor tests). Build the app and select the layer the way those tests already do, and keep the assertions below exactly as written. `Checkbox` is not currently imported from `textual.widgets`; add it, along with `MoneyInput` from `towerkit.tui.widgets.inputs`.
+Add these as methods on the existing editor test class in `tests/test_tui.py` (the one whose tests take `sample_copy, monkeypatch` — e.g. alongside `test_money_field_commit_updates_program`). They follow that file's established pilot idiom exactly: set `editor.selected`, `await editor._rebuild_detail()`, `await pilot.pause()`, then act.
+
+`Checkbox` is not currently imported in this file — add it to the existing `from textual.widgets import Button, Input` line.
 
 ```python
-async def test_statutory_checkbox_zeroes_limit_and_attach() -> None:
-    """Checking it must force the invariant, not merely record intent —
-    otherwise the user types a limit that is silently invalid."""
-    app = _app_with_layer(attach=5_000_000, limit=10_000_000)
-    async with app.run_test() as pilot:
-        screen = app.screen
-        await _select_layer(pilot, "ly1")
-        screen.query_one("#f-layer-statutory", Checkbox).value = True
-        await pilot.pause()
-        layer = app.session.program.layers[0]
-        assert layer.statutory is True
-        assert layer.limit == 0
-        assert layer.attach == 0
-        assert layer.follows_underlying is False
+    @pytest.mark.asyncio
+    async def test_statutory_checkbox_forces_the_invariant(
+        self, sample_copy, monkeypatch
+    ) -> None:
+        """Checking it must FORCE limit=0 / attach=0, not merely record
+        intent — otherwise the user keeps a limit that is silently invalid,
+        which is the exact failure visible-validation exists to prevent."""
+        monkeypatch.chdir(sample_copy.parent.parent)
+        app = TowerkitApp(path=sample_copy)
+        async with app.run_test(size=(140, 45)) as pilot:
+            editor = app.screen
+            editor.selected = ("layer", "umbrella")
+            await editor._rebuild_detail()
+            await pilot.pause()
+            editor.query_one("#f-layer-statutory", Checkbox).value = True
+            await pilot.pause()
+            layer = editor._layer("umbrella")
+            assert layer.statutory is True
+            assert layer.limit == 0
+            assert layer.attach == 0
+            assert layer.follows_underlying is False
 
+    @pytest.mark.asyncio
+    async def test_unchecking_statutory_clears_the_flag(
+        self, sample_copy, monkeypatch
+    ) -> None:
+        monkeypatch.chdir(sample_copy.parent.parent)
+        app = TowerkitApp(path=sample_copy)
+        async with app.run_test(size=(140, 45)) as pilot:
+            editor = app.screen
+            editor.selected = ("layer", "umbrella")
+            await editor._rebuild_detail()
+            await pilot.pause()
+            checkbox = editor.query_one("#f-layer-statutory", Checkbox)
+            checkbox.value = True
+            await pilot.pause()
+            checkbox.value = False
+            await pilot.pause()
+            assert editor._layer("umbrella").statutory is False
 
-async def test_unchecking_statutory_leaves_the_layer_editable() -> None:
-    app = _app_with_layer(attach=0, limit=0, statutory=True)
-    async with app.run_test() as pilot:
-        screen = app.screen
-        await _select_layer(pilot, "ly1")
-        screen.query_one("#f-layer-statutory", Checkbox).value = False
-        await pilot.pause()
-        assert app.session.program.layers[0].statutory is False
-
-
-async def test_limit_edits_are_ignored_while_statutory() -> None:
-    app = _app_with_layer(attach=0, limit=0, statutory=True)
-    async with app.run_test() as pilot:
-        screen = app.screen
-        await _select_layer(pilot, "ly1")
-        field = screen.query_one("#f-layer-limit", MoneyInput)
-        field.value = "5m"
-        await pilot.press("tab")
-        await pilot.pause()
-        assert app.session.program.layers[0].limit == 0
+    @pytest.mark.asyncio
+    async def test_limit_edits_ignored_while_statutory(
+        self, sample_copy, monkeypatch
+    ) -> None:
+        monkeypatch.chdir(sample_copy.parent.parent)
+        app = TowerkitApp(path=sample_copy)
+        async with app.run_test(size=(140, 45)) as pilot:
+            editor = app.screen
+            editor.selected = ("layer", "umbrella")
+            await editor._rebuild_detail()
+            await pilot.pause()
+            editor.query_one("#f-layer-statutory", Checkbox).value = True
+            await pilot.pause()
+            limit = editor.query_one("#f-layer-limit")
+            limit.value = "5m"
+            editor._commit_input(limit)
+            await pilot.pause()
+            assert editor._layer("umbrella").limit == 0
 ```
+
+Note: the sample program's `umbrella` layer has a real attach and limit, so the first test genuinely exercises the zeroing rather than asserting on values that were already 0.
 
 Reuse the file's existing app/layer helpers rather than inventing `_app_with_layer` / `_select_layer` if equivalents already exist — match what the neighbouring tests do.
 
