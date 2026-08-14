@@ -483,6 +483,20 @@ class TestResyncHook:
         assert (roots[0] / ".mcp-snapshots" / f"{out['write_ref']}.meta.json").exists()
         assert load_program(path)  # and the file is still loadable
 
+    def test_a_malformed_template_is_reported_not_raised(self, roots, monkeypatch) -> None:
+        """shlex.split raises ValueError on an unbalanced quote. That must not
+        escape run_hook: the write already landed by the time the hook runs,
+        so a typo'd env var must be reported in `resync`, not raised out of
+        the tool call."""
+        monkeypatch.setenv("TOWERKIT_POST_WRITE_CMD", 'bad "quote')
+        programs = Programs(roots)
+        _program_read(programs, "atomic-2026")
+        path = roots[0] / "atomic-2026.json"
+        out = _restack(programs, "atomic-2026")  # must not raise
+        assert out["resync"].startswith("failed")
+        assert (roots[0] / ".mcp-snapshots" / f"{out['write_ref']}.meta.json").exists()
+        assert load_program(path)  # the write still landed
+
     def test_creation_runs_the_hook_too(self, roots, tmp_path, monkeypatch) -> None:
         marker = tmp_path / "created.txt"
         monkeypatch.setenv(

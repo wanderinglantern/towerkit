@@ -71,12 +71,12 @@ def run_hook(path: Path) -> str:
     template = os.environ.get(HOOK_ENV)
     if not template:
         return "not configured"
-    command = [part.replace("{path}", str(path)) for part in shlex.split(template)]
     try:
+        command = [part.replace("{path}", str(path)) for part in shlex.split(template)]
         done = subprocess.run(
             command, capture_output=True, text=True, timeout=HOOK_TIMEOUT, check=False
         )
-    except (OSError, subprocess.SubprocessError) as exc:
+    except (OSError, subprocess.SubprocessError, ValueError) as exc:
         return f"failed: {exc}"
     if done.returncode != 0:
         detail = (done.stderr or done.stdout or "").strip().splitlines()
