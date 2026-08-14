@@ -244,32 +244,30 @@ git commit -m "labels: statutory cover quotes 'Statutory', never a dollar figure
 
 - [ ] **Step 1: Write the failing tests**
 
-Add to `tests/test_soi.py` (use the module's existing program-building helper; if none is in scope, build a `Program` the way `tests/test_layout.py:make_program` does):
+Add to `tests/test_soi.py`. **`make_program()` in this file takes NO arguments** — it returns a fixed sample program. `limits_text` only reads `program.sublimits` off it, so that program is a fine backdrop; the layer under test is passed separately and need not belong to it.
 
 ```python
 from towerkit.model import Layer
 from towerkit.soi import limits_text
 
 
-def test_limits_text_statutory() -> None:
-    program = make_program(["wc"], [])
-    layer = Layer(
+def _statutory_layer(**kw) -> Layer:
+    base = dict(
         id="wc-stat", name="Workers Compensation", applies_to=["wc"],
         attach=0, limit=0, statutory=True,
     )
-    assert limits_text(layer, program) == "Statutory"
+    return Layer(**{**base, **kw})
+
+
+def test_limits_text_statutory() -> None:
+    assert limits_text(_statutory_layer(), make_program()) == "Statutory"
 
 
 def test_limits_detail_still_wins_over_statutory() -> None:
     """towerkit does not invent a sentence about state law. If the broker
     wants the long form on the SOI they type it, and it wins."""
-    program = make_program(["wc"], [])
-    layer = Layer(
-        id="wc-stat", name="Workers Compensation", applies_to=["wc"],
-        attach=0, limit=0, statutory=True,
-        limits_detail="Benefits as required by NY state law",
-    )
-    assert limits_text(layer, program) == "Benefits as required by NY state law"
+    layer = _statutory_layer(limits_detail="Benefits as required by NY state law")
+    assert limits_text(layer, make_program()) == "Benefits as required by NY state law"
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -697,7 +695,7 @@ their geometry and SCHEMATIC_GOLDEN_SHA does not churn."
 
 - [ ] **Step 1: Write the failing tests**
 
-Add to `tests/test_validate.py` (follow the file's existing helper for building a program and reading codes; the pattern below assumes `codes(program)` returns the set of diagnostic codes — use whatever the file already defines):
+Add to `tests/test_validate.py`. **`make_program(**overrides)` in this file is KEYWORD-only** — it builds a fixed clean program and applies overrides, so a statutory program means overriding `lines`, `layers` and `retentions` together. `codes(program)` returns the set of diagnostic codes and already exists.
 
 ```python
 def _stat(**kw) -> Layer:
@@ -709,59 +707,58 @@ def _stat(**kw) -> Layer:
     return Layer(**{**base, **kw})
 
 
+def _wc_program(*layers: Layer) -> Program:
+    return make_program(
+        lines=[Line(id="wc", name="Workers Compensation")],
+        layers=list(layers),
+        retentions=[],
+    )
+
+
 def test_statutory_layer_is_exempt_from_the_positive_limit_rule() -> None:
-    program = make_program(["wc"], [_stat()])
-    assert "layer-limit" not in codes(program)
+    assert "layer-limit" not in codes(_wc_program(_stat()))
 
 
 def test_statutory_with_a_limit_is_an_error() -> None:
-    program = make_program(["wc"], [_stat(limit=1_000_000)])
-    assert "statutory-limit" in codes(program)
+    assert "statutory-limit" in codes(_wc_program(_stat(limit=1_000_000)))
 
 
 def test_statutory_with_an_attachment_is_an_error() -> None:
-    program = make_program(["wc"], [_stat(attach=500_000)])
-    assert "statutory-attach" in codes(program)
+    assert "statutory-attach" in codes(_wc_program(_stat(attach=500_000)))
 
 
 def test_statutory_cannot_follow_underlying() -> None:
-    program = make_program(["wc"], [_stat(follows_underlying=True)])
-    assert "statutory-follows" in codes(program)
+    assert "statutory-follows" in codes(_wc_program(_stat(follows_underlying=True)))
 
 
 def test_statutory_line_reports_no_phantom_gap() -> None:
     """A line covered only by a statutory layer is fully covered. Left alone,
     the limit > 0 filter drops it from the stack and the line reads as empty —
     which would tint the WC column danger-red in the live preview."""
-    program = make_program(["wc"], [_stat()])
-    found = codes(program)
+    found = codes(_wc_program(_stat()))
     assert "line-empty" not in found
     assert "line-base" not in found
     assert "line-gap" not in found
 
 
 def test_statutory_line_rejects_a_second_layer() -> None:
-    program = make_program(
-        ["wc"],
-        [
-            _stat(),
-            Layer(
-                id="wc-xs", name="WC Excess", applies_to=["wc"],
-                attach=0, limit=1_000_000,
-                participants=[Participant(carrier="A", share_bps=10_000)],
-            ),
-        ],
+    program = _wc_program(
+        _stat(),
+        Layer(
+            id="wc-xs", name="WC Excess", applies_to=["wc"],
+            attach=0, limit=1_000_000,
+            participants=[Participant(carrier="A", share_bps=10_000)],
+        ),
     )
     assert "statutory-line-shared" in codes(program)
 
 
 def test_statutory_unplaced_is_reported_as_a_share_not_dollars() -> None:
-    program = make_program(
-        ["wc"],
-        [_stat(participants=[Participant(carrier="Travelers", share_bps=6_000)])],
+    program = _wc_program(
+        _stat(participants=[Participant(carrier="Travelers", share_bps=6_000)])
     )
-    messages = [d.message for d in validate_program(program).all()]
-    unplaced = next(m for m in messages if "unplaced" in m or "open" in m)
+    messages = [d.message for d in validate_program(program).items]
+    unplaced = next(m for m in messages if "open" in m or "unplaced" in m)
     assert "$0" not in unplaced
     assert "40% open" in unplaced
 ```
@@ -899,35 +896,44 @@ share."
 
 - [ ] **Step 1: Write the failing tests**
 
-Add to `tests/test_ascii.py`:
+Add to `tests/test_ascii.py`. **This file has no `make_program` helper and no theme fixture** — it has `render(colour=False, **kw)`, which renders a fixed SAMPLE file with `load_theme()`. Build the program inline and call `render_ascii` directly, matching that idiom. Add `Layer`, `Line`, `Participant`, `Period`, `Placement`, `Program` to the existing `towerkit.model` import.
 
 ```python
-def test_statutory_draws_a_caret_row(marsh) -> None:
-    program = make_program(
-        ["wc"],
-        [Layer(
+def _wc_program(*layers: Layer) -> Program:
+    return Program(
+        insured="T",
+        program="T",
+        placement=Placement.BOUND,
+        period=Period(start=date(2026, 1, 1), end=date(2027, 1, 1)),
+        lines=[Line(id="wc", name="Workers Compensation")],
+        layers=list(layers),
+    )
+
+
+def test_statutory_draws_a_caret_row() -> None:
+    program = _wc_program(
+        Layer(
             id="wc-stat", name="Workers Compensation", applies_to=["wc"],
             attach=0, limit=0, statutory=True,
             participants=[Participant(carrier="Travelers", share_bps=10_000)],
-        )],
+        )
     )
-    out = render_ascii(program, marsh, colour=False)
+    out = render_ascii(program, load_theme(), colour=False)
     assert "^" in out.splitlines()[0]
 
 
-def test_no_caret_row_without_statutory_cover(marsh) -> None:
-    program = make_program(
-        ["gl"],
-        [Layer(
-            id="gl-primary", name="Primary", applies_to=["gl"],
+def test_no_caret_row_without_statutory_cover() -> None:
+    program = _wc_program(
+        Layer(
+            id="gl-primary", name="Primary", applies_to=["wc"],
             attach=0, limit=5_000_000,
             participants=[Participant(carrier="A", share_bps=10_000)],
-        )],
+        )
     )
-    assert "^" not in render_ascii(program, marsh, colour=False)
+    assert "^" not in render_ascii(program, load_theme(), colour=False)
 ```
 
-Use whatever theme fixture `tests/test_ascii.py` already has; if it builds one inline, do the same.
+`date` needs importing from `datetime` if the file does not already have it.
 
 - [ ] **Step 2: Run tests to verify they fail**
 
@@ -1093,59 +1099,55 @@ than falling out of the uniform treatment. Every row index shifts by chev_rows
 
 - [ ] **Step 1: Write the failing tests**
 
-Add to `tests/test_render.py`:
+Add to `tests/test_render.py`. **The theme fixture in this file is named `theme`, not `marsh`**, and the real signature is `render_program(program, theme, out_dir, stem, formats) -> list[Path]` — copy the call shape from the neighbouring `test_two_renders_are_byte_identical_svg`. There is no `make_program` helper; build the program inline.
+
+**Import order matters on this machine:** never `import matplotlib` before something from `towerkit.render` — `towerkit/render/__init__.py` sets `MPL_IGNORE_SYSTEM_FONTS=1`, without which matplotlib's system-font scan crashes on macOS 27. The module already imports `render_program` at the top, so importing `draw_tower` from `towerkit.render.mpl_program` inside the test is safe; `matplotlib.figure` may then be imported after it.
 
 ```python
-def test_statutory_svg_is_byte_identical_across_runs(tmp_path, marsh) -> None:
-    """The project rule, exercised on the new code path."""
-    program = make_program(
-        ["wc"],
-        [Layer(
+def _wc_program() -> Program:
+    return Program(
+        insured="T",
+        program="T",
+        placement=Placement.BOUND,
+        period=Period(start=date(2026, 1, 1), end=date(2027, 1, 1)),
+        lines=[Line(id="wc", name="Workers Compensation")],
+        layers=[Layer(
             id="wc-stat", name="Workers Compensation", applies_to=["wc"],
             attach=0, limit=0, statutory=True,
             participants=[Participant(carrier="Travelers", share_bps=10_000)],
         )],
     )
-    first = tmp_path / "a.svg"
-    second = tmp_path / "b.svg"
-    render_program(program, marsh, first, formats=["svg"])
-    render_program(program, marsh, second, formats=["svg"])
-    assert first.read_bytes() == second.read_bytes()
-```
 
-Match the module's existing `render_program` call convention — copy it from the neighbouring byte-identity test rather than guessing the signature.
 
-```python
-def test_statutory_draws_a_zigzag_not_a_closed_box(marsh) -> None:
+def test_statutory_svg_is_byte_identical_across_runs(theme, tmp_path) -> None:
+    """The project rule, exercised on the new code path."""
+    program = _wc_program()
+    a = render_program(program, theme, tmp_path / "a", "tower", ["svg"])[0]
+    b = render_program(program, theme, tmp_path / "b", "tower", ["svg"])[0]
+    assert a.read_bytes() == b.read_bytes()
+
+
+def test_statutory_draws_no_closed_outline_box(theme) -> None:
     """The chevron REPLACES the top edge. A closed Rectangle plus carets
     would read as a bounded bar wearing a hat."""
-    import matplotlib
-    matplotlib.use("Agg")
+    from towerkit.render.mpl_program import draw_tower  # sets MPL env first
     from matplotlib.figure import Figure
-    from towerkit.render.mpl_program import draw_tower
-
-    program = make_program(
-        ["wc"],
-        [Layer(
-            id="wc-stat", name="Workers Compensation", applies_to=["wc"],
-            attach=0, limit=0, statutory=True,
-            participants=[Participant(carrier="Travelers", share_bps=10_000)],
-        )],
-    )
-    ax = Figure().add_subplot()
-    tower = draw_tower(ax, program, marsh)
-    assert tower.chevrons
-    # no Rectangle patch spans the statutory bar's full outline
     from matplotlib.patches import Rectangle
+
+    ax = Figure().add_subplot()
+    tower = draw_tower(ax, _wc_program(), theme)
+    assert tower.chevrons
     stat = next(b for b in tower.layers if b.statutory)
-    boxes = [
+    unfilled_full_height = [
         p for p in ax.patches
         if isinstance(p, Rectangle)
         and abs(p.get_height() - (stat.y1 - stat.y0)) < 1e-9
         and p.get_facecolor()[3] == 0.0
     ]
-    assert boxes == []
+    assert unfilled_full_height == []
 ```
+
+Add `Layer`, `Line`, `Participant`, `Period`, `Placement`, `Program` to the `towerkit.model` import and `date` from `datetime`.
 
 - [ ] **Step 2: Run tests to verify they fail**
 
@@ -1236,13 +1238,17 @@ already had headroom to 1.06, so the axes do not move."
 
 - [ ] **Step 1: Write the failing tests**
 
-Add to `tests/test_schematic_xlsx.py`, following the file's existing fixture style:
+Add to `tests/test_schematic_xlsx.py`. **`make_program` in this file is imported from `test_soi` and takes no arguments** — do not call it with lines/layers. Build the program inline, following the file's own `_mini_program()` helper. The `marsh` and `program` fixtures do exist and are used as written below.
 
 ```python
-def _statutory_program():
-    return make_program(
-        ["wc"],
-        [Layer(
+def _statutory_program() -> Program:
+    return Program(
+        insured="T",
+        program="T",
+        placement=Placement.BOUND,
+        period=Period(start=date(2026, 1, 1), end=date(2027, 1, 1)),
+        lines=[Line(id="wc", name="Workers Compensation")],
+        layers=[Layer(
             id="wc-stat", name="Workers Compensation", applies_to=["wc"],
             attach=0, limit=0, statutory=True,
             participants=[Participant(carrier="Travelers", share_bps=10_000)],
@@ -1395,7 +1401,7 @@ with no statutory layer have no band, so existing goldens are untouched."
 
 - [ ] **Step 1: Write the failing tests**
 
-Add to `tests/test_tui.py`, following the file's existing pilot-test pattern:
+Add to `tests/test_tui.py`. **`_app_with_layer` and `_select_layer` below are illustrative names, not existing helpers** — this file has an established pilot-test idiom (see its `sample_copy` fixture and the neighbouring editor tests). Build the app and select the layer the way those tests already do, and keep the assertions below exactly as written. `Checkbox` is not currently imported from `textual.widgets`; add it, along with `MoneyInput` from `towerkit.tui.widgets.inputs`.
 
 ```python
 async def test_statutory_checkbox_zeroes_limit_and_attach() -> None:
