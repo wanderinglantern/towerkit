@@ -87,6 +87,37 @@ class TestSession:
         layer = session.add_layer(["pl"])
         assert layer.attach == 25_000_000  # contiguity by construction
 
+    def test_save_refuses_when_the_file_moved_underneath(self, sample_copy) -> None:
+        from towerkit.tui.session import StaleFileError
+
+        session = EditSession.open(sample_copy)
+        session.mutate(lambda p: setattr(p, "insured", "Mine"))
+        sample_copy.write_text(sample_copy.read_text("utf-8") + " ", encoding="utf-8")
+        with pytest.raises(StaleFileError):
+            session.save()
+
+    def test_forced_save_overwrites_and_re_arms_the_guard(self, sample_copy) -> None:
+        session = EditSession.open(sample_copy)
+        session.mutate(lambda p: setattr(p, "insured", "Mine"))
+        sample_copy.write_text(sample_copy.read_text("utf-8") + " ", encoding="utf-8")
+        session.save(force=True)
+        assert load_program(sample_copy).insured == "Mine"
+        session.mutate(lambda p: setattr(p, "insured", "Mine Again"))
+        session.save()  # the guard was re-armed by the forced save; no raise
+        assert load_program(sample_copy).insured == "Mine Again"
+
+    def test_reload_takes_the_file_and_drops_local_edits(self, sample_copy) -> None:
+        session = EditSession.open(sample_copy)
+        session.mutate(lambda p: setattr(p, "insured", "Mine"))
+        program = load_program(sample_copy)
+        program.insured = "Theirs"
+        sample_copy.write_text(dumps_program(program), encoding="utf-8")
+        session.reload()
+        assert session.program.insured == "Theirs"
+        assert not session.dirty
+        assert not session.undo()  # history belongs to the discarded edits
+        session.save()  # no raise: the guard re-armed on reload
+
 
 class TestInputHelpers:
     def test_share_parsing(self) -> None:
@@ -284,6 +315,26 @@ class TestEditor:
         assert diags.ok, [str(d) for d in diags.errors]
         assert program.insured == "Scratch Built Co"
         assert program.layers[0].signed_bps == BPS_SCALE
+
+    @pytest.mark.asyncio
+    async def test_save_over_a_changed_file_offers_a_choice(
+        self, sample_copy, monkeypatch
+    ) -> None:
+        from towerkit.tui.widgets.modals import StaleFileModal
+
+        monkeypatch.chdir(sample_copy.parent.parent)
+        app = TowerkitApp(path=sample_copy)
+        async with app.run_test(size=(140, 45)) as pilot:
+            editor = app.screen
+            assert isinstance(editor, EditorScreen)
+            editor.session.mutate(lambda p: setattr(p, "insured", "Mine"))
+            sample_copy.write_text(sample_copy.read_text("utf-8") + " ", encoding="utf-8")
+            await pilot.press("ctrl+s")
+            await pilot.pause()
+            assert isinstance(app.screen, StaleFileModal)
+            await pilot.press("escape")  # keep editing
+            await pilot.pause()
+            assert editor.session.program.insured == "Mine"  # nothing lost
 
 
 class TestAppliesToLayout:

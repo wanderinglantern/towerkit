@@ -58,7 +58,7 @@ from ...money import (
 )
 from ...theme import load_theme
 from ...validate import Diagnostic
-from ..session import PLACEHOLDER_ID, EditSession, slugify
+from ..session import PLACEHOLDER_ID, EditSession, StaleFileError, slugify
 from ..theme import (
     AMBER,
     DIM,
@@ -89,6 +89,7 @@ from ..widgets.modals import (
     RenderOptions,
     RenderOptionsModal,
     SendLineModal,
+    StaleFileModal,
 )
 from ..widgets.preview import TowerPreview
 from ..widgets.sheet import SheetField, SheetTable
@@ -1635,9 +1636,36 @@ class EditorScreen(Screen):
 
             self.app.push_screen(PromptModal("File name (in programs/):"), on_name)
             return
-        self.session.save()
+        self._save_guarded()
+
+    def _save_guarded(self, then: Callable[[], None] | None = None) -> None:
+        """Every save that overwrites the loaded file goes through here.
+        StaleFileError is a question for the user, not an error to swallow."""
+        try:
+            self.session.save()
+        except StaleFileError:
+
+            def on_choice(choice: str | None) -> None:
+                if choice == "overwrite":
+                    self.session.save(force=True)
+                elif choice == "reload":
+                    self.session.reload()
+                    self.refresh_all()
+                    self.notify("reloaded from disk — your edits were discarded")
+                    return
+                else:
+                    return
+                self.notify(f"saved {self.session.path}")
+                self._refresh_title()
+                if then is not None:
+                    then()
+
+            self.app.push_screen(StaleFileModal(), on_choice)
+            return
         self.notify(f"saved {self.session.path}")
         self._refresh_title()
+        if then is not None:
+            then()
 
     def action_render(self) -> None:
         self._drain_focused_input()
@@ -1869,9 +1897,7 @@ class EditorScreen(Screen):
                     "no file name yet — ctrl+s saves-as first", severity="warning"
                 )
                 return
-            self.session.save()
-            self.notify(f"saved {self.session.path}")
-            self.dismiss_editor()
+            self._save_guarded(then=self.dismiss_editor)
 
         self.app.push_screen(ExitChoiceModal(), on_choice)
 

@@ -277,6 +277,51 @@ class ExitChoiceModal(ModalScreen[str]):
         self.dismiss(event.button.id or "keep")
 
 
+class StaleFileModal(ModalScreen[str]):
+    """The file moved under an open editor. Dismisses with
+    'reload' | 'overwrite' | 'keep'."""
+
+    BINDINGS = [
+        ("r", "dismiss('reload')", "Reload"),
+        ("o", "dismiss('overwrite')", "Overwrite"),
+        ("escape", "dismiss('keep')", "Keep editing"),
+    ]
+
+    DEFAULT_CSS = """
+    StaleFileModal { align: center middle; }
+    StaleFileModal > VerticalScroll {
+        width: 68; height: auto; max-height: 80%; padding: 1 2;
+        border: thick $warning; background: $surface;
+    }
+    StaleFileModal .modal-hint { color: $text-muted; margin-top: 1; }
+    StaleFileModal Horizontal { height: auto; align-horizontal: right; }
+    StaleFileModal Button { margin-left: 2; }
+    """
+
+    def compose(self) -> ComposeResult:
+        with VerticalScroll():
+            yield Label("This file changed on disk since you opened it.")
+            yield Label(
+                "Reload takes the file and DISCARDS your edits. "
+                "Overwrite keeps your edits and discards theirs.",
+                classes="modal-hint",
+            )
+            yield Label(
+                "[b]r[/b] reload · [b]o[/b] overwrite · [b]esc[/b] keep editing",
+                classes="modal-hint",
+            )
+            with Horizontal():
+                yield Button("Keep editing", id="keep")
+                yield Button("Overwrite", id="overwrite", variant="warning")
+                yield Button("Reload", id="reload", variant="primary")
+
+    def on_mount(self) -> None:
+        self.query_one("#reload", Button).focus()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss(event.button.id or "keep")
+
+
 class SendLineModal(ModalScreen[tuple[Path, bool] | None]):
     """Pick a target program file and copy/move mode for a line transfer."""
 
