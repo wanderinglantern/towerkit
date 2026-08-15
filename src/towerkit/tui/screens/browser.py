@@ -167,6 +167,18 @@ class ProgramBrowser(Screen):
         session = EditSession(blank_program(), path=None)
         self.app.push_screen(EditorScreen(session, theme_path=self.theme_path))
 
+    def _notify_write_failure(self, target: Path, exc: OSError) -> None:
+        """Same position the editor takes in `_notify_save_failure`: a write
+        that cannot reach disk is a message, not a crash. Nothing here is
+        irreplaceable — the browser holds no session — but killing the TUI
+        on a full disk is exactly the failure this codebase refuses."""
+        reason = exc.strerror or str(exc)
+        self.notify(
+            f"could not write {target}: {reason} — nothing was written",
+            severity="error",
+            timeout=10,
+        )
+
     def action_clone(self) -> None:
         path = self._selected_path()
         if path is None:
@@ -186,7 +198,11 @@ class ProgramBrowser(Screen):
             if target.exists():
                 self.notify(f"{target.name} already exists", severity="error")
                 return
-            dump_program(clone, target)
+            try:
+                dump_program(clone, target)
+            except OSError as exc:
+                self._notify_write_failure(target, exc)
+                return
             self.reload()
             self.notify(f"created {target.name} (proposed, period bumped)")
 
@@ -292,8 +308,12 @@ class ProgramBrowser(Screen):
         if out.exists():  # program files are the source of truth — never clobber
             self.notify(f"{out.name} exists — not overwriting", severity="error")
             return
-        self.programs_dir.mkdir(parents=True, exist_ok=True)
-        dump_program(program, out)
+        try:
+            self.programs_dir.mkdir(parents=True, exist_ok=True)
+            dump_program(program, out)
+        except OSError as exc:
+            self._notify_write_failure(out, exc)
+            return
         self.reload()
         self.notify(f"imported {out.name}")
         self.app.push_screen(
@@ -307,8 +327,21 @@ class ProgramBrowser(Screen):
 
         def on_confirm(confirmed: bool | None) -> None:
             if confirmed and path.exists():
-                path.unlink()
-                backup_path(path).unlink(missing_ok=True)
+                try:
+                    path.unlink()
+                except OSError as exc:
+                    reason = exc.strerror or str(exc)
+                    self.notify(
+                        f"could not delete {path.name}: {reason} — the file "
+                        f"is still there",
+                        severity="error",
+                        timeout=10,
+                    )
+                    return
+                try:
+                    backup_path(path).unlink(missing_ok=True)
+                except OSError:
+                    pass  # hidden housekeeping; the program file is gone
                 self.reload()
                 self.notify(f"deleted {path.name}")
 

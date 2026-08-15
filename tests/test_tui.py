@@ -201,6 +201,96 @@ class TestBrowser:
         assert not backup_path(target).exists()
 
 
+class TestBrowserWriteFailures:
+    """A write that cannot reach disk is a message, not a crash — the
+    browser's own filesystem calls, not just the editor's."""
+
+    def _enospc(self, monkeypatch) -> None:
+        def _full(*_args: object, **_kwargs: object) -> None:
+            raise OSError(errno.ENOSPC, "No space left on device")
+
+        monkeypatch.setattr("towerkit.tui.screens.browser.dump_program", _full)
+
+    @pytest.mark.asyncio
+    async def test_clone_survives_a_write_that_cannot_land(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        programs = tmp_path / "programs"
+        programs.mkdir()
+        shutil.copy(SAMPLE, programs / "atomic-2026.json")
+        monkeypatch.chdir(tmp_path)
+        self._enospc(monkeypatch)
+        app = TowerkitApp()
+        async with app.run_test(size=(140, 45)) as pilot:
+            await pilot.press("c")
+            await pilot.pause()
+            app.screen.query_one("#prompt").value = "atomic-2027"
+            await pilot.press("enter")
+            await pilot.pause()
+
+            assert app.is_running, "a failed clone killed the browser"
+            assert any(
+                "could not write" in n.message for n in app._notifications
+            ), [n.message for n in app._notifications]
+        assert not (programs / "atomic-2027.json").exists()
+
+    @pytest.mark.asyncio
+    async def test_import_survives_a_write_that_cannot_land(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "programs").mkdir()
+        src = _filled_template(tmp_path)
+        self._enospc(monkeypatch)
+        app = TowerkitApp()
+        async with app.run_test(size=(140, 45)) as pilot:
+            await pilot.press("i")
+            await pilot.pause()
+            modal = app.screen
+            modal.query_one("#import-path").value = str(src)
+            modal.query_one("#import-insured").value = "Example Co"
+            modal.query_one("#import-program").value = "Property"
+            modal.query_one("#import-confirm").press()
+            await pilot.pause()
+
+            assert app.is_running, "a failed import killed the browser"
+            assert isinstance(app.screen, ProgramBrowser)  # no editor pushed
+            assert any(
+                "could not write" in n.message for n in app._notifications
+            ), [n.message for n in app._notifications]
+        assert not list((tmp_path / "programs").glob("*.json"))
+
+    @pytest.mark.asyncio
+    async def test_delete_survives_an_unlink_that_is_refused(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        programs = tmp_path / "programs"
+        programs.mkdir()
+        target = programs / "atomic-2026.json"
+        shutil.copy(SAMPLE, target)
+        monkeypatch.chdir(tmp_path)
+
+        def _refused(*_args: object, **_kwargs: object) -> None:
+            raise PermissionError(errno.EACCES, "Permission denied")
+
+        monkeypatch.setattr(Path, "unlink", _refused)
+        app = TowerkitApp()
+        async with app.run_test(size=(140, 45)) as pilot:
+            await pilot.press("d")
+            await pilot.pause()
+            from towerkit.tui.widgets.modals import ConfirmModal
+
+            assert isinstance(app.screen, ConfirmModal)
+            app.screen.query_one("#yes", Button).press()
+            await pilot.pause()
+
+            assert app.is_running, "a refused delete killed the browser"
+            assert any(
+                "could not delete" in n.message for n in app._notifications
+            ), [n.message for n in app._notifications]
+        assert target.exists(), "the file the delete could not remove is still there"
+
+
 class TestEditor:
     @pytest.mark.asyncio
     async def test_editor_shows_structure_and_diagnostics(self, sample_copy, monkeypatch) -> None:
