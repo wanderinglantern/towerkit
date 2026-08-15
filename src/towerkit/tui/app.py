@@ -60,6 +60,11 @@ class TowerkitApp(App):
         """
         screen = self.screen
         if isinstance(screen, EditorScreen) and screen.session.dirty:
+            # action_back's layers-sheet-open early return (close the sheet,
+            # don't prompt/exit) is reachable from here too. Deliberate: it
+            # mirrors what esc already does, costs one extra keypress in a
+            # rare state, and duplicating the sheet check here just to skip
+            # it would fork exit logic across two methods for no real gain.
             await screen.action_back()
             return
         self.exit()

@@ -1806,3 +1806,18 @@ class TestExitGuards:
             await pilot.pause()
 
             assert not app.is_running
+
+    @pytest.mark.asyncio
+    async def test_ctrl_q_quits_from_the_browser_too(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "programs").mkdir()
+        app = TowerkitApp()
+        async with app.run_test(size=(140, 45)) as pilot:
+            assert isinstance(app.screen, ProgramBrowser)
+
+            await pilot.press("ctrl+q")
+            await pilot.pause()
+
+            assert not app.is_running
