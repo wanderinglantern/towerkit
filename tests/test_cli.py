@@ -148,6 +148,70 @@ class TestImport:
         assert "banana" in capsys.readouterr().out
 
 
+class TestImportDiagnostics:
+    @staticmethod
+    def _template_with(tmp_path, column: str, value: str):
+        """The shipped template, with one cell of row 2 overwritten."""
+        from openpyxl import load_workbook
+
+        from towerkit.ingest_template import write_template
+
+        source = write_template(tmp_path / "sched.xlsx")
+        wb = load_workbook(source)
+        ws = wb.worksheets[0]
+        headers = [str(c.value or "").strip().lower() for c in ws[1]]
+        ws.cell(row=2, column=headers.index(column) + 1, value=value)
+        wb.save(source)
+        return source
+
+    def test_warnings_are_printed_and_the_file_is_still_written(
+        self, tmp_path, capsys
+    ) -> None:
+        """A partly-placed tower is a legitimate import — it must be
+        written, and it must not go out silently."""
+        source = self._template_with(tmp_path, "share", "60%")
+        out = tmp_path / "imported.json"
+
+        code = main(
+            [
+                "import", str(source), "-o", str(out),
+                "--insured", "Example Co", "--program", "Property",
+            ]
+        )
+
+        captured = capsys.readouterr()
+        assert code == 0
+        assert out.exists()
+        assert "placed" in captured.out, captured.out
+
+    def test_errors_stop_the_import_and_exit_non_zero(self, tmp_path) -> None:
+        # A bad "share" cell, not a bad "limit": a bad limit drops the
+        # whole layer during row parsing, which cascades into a
+        # validate_program line-base failure — to_program() raises
+        # ProgramInvalidError and lands on the same (already-covered)
+        # `program is None` branch as a missing policy period. A bad
+        # share only drops that row's participant, leaving an unplaced
+        # layer that still validates (unplaced is a warning, not an
+        # error), so to_program() SUCCEEDS while draft.diagnostics.errors
+        # stays non-empty from the row-level parse error. That is the
+        # only input that reaches `_cmd_import`'s
+        # `program is None or draft.diagnostics.errors` guard through its
+        # second half instead of its first — verified by instrumenting a
+        # run, not by reading the parser.
+        source = self._template_with(tmp_path, "share", "banana%")
+        out = tmp_path / "imported.json"
+
+        code = main(
+            [
+                "import", str(source), "-o", str(out),
+                "--insured", "Example Co", "--program", "Property",
+            ]
+        )
+
+        assert code == 1
+        assert not out.exists(), "a schedule with errors must not be written"
+
+
 class TestParser:
     def test_no_command_shows_help(self, capsys) -> None:
         assert main([]) == 2

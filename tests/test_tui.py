@@ -7,6 +7,7 @@ errors, with working undo/redo and over-sign protection.
 
 from __future__ import annotations
 
+import errno
 import shutil
 from pathlib import Path
 
@@ -20,6 +21,7 @@ from towerkit.tui.screens.browser import ProgramBrowser, _bump_stem
 from towerkit.tui.screens.editor import EditorScreen
 from towerkit.tui.session import EditSession, suggested_attach
 from towerkit.tui.widgets.inputs import CarrierSuggester, parse_share_pct
+from towerkit.tui.widgets.modals import ConfirmModal
 
 REPO = Path(__file__).parent.parent
 SAMPLE = REPO / "programs" / "atomic-2026.json"
@@ -170,6 +172,123 @@ class TestBrowser:
             await pilot.press("enter")
             await pilot.pause()
             assert isinstance(app.screen, EditorScreen)
+
+    @pytest.mark.asyncio
+    async def test_delete_removes_the_backup_sidecar_too(self, tmp_path, monkeypatch) -> None:
+        from towerkit.atomicio import backup_path
+
+        programs = tmp_path / "programs"
+        programs.mkdir()
+        target = programs / "atomic-2026.json"
+        shutil.copy(SAMPLE, target)
+        # a prior save leaves a `.bak` sidecar beside the program
+        from towerkit.model import dump_program
+
+        program = load_program(target)
+        dump_program(program, target)
+        assert backup_path(target).exists()
+        monkeypatch.chdir(tmp_path)
+        app = TowerkitApp()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.press("d")
+            await pilot.pause()
+            from towerkit.tui.widgets.modals import ConfirmModal
+
+            assert isinstance(app.screen, ConfirmModal)
+            app.screen.query_one("#yes", Button).press()
+            await pilot.pause()
+        assert not target.exists()
+        assert not backup_path(target).exists()
+
+
+class TestBrowserWriteFailures:
+    """A write that cannot reach disk is a message, not a crash — the
+    browser's own filesystem calls, not just the editor's."""
+
+    def _enospc(self, monkeypatch) -> None:
+        def _full(*_args: object, **_kwargs: object) -> None:
+            raise OSError(errno.ENOSPC, "No space left on device")
+
+        monkeypatch.setattr("towerkit.tui.screens.browser.dump_program", _full)
+
+    @pytest.mark.asyncio
+    async def test_clone_survives_a_write_that_cannot_land(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        programs = tmp_path / "programs"
+        programs.mkdir()
+        shutil.copy(SAMPLE, programs / "atomic-2026.json")
+        monkeypatch.chdir(tmp_path)
+        self._enospc(monkeypatch)
+        app = TowerkitApp()
+        async with app.run_test(size=(140, 45)) as pilot:
+            await pilot.press("c")
+            await pilot.pause()
+            app.screen.query_one("#prompt").value = "atomic-2027"
+            await pilot.press("enter")
+            await pilot.pause()
+
+            assert app.is_running, "a failed clone killed the browser"
+            assert any(
+                "could not write" in n.message for n in app._notifications
+            ), [n.message for n in app._notifications]
+        assert not (programs / "atomic-2027.json").exists()
+
+    @pytest.mark.asyncio
+    async def test_import_survives_a_write_that_cannot_land(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "programs").mkdir()
+        src = _filled_template(tmp_path)
+        self._enospc(monkeypatch)
+        app = TowerkitApp()
+        async with app.run_test(size=(140, 45)) as pilot:
+            await pilot.press("i")
+            await pilot.pause()
+            modal = app.screen
+            modal.query_one("#import-path").value = str(src)
+            modal.query_one("#import-insured").value = "Example Co"
+            modal.query_one("#import-program").value = "Property"
+            modal.query_one("#import-confirm").press()
+            await pilot.pause()
+
+            assert app.is_running, "a failed import killed the browser"
+            assert isinstance(app.screen, ProgramBrowser)  # no editor pushed
+            assert any(
+                "could not write" in n.message for n in app._notifications
+            ), [n.message for n in app._notifications]
+        assert not list((tmp_path / "programs").glob("*.json"))
+
+    @pytest.mark.asyncio
+    async def test_delete_survives_an_unlink_that_is_refused(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        programs = tmp_path / "programs"
+        programs.mkdir()
+        target = programs / "atomic-2026.json"
+        shutil.copy(SAMPLE, target)
+        monkeypatch.chdir(tmp_path)
+
+        def _refused(*_args: object, **_kwargs: object) -> None:
+            raise PermissionError(errno.EACCES, "Permission denied")
+
+        monkeypatch.setattr(Path, "unlink", _refused)
+        app = TowerkitApp()
+        async with app.run_test(size=(140, 45)) as pilot:
+            await pilot.press("d")
+            await pilot.pause()
+            from towerkit.tui.widgets.modals import ConfirmModal
+
+            assert isinstance(app.screen, ConfirmModal)
+            app.screen.query_one("#yes", Button).press()
+            await pilot.pause()
+
+            assert app.is_running, "a refused delete killed the browser"
+            assert any(
+                "could not delete" in n.message for n in app._notifications
+            ), [n.message for n in app._notifications]
+        assert target.exists(), "the file the delete could not remove is still there"
 
 
 class TestEditor:
@@ -1356,6 +1475,50 @@ class TestBrowserImport:
         assert not list((tmp_path / "programs").glob("*.json"))
 
     @pytest.mark.asyncio
+    async def test_i_row_level_error_notifies_and_writes_nothing(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        # A bad "share" cell (unlike a bad "limit") drops only that row's
+        # participant, not the layer: program_from_rows creates the layer
+        # first (ingest.py:264-273) and only reaches the share parse after
+        # (ingest.py:283-289), so the layer survives with zero participants.
+        # to_program() therefore SUCCEEDS (an unplaced layer is a warning,
+        # not a validate_program error) while draft.diagnostics.errors is
+        # still non-empty from the row-level rows.share error recorded
+        # during parsing — the one case _finish_import's guard must catch
+        # via draft.diagnostics.errors, since `program is None` alone
+        # would miss it (verified empirically; a bad "limit" cell instead
+        # cascades into a line-base validate_program failure and raises
+        # ProgramInvalidError, which is the already-covered branch).
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "programs").mkdir()
+        from openpyxl import load_workbook
+
+        from towerkit.ingest_template import write_template
+
+        src = write_template(tmp_path / "sched.xlsx")
+        wb = load_workbook(src)
+        ws = wb.worksheets[0]
+        headers = [str(c.value or "").strip().lower() for c in ws[1]]
+        ws.cell(row=2, column=headers.index("share") + 1, value="banana%")
+        wb.save(src)
+
+        app = TowerkitApp()
+        async with app.run_test(size=(140, 45)) as pilot:
+            await pilot.press("i")
+            await pilot.pause()
+            await self._submit_import_modal(
+                pilot, path=str(src), insured="Example Co", program="Property"
+            )
+            assert isinstance(app.screen, ProgramBrowser)  # still alive, no editor
+            assert any(
+                "nothing written" in n.message for n in app._notifications
+            )
+        assert not list((tmp_path / "programs").glob("*.json")), (
+            "a schedule with row-level errors must not be written"
+        )
+
+    @pytest.mark.asyncio
     async def test_i_imports_text_schedule_with_dates(
         self, tmp_path, monkeypatch
     ) -> None:
@@ -1633,3 +1796,326 @@ class TestRenameAlwaysFollowsTheId:
             await pilot.pause()
             assert editor.selected[1] == "cyber"
             assert editor._line("cyber").name == "CYBER"
+
+
+class TestSaveFailures:
+    @pytest.mark.asyncio
+    async def test_an_unwritable_file_notifies_instead_of_killing_the_app(
+        self, sample_copy, monkeypatch
+    ) -> None:
+        monkeypatch.chdir(sample_copy.parent.parent)
+        sample_copy.chmod(0o444)
+        try:
+            app = TowerkitApp(path=sample_copy)
+            async with app.run_test(size=(140, 45)) as pilot:
+                screen = app.screen
+                assert isinstance(screen, EditorScreen)
+                screen.session.mutate(lambda p: setattr(p, "insured", "Mine"))
+                await pilot.press("ctrl+s")
+                await pilot.pause()
+
+                assert app.is_running
+                assert screen.session.dirty  # the edit is still here
+        finally:
+            sample_copy.chmod(0o644)
+
+    @pytest.mark.asyncio
+    async def test_a_failed_save_as_names_the_destination_it_tried(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """Save-as fails while session.path is still None, so reading the
+        target off the session printed "could not save None" — a message
+        naming nothing the user can act on."""
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "programs").mkdir()
+        app = TowerkitApp(new=True)
+        async with app.run_test(size=(140, 45)) as pilot:
+            editor = app.screen
+            assert isinstance(editor, EditorScreen)
+
+            def _refused(*_args: object, **_kwargs: object) -> None:
+                raise PermissionError(errno.EACCES, "Permission denied")
+
+            monkeypatch.setattr(EditSession, "save", _refused)
+            editor._do_save()
+            await pilot.pause()
+            from towerkit.tui.widgets.modals import PromptModal
+
+            assert isinstance(app.screen, PromptModal)
+            app.screen.query_one("#prompt").value = "acme"
+            await pilot.press("enter")
+            await pilot.pause()
+
+            assert app.is_running
+            messages = [n.message for n in app._notifications]
+            assert any("acme.json" in m for m in messages), messages
+            assert not any("could not save None" in m for m in messages), messages
+
+    @pytest.mark.asyncio
+    async def test_a_deleted_file_is_written_back_without_a_question(
+        self, sample_copy, monkeypatch
+    ) -> None:
+        monkeypatch.chdir(sample_copy.parent.parent)
+        app = TowerkitApp(path=sample_copy)
+        async with app.run_test(size=(140, 45)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, EditorScreen)
+            screen.session.mutate(lambda p: setattr(p, "insured", "Mine"))
+            sample_copy.unlink()  # git checkout, a rename, a sync client
+
+            await pilot.press("ctrl+s")
+            await pilot.pause()
+
+            assert app.is_running
+            assert sample_copy.exists()
+            assert load_program(sample_copy).insured == "Mine"
+
+    @pytest.mark.asyncio
+    async def test_reload_of_a_vanished_file_does_not_kill_the_app(
+        self, sample_copy, monkeypatch
+    ) -> None:
+        monkeypatch.chdir(sample_copy.parent.parent)
+        app = TowerkitApp(path=sample_copy)
+        async with app.run_test(size=(140, 45)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, EditorScreen)
+            screen.session.mutate(lambda p: setattr(p, "insured", "Mine"))
+
+            # the StaleFileModal's own reload branch, reached directly: the
+            # file is gone by the time the user answers the question
+            sample_copy.unlink()
+            screen._reload_guarded()
+            await pilot.pause()
+
+            assert app.is_running
+            assert screen.session.program.insured == "Mine"
+
+    @pytest.mark.asyncio
+    async def test_save_as_of_a_new_program_survives_an_unwritable_destination(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """_do_save's on_name closure (session.path is None — Save As on a
+        brand-new program) has its own `except OSError`, separate from
+        _save_guarded's. Drive it through the real PromptModal, the same way
+        test_save_as_refuses_an_existing_file_name does, rather than calling
+        the nested on_name closure directly — it isn't a reachable attribute."""
+        from towerkit.tui.widgets.modals import ConfirmModal, PromptModal
+
+        monkeypatch.chdir(tmp_path)
+        programs_dir = tmp_path / "programs"
+        programs_dir.mkdir()
+        programs_dir.chmod(0o555)  # read + execute, no write
+        try:
+            app = TowerkitApp(new=True)
+            async with app.run_test(size=(140, 45)) as pilot:
+                editor = app.screen
+                assert isinstance(editor, EditorScreen)
+                editor.selected = ("program", None)
+                await editor._rebuild_detail()
+                await pilot.pause()
+                insured = editor.query_one("#f-insured")
+                insured.value = "Mine"
+                editor._commit_input(insured)
+                editor.action_save()
+                await pilot.pause()
+
+                if isinstance(app.screen, ConfirmModal):  # a blank program has errors
+                    app.screen.query_one("#yes", Button).press()
+                    await pilot.pause()
+
+                assert isinstance(app.screen, PromptModal)
+                prompt = app.screen.query_one("#prompt")
+                prompt.value = "newprogram"
+                await pilot.press("enter")
+                await pilot.pause()
+
+                assert app.is_running
+                assert isinstance(app.screen, EditorScreen)
+                assert app.screen.session.path is None  # never landed
+                assert app.screen.session.program.insured == "Mine"  # edit intact
+                assert any(
+                    "could not save" in n.message for n in app._notifications
+                )
+        finally:
+            programs_dir.chmod(0o755)
+
+    @pytest.mark.asyncio
+    async def test_stale_file_overwrite_survives_a_failing_write(
+        self, sample_copy, monkeypatch
+    ) -> None:
+        """The StaleFileModal's "overwrite" choice has its own
+        `except OSError` around the forced save. Reach the modal the way
+        test_save_over_a_changed_file_offers_a_choice does (file changed,
+        not deleted, so this is the question-modal path, not the
+        write-back-without-asking path), then make the forced write itself
+        fail by monkeypatching the atomic write primitive session.py calls."""
+        from towerkit.tui.widgets.modals import StaleFileModal
+
+        def fail(*args: object, **kwargs: object) -> None:
+            raise OSError(errno.EACCES, "Permission denied")
+
+        monkeypatch.setattr("towerkit.tui.session.atomic_write_text", fail)
+        monkeypatch.chdir(sample_copy.parent.parent)
+        app = TowerkitApp(path=sample_copy)
+        async with app.run_test(size=(140, 45)) as pilot:
+            editor = app.screen
+            assert isinstance(editor, EditorScreen)
+            editor.session.mutate(lambda p: setattr(p, "insured", "Mine"))
+            sample_copy.write_text(sample_copy.read_text("utf-8") + " ", encoding="utf-8")
+
+            await pilot.press("ctrl+s")
+            await pilot.pause()
+            assert isinstance(app.screen, StaleFileModal)
+
+            await pilot.press("o")  # overwrite
+            await pilot.pause()
+
+            assert app.is_running
+            assert isinstance(app.screen, EditorScreen)
+            assert editor.session.program.insured == "Mine"  # edit intact
+            assert any(
+                "could not save" in n.message for n in app._notifications
+            )
+
+
+class TestExitGuards:
+    @pytest.mark.asyncio
+    async def test_esc_does_not_discard_text_still_sitting_in_a_field(
+        self, sample_copy, monkeypatch
+    ) -> None:
+        monkeypatch.chdir(sample_copy.parent.parent)
+        app = TowerkitApp(path=sample_copy)
+        async with app.run_test(size=(140, 45)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, EditorScreen)
+            field = screen.query_one("#f-insured", Input)
+            field.focus()
+            await pilot.pause()
+            field.value = "Acme Holdings"
+
+            # dirty is still False here: the text has not reached the model
+            assert not screen.session.dirty
+
+            await pilot.press("escape")
+            await pilot.pause()
+
+            assert app.is_running, "esc left the editor with typed text unsaved"
+            assert screen.session.program.insured == "Acme Holdings"
+
+    @pytest.mark.asyncio
+    async def test_ctrl_q_asks_before_discarding_unsaved_edits(
+        self, sample_copy, monkeypatch
+    ) -> None:
+        monkeypatch.chdir(sample_copy.parent.parent)
+        app = TowerkitApp(path=sample_copy)
+        async with app.run_test(size=(140, 45)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, EditorScreen)
+            screen.session.mutate(lambda p: setattr(p, "insured", "Mine"))
+
+            await pilot.press("ctrl+q")
+            await pilot.pause()
+
+            assert app.is_running, "ctrl+q quit past the unsaved-changes prompt"
+            assert "ExitChoiceModal" in [type(s).__name__ for s in app.screen_stack]
+
+    @pytest.mark.asyncio
+    async def test_ctrl_q_at_the_exit_prompt_does_not_take_the_session(
+        self, sample_copy, monkeypatch
+    ) -> None:
+        """A double-tap on the quit key is the likeliest input at a "quit?"
+        prompt. The prompt is a ModalScreen and ctrl+q is priority-bound at
+        App level, so the second press used to fire straight past it."""
+        monkeypatch.chdir(sample_copy.parent.parent)
+        app = TowerkitApp(path=sample_copy)
+        async with app.run_test(size=(140, 45)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, EditorScreen)
+            screen.session.mutate(lambda p: setattr(p, "insured", "Mine"))
+
+            await pilot.press("ctrl+q")
+            await pilot.pause()
+            assert "ExitChoiceModal" in [type(s).__name__ for s in app.screen_stack]
+
+            await pilot.press("ctrl+q")
+            await pilot.pause()
+
+            assert app.is_running, "ctrl+q quit through its own exit prompt"
+            assert screen.session.dirty
+            assert screen.session.program.insured == "Mine"
+            assert load_program(sample_copy).insured != "Mine"
+
+    @pytest.mark.asyncio
+    async def test_ctrl_q_is_ignored_while_a_modal_covers_a_dirty_editor(
+        self, sample_copy, monkeypatch
+    ) -> None:
+        """Any modal, not just the exit prompt: the guard tested `self.screen`,
+        which is the modal, so the editor underneath was never consulted."""
+        monkeypatch.chdir(sample_copy.parent.parent)
+        app = TowerkitApp(path=sample_copy)
+        async with app.run_test(size=(140, 45)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, EditorScreen)
+            screen.session.mutate(lambda p: setattr(p, "insured", "Mine"))
+            app.push_screen(ConfirmModal("Really?"))
+            await pilot.pause()
+            assert isinstance(app.screen, ConfirmModal)
+
+            await pilot.press("ctrl+q")
+            await pilot.pause()
+
+            assert app.is_running, "ctrl+q quit past a modal over a dirty editor"
+            assert isinstance(app.screen, ConfirmModal), "the question stayed put"
+            assert screen.session.program.insured == "Mine"
+
+    @pytest.mark.asyncio
+    async def test_ctrl_q_still_quits_when_there_is_nothing_to_lose(
+        self, sample_copy, monkeypatch
+    ) -> None:
+        monkeypatch.chdir(sample_copy.parent.parent)
+        app = TowerkitApp(path=sample_copy)
+        async with app.run_test(size=(140, 45)) as pilot:
+            assert isinstance(app.screen, EditorScreen)
+
+            await pilot.press("ctrl+q")
+            await pilot.pause()
+
+            assert not app.is_running
+
+    @pytest.mark.asyncio
+    async def test_ctrl_q_does_not_discard_text_still_sitting_in_a_field(
+        self, sample_copy, monkeypatch
+    ) -> None:
+        monkeypatch.chdir(sample_copy.parent.parent)
+        app = TowerkitApp(path=sample_copy)
+        async with app.run_test(size=(140, 45)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, EditorScreen)
+            field = screen.query_one("#f-insured", Input)
+            field.focus()
+            await pilot.pause()
+            field.value = "Acme Holdings"
+
+            # dirty is still False here: the text has not reached the model
+            assert not screen.session.dirty
+
+            await pilot.press("ctrl+q")
+            await pilot.pause()
+
+            assert app.is_running, "ctrl+q left the editor with typed text unsaved"
+            assert screen.session.program.insured == "Acme Holdings"
+
+    @pytest.mark.asyncio
+    async def test_ctrl_q_quits_from_the_browser_too(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "programs").mkdir()
+        app = TowerkitApp()
+        async with app.run_test(size=(140, 45)) as pilot:
+            assert isinstance(app.screen, ProgramBrowser)
+
+            await pilot.press("ctrl+q")
+            await pilot.pause()
+
+            assert not app.is_running

@@ -35,6 +35,7 @@ from mcp.server.mcpserver import MCPServer
 from pydantic import ValidationError
 
 from . import edit
+from .atomicio import atomic_write_bytes, atomic_write_text
 from .dates import parse_flexible_date
 from .model import Period, Placement, Program, dumps_program, load_program, loads_program
 from .money import parse_money
@@ -155,9 +156,13 @@ def snapshot(path: Path, ref: str, pre_image: bytes) -> None:
     bookkit's snapshots; each side globs only its own prefix."""
     snapdir = _snapdir(path)
     snapdir.mkdir(exist_ok=True)
-    (snapdir / f"{ref}.json").write_bytes(pre_image)
-    (snapdir / f"{ref}.meta.json").write_text(
-        json.dumps({"path": str(path), "post_sha256": file_sha256(path)})
+    # backup=False: the snapshot directory is its own history, and must not
+    # accumulate `.bak` sidecars of its own snapshots.
+    atomic_write_bytes(snapdir / f"{ref}.json", pre_image, backup=False)
+    atomic_write_text(
+        snapdir / f"{ref}.meta.json",
+        json.dumps({"path": str(path), "post_sha256": file_sha256(path)}),
+        backup=False,
     )
     images = sorted(
         (p for p in snapdir.glob(f"{_PREFIX}*.json") if not p.name.endswith(".meta.json")),
@@ -179,7 +184,7 @@ def restore(path: Path, ref: str) -> None:
             f"no snapshot for {ref} — it may have been pruned "
             f"(the last {SNAPSHOT_KEEP} writes are kept)"
         )
-    meta = json.loads(meta_file.read_text())
+    meta = json.loads(meta_file.read_text(encoding="utf-8"))
     if str(path) != meta["path"]:
         raise ValueError(f"{ref} was a write to {meta['path']}, not this file")
     if file_sha256(path) != meta["post_sha256"]:
@@ -188,25 +193,34 @@ def restore(path: Path, ref: str) -> None:
             f"towerkit editor, bookkit, or a later write) would be lost; revert "
             f"newer writes first"
         )
-    _atomic_write_bytes(path, image.read_bytes())
+    pre_image = image.read_bytes()
+    try:
+        loads_program(pre_image.decode("utf-8"))  # refuse a pre-image that cannot load
+    except (
+        ValidationError,
+        ValueError,
+        KeyError,
+        IndexError,
+        RuntimeError,
+        UnicodeDecodeError,
+    ) as exc:
+        raise ValueError(
+            f"snapshot {ref} is not a loadable program — refusing to restore: {exc}"
+        ) from exc
+    _atomic_write_bytes(path, pre_image)
 
 
 def _atomic_write(path: Path, text: str) -> None:
-    """Same-directory temp + replace: a crash mid-write leaves the old file,
-    never a truncated one."""
-    tmp = path.with_name(f".{path.name}.tmp")
-    tmp.write_text(text, encoding="utf-8")
-    os.replace(tmp, path)
+    """Delegates to `towerkit.atomicio` — one definition of a safe write,
+    shared with the TUI and the CLI."""
+    atomic_write_text(path, text)
 
 
 def _atomic_write_bytes(path: Path, data: bytes) -> None:
-    """Bytes-oriented sibling of `_atomic_write`, used by `restore()`. The
-    pre-image is already-canonical UTF-8 JSON read straight off disk; a
-    text round-trip risks re-encoding it, so this writes the exact bytes
-    through the same same-directory temp + replace path instead."""
-    tmp = path.with_name(f".{path.name}.tmp")
-    tmp.write_bytes(data)
-    os.replace(tmp, path)
+    """Bytes-oriented sibling, used by `restore()`. The pre-image is
+    already-canonical UTF-8 JSON read straight off disk; a text round-trip
+    risks re-encoding it, so this writes the exact bytes."""
+    atomic_write_bytes(path, data)
 
 
 def _write(

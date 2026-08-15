@@ -57,6 +57,13 @@ class DraftProgram:
     diagnostics: Diagnostics = field(default_factory=Diagnostics)
 
     def to_program(self) -> Program:
+        """Build the Program, keeping every diagnostic on the draft.
+
+        Validation warnings used to be computed here and dropped on the
+        floor whenever the build succeeded, so an import that produced a
+        1%-placed tower printed nothing at all while `towerctl validate`
+        on the same file printed the warning. Callers now read
+        `draft.diagnostics` AFTER this call, not before."""
         gate = Diagnostics()
         if not self.insured.strip():
             gate.error("draft.insured", "insured name is required")
@@ -65,6 +72,7 @@ class DraftProgram:
         if self.period is None:
             gate.error("draft.period", "policy period (inception and expiry) is required")
         if not gate.ok:
+            self._carry(gate)
             raise ProgramInvalidError(gate, source="draft")
         assert self.period is not None  # narrowed by the gate above
         program = Program(
@@ -78,9 +86,17 @@ class DraftProgram:
             retentions=list(self.retentions),
         )
         diags = validate_program(program)
+        self._carry(diags)
         if not diags.ok:
             raise ProgramInvalidError(diags, source="draft")
         return program
+
+    def _carry(self, diags: Diagnostics) -> None:
+        """Fold diagnostics onto the draft, skipping ones already there so
+        a second `to_program()` cannot double them up."""
+        for diag in diags.items:
+            if diag not in self.diagnostics.items:
+                self.diagnostics.items.append(diag)
 
 
 # --- pasted schedule text -----------------------------------------------------
@@ -394,7 +410,8 @@ def import_schedule(
     """One entry point for every schedule source: pasted text, xlsx
     template, strict-header csv, or free text file. Returns the draft so
     callers surface draft.diagnostics their own way (print vs notify)
-    before draft.to_program()."""
+    after draft.to_program(), which is what folds validation diagnostics
+    onto the draft."""
     if text is not None:
         draft = parse_tower(text, insured=insured, program=program)
     else:

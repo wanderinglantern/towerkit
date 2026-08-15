@@ -7,6 +7,7 @@ API instead of extending it."""
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 REPO = Path(__file__).parent.parent
@@ -48,3 +49,26 @@ def test_schema_copies_are_identical() -> None:
         (REPO / "src" / "towerkit" / "schema" / "program.schema.json").read_text("utf-8")
     )
     assert root == packaged
+
+
+def test_snapshot_dirs_are_ignored_wherever_they_land() -> None:
+    """MCP snapshots are verbatim copies of program files, and programs
+    hold real client data. `snapshot()` writes beside the program, so the
+    directory appears at whatever depth the program sits at — a
+    path-anchored `programs/.mcp-snapshots/` rule missed every nested one
+    (only `programs/private/` was covered, by an unrelated rule)."""
+    candidates = [
+        ".mcp-snapshots/x.json",
+        "programs/.mcp-snapshots/x.json",
+        "programs/private/.mcp-snapshots/x.json",
+        "programs/acme/.mcp-snapshots/x.json",
+    ]
+    missed = [
+        path
+        for path in candidates
+        if subprocess.run(
+            ["git", "check-ignore", "-q", path], cwd=REPO
+        ).returncode
+        != 0
+    ]
+    assert not missed, f"client-data snapshots not gitignored: {missed}"

@@ -14,3 +14,6 @@ changelog.md
 CLAUDE.md
 .install-pypi.log
 .claude/worktrees/
+.*.bak
+.*.tmp
+.mcp-snapshots/

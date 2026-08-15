@@ -200,6 +200,77 @@ def test_round_trip_program_rows_program() -> None:
     assert again.layers[1].participants == original.layers[1].participants
 
 
+class TestDiagnosticsSurvive:
+    @staticmethod
+    def _draft_with_an_unplaced_layer():
+        from datetime import date
+
+        from towerkit.ingest import DraftProgram
+        from towerkit.model import Layer, Line, Participant, Period
+
+        draft = DraftProgram(insured="Acme Ltd", program="Casualty")
+        draft.period = Period(start=date(2026, 1, 1), end=date(2027, 1, 1))
+        draft.lines = [Line(id="gl", name="General Liability", abbr="GL")]
+        draft.layers = [
+            Layer(
+                id="primary",
+                name="Primary",
+                applies_to=["gl"],
+                attach=0,
+                limit=10_000_000,
+                participants=[Participant(carrier="Chubb", share_bps=8_000)],
+            )
+        ]
+        return draft
+
+    def test_a_successful_build_keeps_its_validation_warnings(self) -> None:
+        draft = self._draft_with_an_unplaced_layer()
+
+        program = draft.to_program()
+
+        assert program.insured == "Acme Ltd"
+        assert any(
+            "unplaced" in str(d) for d in draft.diagnostics.warnings
+        ), f"warnings were discarded: {[str(d) for d in draft.diagnostics.items]}"
+
+    def test_a_failed_build_keeps_its_errors_on_the_draft(self) -> None:
+        from towerkit.validate import ProgramInvalidError
+
+        draft = self._draft_with_an_unplaced_layer()
+        draft.insured = ""  # trips the gate
+
+        with pytest.raises(ProgramInvalidError):
+            draft.to_program()
+
+        assert any("insured" in str(d) for d in draft.diagnostics.errors)
+
+    def test_building_twice_does_not_duplicate_diagnostics(self) -> None:
+        draft = self._draft_with_an_unplaced_layer()
+
+        draft.to_program()
+        first = len(draft.diagnostics.items)
+        draft.to_program()
+
+        assert len(draft.diagnostics.items) == first
+
+    def test_a_validation_failure_after_the_gate_also_lands_on_the_draft(self) -> None:
+        from towerkit.validate import ProgramInvalidError
+
+        draft = self._draft_with_an_unplaced_layer()
+        # Gate passes (insured, program, period all present); the failure
+        # comes from validate_program itself, via a bad `applies_to`
+        # reference — same shape as test_draft_runs_full_validation.
+        draft.layers[0] = draft.layers[0].model_copy(update={"applies_to": ["nope"]})
+
+        with pytest.raises(ProgramInvalidError):
+            draft.to_program()
+
+        assert any("nope" in str(d) for d in draft.diagnostics.errors), (
+            f"post-gate validation errors were discarded: "
+            f"{[str(d) for d in draft.diagnostics.items]}"
+        )
+
+
 # --- import_schedule ----------------------------------------------------------
 
 from towerkit.ingest import import_schedule  # noqa: E402
