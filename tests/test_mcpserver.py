@@ -165,6 +165,29 @@ class TestWriteCycle:
             _write(programs, "atomic-2026", "poison", poison)
         assert path.read_bytes() == before
 
+    def test_a_bak_sidecar_beside_a_program_does_not_confuse_list_or_write(
+        self, roots
+    ) -> None:
+        """dump_program's `.bak` sidecar (see towerkit.atomicio) is invisible
+        to `*.json` globs by construction, but this pins it down end to end
+        on the MCP path: list must not surface it as a phantom program, and
+        a write→revert round trip must still work with it sitting there."""
+        from towerkit.atomicio import backup_path
+
+        path = roots[0] / "atomic-2026.json"
+        bak = backup_path(path)
+        bak.write_bytes(path.read_bytes())
+
+        programs = Programs(roots)
+        names = {p["name"] for p in _program_list(programs)["programs"]}
+        assert names == {"atomic-2026", "private/secret-2026"}
+
+        _program_read(programs, "atomic-2026")
+        before = path.read_bytes()
+        ref = _restack(programs, "atomic-2026")["write_ref"]
+        _program_revert_write(programs, ref)
+        assert path.read_bytes() == before
+
 
 class TestRevert:
     def test_revert_restores_byte_identically(self, roots) -> None:
@@ -232,6 +255,24 @@ class TestRevert:
         programs = Programs(roots)
         with pytest.raises(ValueError, match="TKW-"):
             _program_revert_write(programs, "MCP-20260101T000000-abcd")
+
+    def test_revert_refuses_a_corrupt_pre_image_and_leaves_the_file_alone(
+        self, roots
+    ) -> None:
+        """A pre-image truncated by a disk-full write (Important 2 in the
+        review) must never be laid down over a valid program — the sha
+        guard alone would let it through, since only the *post*-write sha
+        is checked."""
+        programs = Programs(roots)
+        _program_read(programs, "atomic-2026")
+        path = roots[0] / "atomic-2026.json"
+        ref = _restack(programs, "atomic-2026")["write_ref"]
+        before = path.read_bytes()
+        snap = roots[0] / ".mcp-snapshots" / f"{ref}.json"
+        snap.write_bytes(b"not a program at all")
+        with pytest.raises(ValueError, match="not a loadable program"):
+            _program_revert_write(programs, ref)
+        assert path.read_bytes() == before
 
 
 class TestDesignTools:

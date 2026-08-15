@@ -239,11 +239,14 @@ class TestDurableWrites:
 
         from towerkit.model import dump_program
 
+        program = _sample()
+        program.insured = "Changed Co"  # a real mutation: refused, not merely a no-op match
+
         with pytest.raises(OSError):
-            dump_program(_sample(), target)
+            dump_program(program, target)
 
         assert target.read_bytes() == before
-        assert load_program(target).insured  # still a loadable program
+        assert load_program(target).insured != "Changed Co"
 
     def test_a_save_keeps_the_previous_contents_aside(self, tmp_path) -> None:
         from towerkit.atomicio import backup_path

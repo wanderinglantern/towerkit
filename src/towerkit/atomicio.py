@@ -1,15 +1,16 @@
 """Durable file writes.
 
 `open(mode="w")` truncates before the first byte lands, so any failure
-between truncate and flush destroys the old file. Everything towerkit
-writes is a user's irreplaceable work — program JSON above all — so every
-write goes through here: a same-directory temp file, fsynced, then an
-atomic `os.replace`. Every failure mode then leaves either the old
-contents or the new ones, never nothing.
+between truncate and flush destroys the old file. Every write of a program
+file — a user's irreplaceable work — goes through here: a same-directory
+temp file, fsynced, then an atomic `os.replace`. Every failure mode then
+leaves either the old contents or the new ones, never nothing.
 
-This is the one place that knows how a file reaches disk. The TUI, the
-CLI and the MCP server all route through it, so "what happens when the
-write fails" has one answer instead of three.
+This is the one place that knows how a program file reaches disk. The TUI,
+the CLI and the MCP server all route their program writes through it, so
+"what happens when the write fails" has one answer instead of three.
+Renders and the xlsx template writer legitimately bypass it — their output
+is regenerable, not irreplaceable.
 
 Stdlib only, deliberately: no towerkit import may ever appear here, so
 this module can be used from anywhere without an import cycle.

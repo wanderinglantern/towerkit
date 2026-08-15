@@ -171,6 +171,33 @@ class TestBrowser:
             await pilot.pause()
             assert isinstance(app.screen, EditorScreen)
 
+    @pytest.mark.asyncio
+    async def test_delete_removes_the_backup_sidecar_too(self, tmp_path, monkeypatch) -> None:
+        from towerkit.atomicio import backup_path
+
+        programs = tmp_path / "programs"
+        programs.mkdir()
+        target = programs / "atomic-2026.json"
+        shutil.copy(SAMPLE, target)
+        # a prior save leaves a `.bak` sidecar beside the program
+        from towerkit.model import dump_program
+
+        program = load_program(target)
+        dump_program(program, target)
+        assert backup_path(target).exists()
+        monkeypatch.chdir(tmp_path)
+        app = TowerkitApp()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.press("d")
+            await pilot.pause()
+            from towerkit.tui.widgets.modals import ConfirmModal
+
+            assert isinstance(app.screen, ConfirmModal)
+            app.screen.query_one("#yes", Button).press()
+            await pilot.pause()
+        assert not target.exists()
+        assert not backup_path(target).exists()
+
 
 class TestEditor:
     @pytest.mark.asyncio

@@ -11,6 +11,7 @@ from textual.binding import Binding
 from textual.screen import Screen
 from textual.widgets import DataTable, Footer, Header, Static
 
+from ...atomicio import backup_path
 from ...model import dump_program, load_program
 from ...validate import ProgramInvalidError, validate_file
 from ..session import EditSession, blank_program, slugify
@@ -301,6 +302,7 @@ class ProgramBrowser(Screen):
         def on_confirm(confirmed: bool | None) -> None:
             if confirmed and path.exists():
                 path.unlink()
+                backup_path(path).unlink(missing_ok=True)
                 self.reload()
                 self.notify(f"deleted {path.name}")
 
