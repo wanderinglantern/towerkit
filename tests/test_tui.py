@@ -21,6 +21,7 @@ from towerkit.tui.screens.browser import ProgramBrowser, _bump_stem
 from towerkit.tui.screens.editor import EditorScreen
 from towerkit.tui.session import EditSession, suggested_attach
 from towerkit.tui.widgets.inputs import CarrierSuggester, parse_share_pct
+from towerkit.tui.widgets.modals import ConfirmModal
 
 REPO = Path(__file__).parent.parent
 SAMPLE = REPO / "programs" / "atomic-2026.json"
@@ -1836,6 +1837,55 @@ class TestExitGuards:
 
             assert app.is_running, "ctrl+q quit past the unsaved-changes prompt"
             assert "ExitChoiceModal" in [type(s).__name__ for s in app.screen_stack]
+
+    @pytest.mark.asyncio
+    async def test_ctrl_q_at_the_exit_prompt_does_not_take_the_session(
+        self, sample_copy, monkeypatch
+    ) -> None:
+        """A double-tap on the quit key is the likeliest input at a "quit?"
+        prompt. The prompt is a ModalScreen and ctrl+q is priority-bound at
+        App level, so the second press used to fire straight past it."""
+        monkeypatch.chdir(sample_copy.parent.parent)
+        app = TowerkitApp(path=sample_copy)
+        async with app.run_test(size=(140, 45)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, EditorScreen)
+            screen.session.mutate(lambda p: setattr(p, "insured", "Mine"))
+
+            await pilot.press("ctrl+q")
+            await pilot.pause()
+            assert "ExitChoiceModal" in [type(s).__name__ for s in app.screen_stack]
+
+            await pilot.press("ctrl+q")
+            await pilot.pause()
+
+            assert app.is_running, "ctrl+q quit through its own exit prompt"
+            assert screen.session.dirty
+            assert screen.session.program.insured == "Mine"
+            assert load_program(sample_copy).insured != "Mine"
+
+    @pytest.mark.asyncio
+    async def test_ctrl_q_is_ignored_while_a_modal_covers_a_dirty_editor(
+        self, sample_copy, monkeypatch
+    ) -> None:
+        """Any modal, not just the exit prompt: the guard tested `self.screen`,
+        which is the modal, so the editor underneath was never consulted."""
+        monkeypatch.chdir(sample_copy.parent.parent)
+        app = TowerkitApp(path=sample_copy)
+        async with app.run_test(size=(140, 45)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, EditorScreen)
+            screen.session.mutate(lambda p: setattr(p, "insured", "Mine"))
+            app.push_screen(ConfirmModal("Really?"))
+            await pilot.pause()
+            assert isinstance(app.screen, ConfirmModal)
+
+            await pilot.press("ctrl+q")
+            await pilot.pause()
+
+            assert app.is_running, "ctrl+q quit past a modal over a dirty editor"
+            assert isinstance(app.screen, ConfirmModal), "the question stayed put"
+            assert screen.session.program.insured == "Mine"
 
     @pytest.mark.asyncio
     async def test_ctrl_q_still_quits_when_there_is_nothing_to_lose(

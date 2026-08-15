@@ -83,6 +83,33 @@ class TestParticipantsSheet:
             assert not editor.session.dirty
             assert not editor.query(SheetCellEditor)
 
+    async def test_ctrl_q_does_not_drop_text_in_an_open_cell_editor(
+        self, sample_copy
+    ) -> None:
+        """The cell editor's commit is a posted message, so no synchronous
+        drain can collect it: ctrl+q used to see a clean session and exit,
+        taking the typed cell text with it. It now waits for enter or esc."""
+        app = TowerkitApp(path=sample_copy)
+        async with app.run_test(size=(160, 48)) as pilot:
+            editor = app.screen
+            sheet = await _open_participants(editor, pilot, "umbrella")
+            sheet.move_cursor(row=0, column=1)
+            await pilot.press("i")
+            await pilot.pause()
+            editor.query_one(SheetCellEditor).value = "50"
+            assert not editor.session.dirty  # the model has not seen it yet
+
+            await pilot.press("ctrl+q")
+            await pilot.pause()
+
+            assert app.is_running, "ctrl+q quit with a cell edit still typed"
+            cell = editor.query_one(SheetCellEditor)
+            assert cell.value == "50", "the typed text is still there"
+            # and it still commits normally
+            await pilot.press("enter")
+            await pilot.pause()
+            assert editor._layer("umbrella").participants[0].share_bps == 5_000
+
     async def test_over_sign_rejected_editor_kept_open(self, sample_copy) -> None:
         """AIG 60→90 with Berkley at 40 would be 130%: blocked at the input,
         nothing committed, and the editor stays open for a correction."""
