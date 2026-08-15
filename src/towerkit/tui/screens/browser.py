@@ -266,19 +266,25 @@ class ProgramBrowser(Screen):
         self.app.push_screen(PasteImportModal(), on_fields)
 
     def _finish_import(self, draft: DraftProgram) -> None:
+        # diagnostics are surfaced after the build, not before: to_program()
+        # is where validation runs, and its warnings used to be discarded
+        program = None
+        try:
+            program = draft.to_program()
+        except ProgramInvalidError:
+            pass
         for diag in draft.diagnostics.items:
             self.notify(
                 str(diag), severity="error" if diag.severity == "error" else "warning"
             )
-        try:
-            program = draft.to_program()
-        except ProgramInvalidError as exc:
-            first = (
-                exc.diagnostics.errors[0].message
-                if exc.diagnostics.errors
-                else "invalid schedule"
+        if program is None or draft.diagnostics.errors:
+            n = len(draft.diagnostics.errors)
+            self.notify(
+                f"import failed: {n} error{'s' if n != 1 else ''} in the "
+                f"schedule — nothing written",
+                severity="error",
+                timeout=10,
             )
-            self.notify(f"import failed: {first}", severity="error")
             return
         out = self.programs_dir / (
             f"{slugify(program.insured)}-{slugify(program.program)}.json"

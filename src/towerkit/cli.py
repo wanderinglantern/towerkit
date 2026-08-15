@@ -280,13 +280,22 @@ def _cmd_import(args: argparse.Namespace) -> int:
     except ValueError as exc:
         print(exc)
         return 1
-    for diag in draft.diagnostics.items:
-        print(f"  {diag}")
+    # to_program() folds its validation diagnostics onto the draft, so the
+    # printing happens after the build, not before — that ordering is what
+    # stops a clean-looking import from hiding a 1%-placed tower.
+    program = None
     try:
         program = draft.to_program()
-    except ProgramInvalidError as exc:
-        for diag in exc.diagnostics.errors:
-            print(f"  {diag}")
+    except ProgramInvalidError:
+        pass
+    for diag in draft.diagnostics.items:
+        print(f"  {diag}")
+    if program is None or draft.diagnostics.errors:
+        n = len(draft.diagnostics.errors)
+        print(
+            f"{n} error{'s' if n != 1 else ''} in the schedule — nothing "
+            f"written; fix the source and re-run"
+        )
         return 1
     out = args.out or Path(f"{_file_slug(insured)}-{_file_slug(program_name)}.json")
     if out.exists():  # program files are the source of truth — never clobber one

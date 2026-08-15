@@ -410,7 +410,8 @@ def import_schedule(
     """One entry point for every schedule source: pasted text, xlsx
     template, strict-header csv, or free text file. Returns the draft so
     callers surface draft.diagnostics their own way (print vs notify)
-    before draft.to_program()."""
+    after draft.to_program(), which is what folds validation diagnostics
+    onto the draft."""
     if text is not None:
         draft = parse_tower(text, insured=insured, program=program)
     else:
