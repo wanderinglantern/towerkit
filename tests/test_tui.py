@@ -1325,6 +1325,50 @@ class TestBrowserImport:
         assert not list((tmp_path / "programs").glob("*.json"))
 
     @pytest.mark.asyncio
+    async def test_i_row_level_error_notifies_and_writes_nothing(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        # A bad "share" cell (unlike a bad "limit") drops only that row's
+        # participant, not the layer: program_from_rows creates the layer
+        # first (ingest.py:264-273) and only reaches the share parse after
+        # (ingest.py:283-289), so the layer survives with zero participants.
+        # to_program() therefore SUCCEEDS (an unplaced layer is a warning,
+        # not a validate_program error) while draft.diagnostics.errors is
+        # still non-empty from the row-level rows.share error recorded
+        # during parsing — the one case _finish_import's guard must catch
+        # via draft.diagnostics.errors, since `program is None` alone
+        # would miss it (verified empirically; a bad "limit" cell instead
+        # cascades into a line-base validate_program failure and raises
+        # ProgramInvalidError, which is the already-covered branch).
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "programs").mkdir()
+        from openpyxl import load_workbook
+
+        from towerkit.ingest_template import write_template
+
+        src = write_template(tmp_path / "sched.xlsx")
+        wb = load_workbook(src)
+        ws = wb.worksheets[0]
+        headers = [str(c.value or "").strip().lower() for c in ws[1]]
+        ws.cell(row=2, column=headers.index("share") + 1, value="banana%")
+        wb.save(src)
+
+        app = TowerkitApp()
+        async with app.run_test(size=(140, 45)) as pilot:
+            await pilot.press("i")
+            await pilot.pause()
+            await self._submit_import_modal(
+                pilot, path=str(src), insured="Example Co", program="Property"
+            )
+            assert isinstance(app.screen, ProgramBrowser)  # still alive, no editor
+            assert any(
+                "nothing written" in n.message for n in app._notifications
+            )
+        assert not list((tmp_path / "programs").glob("*.json")), (
+            "a schedule with row-level errors must not be written"
+        )
+
+    @pytest.mark.asyncio
     async def test_i_imports_text_schedule_with_dates(
         self, tmp_path, monkeypatch
     ) -> None:
