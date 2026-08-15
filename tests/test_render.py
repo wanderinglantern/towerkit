@@ -280,6 +280,28 @@ def test_statutory_draws_no_closed_outline_box(theme) -> None:
     assert unfilled_full_height == []
 
 
+def test_pending_statutory_outline_is_dashed(theme) -> None:
+    """A statutory layer with no participants is pending like any other —
+    the ascii and xlsx renderers still show it dashed. The statutory branch
+    used to draw its three-sided outline and `continue`, skipping the
+    pending linestyle/linewidth entirely, so matplotlib disagreed."""
+    from towerkit.render.mpl_program import draw_tower  # noqa: I001 — sets MPL env first
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    from matplotlib.figure import Figure
+
+    fig = Figure()
+    FigureCanvasAgg(fig)
+    ax = fig.add_subplot()
+    program = _wc_program()
+    program.layers[0].participants = []  # pending: no one has bound yet
+    draw_tower(ax, program, theme)
+    dashed_outline = [
+        line for line in ax.lines
+        if line.get_linestyle() == "--" and line.get_linewidth() == 1.2
+    ]
+    assert dashed_outline, "statutory outline lost the pending dashed style"
+
+
 def test_available_themes_includes_packaged_from_any_cwd(tmp_path, monkeypatch) -> None:
     from towerkit.theme import available_themes
 

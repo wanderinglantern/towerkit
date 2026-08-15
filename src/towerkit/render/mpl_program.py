@@ -175,7 +175,10 @@ def draw_tower(
                 ax.plot(
                     [outline.x0, outline.x0, outline.x1, outline.x1],
                     [outline.y1, outline.y0, outline.y0, outline.y1],
-                    color=chrome.ink, linewidth=1.1, zorder=3,
+                    color=chrome.ink,
+                    linewidth=1.2 if is_pending else 1.1,
+                    linestyle=(0, (4, 3)) if is_pending else "solid",
+                    zorder=3,
                     solid_capstyle="butt",
                 )
             continue
