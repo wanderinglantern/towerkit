@@ -185,7 +185,20 @@ class TestImportDiagnostics:
         assert "placed" in captured.out, captured.out
 
     def test_errors_stop_the_import_and_exit_non_zero(self, tmp_path) -> None:
-        source = self._template_with(tmp_path, "limit", "banana")
+        # A bad "share" cell, not a bad "limit": a bad limit drops the
+        # whole layer during row parsing, which cascades into a
+        # validate_program line-base failure — to_program() raises
+        # ProgramInvalidError and lands on the same (already-covered)
+        # `program is None` branch as a missing policy period. A bad
+        # share only drops that row's participant, leaving an unplaced
+        # layer that still validates (unplaced is a warning, not an
+        # error), so to_program() SUCCEEDS while draft.diagnostics.errors
+        # stays non-empty from the row-level parse error. That is the
+        # only input that reaches `_cmd_import`'s
+        # `program is None or draft.diagnostics.errors` guard through its
+        # second half instead of its first — verified by instrumenting a
+        # run, not by reading the parser.
+        source = self._template_with(tmp_path, "share", "banana%")
         out = tmp_path / "imported.json"
 
         code = main(
