@@ -1645,7 +1645,11 @@ class EditorScreen(Screen):
                     )
                     return
                 target.parent.mkdir(parents=True, exist_ok=True)
-                self.session.save(target)
+                try:
+                    self.session.save(target)
+                except OSError as exc:
+                    self._notify_save_failure(exc)
+                    return
                 self.notify(f"saved {target}")
                 self._refresh_title()
 
@@ -1653,34 +1657,82 @@ class EditorScreen(Screen):
             return
         self._save_guarded()
 
+    def _notify_save_failure(self, exc: OSError) -> None:
+        """A save that cannot reach disk is a message, never a crash — the
+        session still holds every edit, and killing the app would throw
+        them away on top of the failure."""
+        reason = exc.strerror or str(exc)
+        self.notify(
+            f"could not save {self.session.path}: {reason} — your edits are "
+            f"still here; try ctrl+s again, or use a different location",
+            severity="error",
+            timeout=10,
+        )
+
+    def _reload_guarded(self) -> None:
+        """Take what is on disk. The file may have been deleted rather than
+        merely changed, and a bad or missing file must not cost the
+        session that is still holding the user's work."""
+        try:
+            self.session.reload()
+        except (OSError, ValueError) as exc:
+            self.notify(
+                f"could not reload {self.session.path}: {exc} — your edits "
+                f"are still here",
+                severity="error",
+                timeout=10,
+            )
+            return
+        self.refresh_all()
+        self.notify("reloaded from disk — your edits were discarded")
+
     def _save_guarded(self, then: Callable[[], None] | None = None) -> None:
         """Every save that overwrites the loaded file goes through here.
-        StaleFileError is a question for the user, not an error to swallow."""
+        StaleFileError is a question for the user, not an error to swallow;
+        an OSError is a message, not a crash."""
+
+        def done() -> None:
+            self.notify(f"saved {self.session.path}")
+            self._refresh_title()
+            if then is not None:
+                then()
+
         try:
             self.session.save()
         except StaleFileError:
-
-            def on_choice(choice: str | None) -> None:
-                if choice == "overwrite":
+            if self.session.path is not None and not self.session.path.exists():
+                # deleted or renamed underneath us: there is nothing to
+                # clobber, so write it back rather than asking a question
+                # whose "reload" answer has nothing left to read
+                try:
                     self.session.save(force=True)
-                elif choice == "reload":
-                    self.session.reload()
-                    self.refresh_all()
-                    self.notify("reloaded from disk — your edits were discarded")
+                except OSError as exc:
+                    self._notify_save_failure(exc)
                     return
-                else:
-                    return
-                self.notify(f"saved {self.session.path}")
+                self.notify(f"{self.session.path} had been removed — wrote it back")
                 self._refresh_title()
                 if then is not None:
                     then()
+                return
+
+            def on_choice(choice: str | None) -> None:
+                if choice == "overwrite":
+                    try:
+                        self.session.save(force=True)
+                    except OSError as exc:
+                        self._notify_save_failure(exc)
+                        return
+                    done()
+                elif choice == "reload":
+                    self._reload_guarded()
+                # anything else: keep editing
 
             self.app.push_screen(StaleFileModal(), on_choice)
             return
-        self.notify(f"saved {self.session.path}")
-        self._refresh_title()
-        if then is not None:
-            then()
+        except OSError as exc:
+            self._notify_save_failure(exc)
+            return
+        done()
 
     def action_render(self) -> None:
         self._drain_focused_input()

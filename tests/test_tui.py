@@ -1601,3 +1601,64 @@ class TestRenameAlwaysFollowsTheId:
             await pilot.pause()
             assert editor.selected[1] == "cyber"
             assert editor._line("cyber").name == "CYBER"
+
+
+class TestSaveFailures:
+    @pytest.mark.asyncio
+    async def test_an_unwritable_file_notifies_instead_of_killing_the_app(
+        self, sample_copy, monkeypatch
+    ) -> None:
+        monkeypatch.chdir(sample_copy.parent.parent)
+        sample_copy.chmod(0o444)
+        try:
+            app = TowerkitApp(path=sample_copy)
+            async with app.run_test(size=(140, 45)) as pilot:
+                screen = app.screen
+                assert isinstance(screen, EditorScreen)
+                screen.session.mutate(lambda p: setattr(p, "insured", "Mine"))
+                await pilot.press("ctrl+s")
+                await pilot.pause()
+
+                assert app.is_running
+                assert screen.session.dirty  # the edit is still here
+        finally:
+            sample_copy.chmod(0o644)
+
+    @pytest.mark.asyncio
+    async def test_a_deleted_file_is_written_back_without_a_question(
+        self, sample_copy, monkeypatch
+    ) -> None:
+        monkeypatch.chdir(sample_copy.parent.parent)
+        app = TowerkitApp(path=sample_copy)
+        async with app.run_test(size=(140, 45)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, EditorScreen)
+            screen.session.mutate(lambda p: setattr(p, "insured", "Mine"))
+            sample_copy.unlink()  # git checkout, a rename, a sync client
+
+            await pilot.press("ctrl+s")
+            await pilot.pause()
+
+            assert app.is_running
+            assert sample_copy.exists()
+            assert load_program(sample_copy).insured == "Mine"
+
+    @pytest.mark.asyncio
+    async def test_reload_of_a_vanished_file_does_not_kill_the_app(
+        self, sample_copy, monkeypatch
+    ) -> None:
+        monkeypatch.chdir(sample_copy.parent.parent)
+        app = TowerkitApp(path=sample_copy)
+        async with app.run_test(size=(140, 45)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, EditorScreen)
+            screen.session.mutate(lambda p: setattr(p, "insured", "Mine"))
+
+            # the StaleFileModal's own reload branch, reached directly: the
+            # file is gone by the time the user answers the question
+            sample_copy.unlink()
+            screen._reload_guarded()
+            await pilot.pause()
+
+            assert app.is_running
+            assert screen.session.program.insured == "Mine"
