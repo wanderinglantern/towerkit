@@ -280,6 +280,25 @@ def test_statutory_draws_no_closed_outline_box(theme) -> None:
     assert unfilled_full_height == []
 
 
+def test_ylim_top_clears_the_chevron_band(theme) -> None:
+    """ax.set_ylim(..., 1.06) is hardcoded and must exceed 1.0 + CHEVRON_BAND
+    or the chevrons clip silently at the top of the axes. Nothing pinned
+    that relation before — raising CHEVRON_BAND would clip quietly. This
+    does NOT pin 1.06 itself, only that it clears the band."""
+    from towerkit.render.mpl_program import draw_tower  # noqa: I001 — sets MPL env first
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    from matplotlib.figure import Figure
+
+    from towerkit.layout import CHEVRON_BAND
+
+    fig = Figure()
+    FigureCanvasAgg(fig)
+    ax = fig.add_subplot()
+    draw_tower(ax, _wc_program(), theme)
+    _, top = ax.get_ylim()
+    assert top > 1.0 + CHEVRON_BAND
+
+
 def test_pending_statutory_outline_is_dashed(theme) -> None:
     """A statutory layer with no participants is pending like any other —
     the ascii and xlsx renderers still show it dashed. The statutory branch
