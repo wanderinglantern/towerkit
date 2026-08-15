@@ -253,6 +253,23 @@ class TestDiagnosticsSurvive:
 
         assert len(draft.diagnostics.items) == first
 
+    def test_a_validation_failure_after_the_gate_also_lands_on_the_draft(self) -> None:
+        from towerkit.validate import ProgramInvalidError
+
+        draft = self._draft_with_an_unplaced_layer()
+        # Gate passes (insured, program, period all present); the failure
+        # comes from validate_program itself, via a bad `applies_to`
+        # reference — same shape as test_draft_runs_full_validation.
+        draft.layers[0] = draft.layers[0].model_copy(update={"applies_to": ["nope"]})
+
+        with pytest.raises(ProgramInvalidError):
+            draft.to_program()
+
+        assert any("nope" in str(d) for d in draft.diagnostics.errors), (
+            f"post-gate validation errors were discarded: "
+            f"{[str(d) for d in draft.diagnostics.items]}"
+        )
+
 
 # --- import_schedule ----------------------------------------------------------
 
