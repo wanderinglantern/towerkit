@@ -57,14 +57,28 @@ class TowerkitApp(App):
         advertises it ("Press ctrl+q to quit the app"). Routing it into the
         editor's own esc handler makes both keys mean the same thing, and
         makes that toast honest.
+
+        Drain BEFORE checking dirty, same reason as `action_back`: text
+        sitting in a focused Input has not reached the model yet, so
+        `dirty` cannot see it. Checking dirty first would let ctrl+q skip
+        the prompt for exactly the typed-but-uncommitted case this task
+        exists to close.
         """
         screen = self.screen
-        if isinstance(screen, EditorScreen) and screen.session.dirty:
-            # action_back's layers-sheet-open early return (close the sheet,
-            # don't prompt/exit) is reachable from here too. Deliberate: it
-            # mirrors what esc already does, costs one extra keypress in a
-            # rare state, and duplicating the sheet check here just to skip
-            # it would fork exit logic across two methods for no real gain.
-            await screen.action_back()
-            return
+        if isinstance(screen, EditorScreen):
+            screen._drain_focused_input()
+            if screen.session.dirty:
+                # action_back's layers-sheet-open early return (close the
+                # sheet, don't prompt/exit) is reachable from here too.
+                # Deliberate: it mirrors what esc already does, costs one
+                # extra keypress in a rare state, and duplicating the sheet
+                # check here just to skip it would fork exit logic across
+                # two methods for no real gain.
+                await screen.action_back()
+                return
+        # A clean session reached by browsing sits 3 screens deep, so
+        # routing a clean EditorScreen into action_back would pop back to
+        # the browser instead of quitting — draining first and falling
+        # through here instead keeps ctrl+q always meaning quit when there
+        # is nothing to lose, at any stack depth.
         self.exit()
