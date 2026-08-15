@@ -666,6 +666,11 @@ class EditorScreen(Screen):
                 value=layer.follows_underlying,
                 id="f-layer-follows",
             ),
+            Checkbox(
+                "Statutory — no dollar limit (WC Part A)",
+                value=layer.statutory,
+                id="f-layer-statutory",
+            ),
             Label("Limit", classes="field-label"),
             MoneyInput(
                 layer.limit if layer.limit > 0 else None,
@@ -1245,6 +1250,8 @@ class EditorScreen(Screen):
         if amount is None and widget.value.strip():
             self.notify(f"can't parse {widget.value!r} as money", severity="error")
             return
+        if layer.statutory and wid in ("f-layer-attach", "f-layer-limit"):
+            return  # the invariant owns these; the checkbox is the only writer
         if wid == "f-layer-attach" and amount is not None:
             self._mutate_and_refresh(lambda p: setattr(layer, "attach", amount))
         elif wid == "f-layer-limit" and amount is not None:
@@ -1398,6 +1405,35 @@ class EditorScreen(Screen):
                     self.notify(f"attach suggested at {format_money(suggestion)}")
             try:
                 self.query_one("#f-layer-attach", MoneyInput).set_amount(layer.attach)
+            except Exception:
+                pass
+            return
+        if wid == "f-layer-statutory":
+            kind, key = self._commit_ref
+            layer = self._layer(key) if kind == "layer" else None
+            if layer is None:
+                return
+            target = layer  # mypy: closures don't keep the None-narrowing
+            flag = bool(event.value)
+
+            def set_statutory(p: Program) -> None:
+                target.statutory = flag
+                if flag:
+                    # force the invariant rather than recording intent: a
+                    # statutory layer owns its column from $0 with no limit,
+                    # and has nothing beneath it to follow
+                    target.limit = 0
+                    target.attach = 0
+                    target.follows_underlying = False
+
+            self._mutate_and_refresh(set_statutory)
+            for widget_id in ("#f-layer-attach", "#f-layer-limit"):
+                try:
+                    self.query_one(widget_id, MoneyInput).set_amount(None if flag else 0)
+                except Exception:
+                    pass
+            try:
+                self.query_one("#f-layer-follows", Checkbox).value = layer.follows_underlying
             except Exception:
                 pass
             return
