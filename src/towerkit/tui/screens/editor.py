@@ -852,7 +852,9 @@ class EditorScreen(Screen):
             Text("/".join(layer.applies_to), style=DIM),
             # attach prints even at $0 — a primary's attachment is data, not absence
             Text(format_money_compact(layer.attach), justify="right"),
-            money_text(layer.limit),
+            # statutory has no dollar limit to quote — money_text(0) would read
+            # as "—" (no data), which is wrong; it's a design choice, not absence
+            Text("Statutory", justify="right") if layer.statutory else money_text(layer.limit),
             money_text(layer.top),
             money_text(layer.premium),
             self._signed_cell(layer),
@@ -1022,11 +1024,13 @@ class EditorScreen(Screen):
                 if self.selected == ("layer", event.row_key):
                     self.selected = ("layer", layer.id)
         elif field_key == "attach" and event.value is not None:
-            amount = int(event.value)
-            self._mutate_and_refresh(lambda p: setattr(layer, "attach", amount))
+            if not layer.statutory:  # the invariant owns this; the checkbox is the only writer
+                amount = int(event.value)
+                self._mutate_and_refresh(lambda p: setattr(layer, "attach", amount))
         elif field_key == "limit" and event.value is not None:
-            amount = int(event.value)
-            self._mutate_and_refresh(lambda p: setattr(layer, "limit", amount))
+            if not layer.statutory:  # the invariant owns this; the checkbox is the only writer
+                amount = int(event.value)
+                self._mutate_and_refresh(lambda p: setattr(layer, "limit", amount))
         elif field_key == "premium":
             premium = int(event.value) if event.value is not None else None
             self._mutate_and_refresh(lambda p: setattr(layer, "premium", premium))
