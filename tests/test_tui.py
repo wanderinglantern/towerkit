@@ -7,6 +7,7 @@ errors, with working undo/redo and over-sign protection.
 
 from __future__ import annotations
 
+import errno
 import shutil
 from pathlib import Path
 
@@ -1662,3 +1663,90 @@ class TestSaveFailures:
 
             assert app.is_running
             assert screen.session.program.insured == "Mine"
+
+    @pytest.mark.asyncio
+    async def test_save_as_of_a_new_program_survives_an_unwritable_destination(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """_do_save's on_name closure (session.path is None — Save As on a
+        brand-new program) has its own `except OSError`, separate from
+        _save_guarded's. Drive it through the real PromptModal, the same way
+        test_save_as_refuses_an_existing_file_name does, rather than calling
+        the nested on_name closure directly — it isn't a reachable attribute."""
+        from towerkit.tui.widgets.modals import ConfirmModal, PromptModal
+
+        monkeypatch.chdir(tmp_path)
+        programs_dir = tmp_path / "programs"
+        programs_dir.mkdir()
+        programs_dir.chmod(0o555)  # read + execute, no write
+        try:
+            app = TowerkitApp(new=True)
+            async with app.run_test(size=(140, 45)) as pilot:
+                editor = app.screen
+                assert isinstance(editor, EditorScreen)
+                editor.selected = ("program", None)
+                await editor._rebuild_detail()
+                await pilot.pause()
+                insured = editor.query_one("#f-insured")
+                insured.value = "Mine"
+                editor._commit_input(insured)
+                editor.action_save()
+                await pilot.pause()
+
+                if isinstance(app.screen, ConfirmModal):  # a blank program has errors
+                    app.screen.query_one("#yes", Button).press()
+                    await pilot.pause()
+
+                assert isinstance(app.screen, PromptModal)
+                prompt = app.screen.query_one("#prompt")
+                prompt.value = "newprogram"
+                await pilot.press("enter")
+                await pilot.pause()
+
+                assert app.is_running
+                assert isinstance(app.screen, EditorScreen)
+                assert app.screen.session.path is None  # never landed
+                assert app.screen.session.program.insured == "Mine"  # edit intact
+                assert any(
+                    "could not save" in n.message for n in app._notifications
+                )
+        finally:
+            programs_dir.chmod(0o755)
+
+    @pytest.mark.asyncio
+    async def test_stale_file_overwrite_survives_a_failing_write(
+        self, sample_copy, monkeypatch
+    ) -> None:
+        """The StaleFileModal's "overwrite" choice has its own
+        `except OSError` around the forced save. Reach the modal the way
+        test_save_over_a_changed_file_offers_a_choice does (file changed,
+        not deleted, so this is the question-modal path, not the
+        write-back-without-asking path), then make the forced write itself
+        fail by monkeypatching the atomic write primitive session.py calls."""
+        from towerkit.tui.widgets.modals import StaleFileModal
+
+        def fail(*args: object, **kwargs: object) -> None:
+            raise OSError(errno.EACCES, "Permission denied")
+
+        monkeypatch.setattr("towerkit.tui.session.atomic_write_text", fail)
+        monkeypatch.chdir(sample_copy.parent.parent)
+        app = TowerkitApp(path=sample_copy)
+        async with app.run_test(size=(140, 45)) as pilot:
+            editor = app.screen
+            assert isinstance(editor, EditorScreen)
+            editor.session.mutate(lambda p: setattr(p, "insured", "Mine"))
+            sample_copy.write_text(sample_copy.read_text("utf-8") + " ", encoding="utf-8")
+
+            await pilot.press("ctrl+s")
+            await pilot.pause()
+            assert isinstance(app.screen, StaleFileModal)
+
+            await pilot.press("o")  # overwrite
+            await pilot.pause()
+
+            assert app.is_running
+            assert isinstance(app.screen, EditorScreen)
+            assert editor.session.program.insured == "Mine"  # edit intact
+            assert any(
+                "could not save" in n.message for n in app._notifications
+            )
