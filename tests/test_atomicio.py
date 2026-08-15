@@ -139,3 +139,31 @@ class TestAtomicWrite:
 
         assert target.read_text(encoding="utf-8") == "v2"
         assert not backup_path(target).exists()
+
+    def test_a_failed_backup_leaves_the_previous_sidecar_intact(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        # the sidecar used to be unlinked BEFORE the replacement was made,
+        # so a link that failed and a copy that failed left the user with no
+        # backup at all — having had a valid one a moment earlier
+        target = tmp_path / "p.json"
+        target.write_text("v1", encoding="utf-8")
+        atomic_write_text(target, "v2")  # sidecar now holds v1
+        assert backup_path(target).read_text(encoding="utf-8") == "v1"
+
+        def _fail(*_args: object, **_kwargs: object) -> None:
+            raise OSError(errno.ENOSPC, "No space left on device")
+
+        monkeypatch.setattr(os, "link", _fail)
+        monkeypatch.setattr(shutil, "copyfile", _fail)
+
+        atomic_write_text(target, "v3")
+
+        assert target.read_text(encoding="utf-8") == "v3"
+        assert backup_path(target).read_text(encoding="utf-8") == "v1", (
+            "the only backup the user had was thrown away for one that "
+            "could not be made"
+        )
+        assert not backup_path(target).with_name(
+            f"{backup_path(target).name}.tmp"
+        ).exists(), "the half-built sidecar was left behind"

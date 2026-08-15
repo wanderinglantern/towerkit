@@ -83,13 +83,25 @@ def _keep_aside(path: Path) -> None:
 
     A hard link first: it copies no data, so it cannot itself fail with
     ENOSPC on the full disk this whole module exists to survive. Copying
-    is the fallback for filesystems without hard links (SMB, exFAT)."""
+    is the fallback for filesystems without hard links (SMB, exFAT).
+
+    Build the replacement under a temp name and `os.replace` it into
+    position: unlinking the sidecar first meant a link that then failed AND
+    a copy that then failed left the user with no backup at all, having had
+    a valid one a moment earlier. Replacing keeps the previous sidecar
+    whenever the new one cannot be made."""
     bak = backup_path(path)
+    # `.tmp`-suffixed so the repo's existing `.*.tmp` ignore rule covers it
+    tmp = bak.with_name(f"{bak.name}.tmp")
     try:
-        bak.unlink(missing_ok=True)
-        os.link(path, bak)
+        try:
+            tmp.unlink(missing_ok=True)
+            os.link(path, tmp)
+        except OSError:
+            shutil.copyfile(path, tmp)
+        os.replace(tmp, bak)
     except OSError:
         try:
-            shutil.copyfile(path, bak)
+            tmp.unlink(missing_ok=True)
         except OSError:
             pass

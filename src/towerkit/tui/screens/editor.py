@@ -1644,11 +1644,11 @@ class EditorScreen(Screen):
                         severity="error",
                     )
                     return
-                target.parent.mkdir(parents=True, exist_ok=True)
                 try:
+                    target.parent.mkdir(parents=True, exist_ok=True)
                     self.session.save(target)
                 except OSError as exc:
-                    self._notify_save_failure(exc)
+                    self._notify_save_failure(exc, target)
                     return
                 self.notify(f"saved {target}")
                 self._refresh_title()
@@ -1657,13 +1657,18 @@ class EditorScreen(Screen):
             return
         self._save_guarded()
 
-    def _notify_save_failure(self, exc: OSError) -> None:
+    def _notify_save_failure(self, exc: OSError, target: Path | None) -> None:
         """A save that cannot reach disk is a message, never a crash — the
         session still holds every edit, and killing the app would throw
-        them away on top of the failure."""
+        them away on top of the failure.
+
+        `target` is the destination that was refused, passed in rather than
+        read off the session: a save-as fails while `session.path` is still
+        None, and "could not save None" names nothing the user can act on.
+        """
         reason = exc.strerror or str(exc)
         self.notify(
-            f"could not save {self.session.path}: {reason} — your edits are "
+            f"could not save {target}: {reason} — your edits are "
             f"still here; try ctrl+s again, or use a different location",
             severity="error",
             timeout=10,
@@ -1707,7 +1712,7 @@ class EditorScreen(Screen):
                 try:
                     self.session.save(force=True)
                 except OSError as exc:
-                    self._notify_save_failure(exc)
+                    self._notify_save_failure(exc, self.session.path)
                     return
                 self.notify(f"{self.session.path} had been removed — wrote it back")
                 self._refresh_title()
@@ -1720,7 +1725,7 @@ class EditorScreen(Screen):
                     try:
                         self.session.save(force=True)
                     except OSError as exc:
-                        self._notify_save_failure(exc)
+                        self._notify_save_failure(exc, self.session.path)
                         return
                     done()
                 elif choice == "reload":
@@ -1730,7 +1735,7 @@ class EditorScreen(Screen):
             self.app.push_screen(StaleFileModal(), on_choice)
             return
         except OSError as exc:
-            self._notify_save_failure(exc)
+            self._notify_save_failure(exc, self.session.path)
             return
         done()
 

@@ -16,4 +16,4 @@ CLAUDE.md
 .claude/worktrees/
 .*.bak
 .*.tmp
-programs/.mcp-snapshots/
+.mcp-snapshots/

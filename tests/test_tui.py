@@ -1761,6 +1761,38 @@ class TestSaveFailures:
             sample_copy.chmod(0o644)
 
     @pytest.mark.asyncio
+    async def test_a_failed_save_as_names_the_destination_it_tried(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """Save-as fails while session.path is still None, so reading the
+        target off the session printed "could not save None" — a message
+        naming nothing the user can act on."""
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "programs").mkdir()
+        app = TowerkitApp(new=True)
+        async with app.run_test(size=(140, 45)) as pilot:
+            editor = app.screen
+            assert isinstance(editor, EditorScreen)
+
+            def _refused(*_args: object, **_kwargs: object) -> None:
+                raise PermissionError(errno.EACCES, "Permission denied")
+
+            monkeypatch.setattr(EditSession, "save", _refused)
+            editor._do_save()
+            await pilot.pause()
+            from towerkit.tui.widgets.modals import PromptModal
+
+            assert isinstance(app.screen, PromptModal)
+            app.screen.query_one("#prompt").value = "acme"
+            await pilot.press("enter")
+            await pilot.pause()
+
+            assert app.is_running
+            messages = [n.message for n in app._notifications]
+            assert any("acme.json" in m for m in messages), messages
+            assert not any("could not save None" in m for m in messages), messages
+
+    @pytest.mark.asyncio
     async def test_a_deleted_file_is_written_back_without_a_question(
         self, sample_copy, monkeypatch
     ) -> None:
