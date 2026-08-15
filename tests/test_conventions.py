@@ -9,7 +9,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-TUI = Path(__file__).parent.parent / "src" / "towerkit" / "tui"
+REPO = Path(__file__).parent.parent
+
+TUI = REPO / "src" / "towerkit" / "tui"
 
 BANNED = (
     ".lines.append(", ".layers.append(", ".retentions.append(", ".sublimits.append(",
@@ -32,3 +34,17 @@ def test_tui_never_mutates_program_collections_directly() -> None:
         "structural mutation belongs in towerkit.edit, not the TUI:\n"
         + "\n".join(offenders)
     )
+
+
+def test_schema_copies_are_identical() -> None:
+    """validate.py loads the PACKAGED schema via resources.files('towerkit');
+    the root copy is the published reference. A field added to only one makes
+    runtime validation disagree with model.py, and no other test would catch
+    it — the canonical round-trip never goes through jsonschema."""
+    import json
+
+    root = json.loads((REPO / "schema" / "program.schema.json").read_text("utf-8"))
+    packaged = json.loads(
+        (REPO / "src" / "towerkit" / "schema" / "program.schema.json").read_text("utf-8")
+    )
+    assert root == packaged

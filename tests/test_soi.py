@@ -2,7 +2,7 @@
 
 import datetime
 
-from towerkit.model import Program
+from towerkit.model import Layer, Program
 from towerkit.soi import (
     PROGRAM_WIDE,
     build_soi,
@@ -79,6 +79,25 @@ def make_program() -> Program:
             ],
         }
     )
+
+
+def _statutory_layer(**kw) -> Layer:
+    base = dict(
+        id="wc-stat", name="Workers Compensation", applies_to=["wc"],
+        attach=0, limit=0, statutory=True,
+    )
+    return Layer(**{**base, **kw})
+
+
+def test_limits_text_statutory() -> None:
+    assert limits_text(_statutory_layer(), make_program()) == "Statutory"
+
+
+def test_limits_detail_still_wins_over_statutory() -> None:
+    """towerkit does not invent a sentence about state law. If the broker
+    wants the long form on the SOI they type it, and it wins."""
+    layer = _statutory_layer(limits_detail="Benefits as required by NY state law")
+    assert limits_text(layer, make_program()) == "Benefits as required by NY state law"
 
 
 class TestSoiStyle:

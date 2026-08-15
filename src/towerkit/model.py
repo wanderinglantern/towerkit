@@ -94,6 +94,7 @@ class Layer(_Model):
     applies_to: list[str] = Field(alias="appliesTo", min_length=1)
     attach: Money
     limit: int
+    statutory: bool = False  # no dollar limit (WC Part A); limit MUST be 0
     premium: Money | None = None
     limits_detail: str | None = Field(alias="limitsDetail", default=None)
     retention_detail: str | None = Field(alias="retentionDetail", default=None)
@@ -229,7 +230,7 @@ _PROGRAM_KEYS = (
 _LINE_KEYS = ("id", "name", "abbr", "group")
 _LAYER_KEYS = (
     "id", "name", "policyNumber", "period", "followsUnderlying", "appliesTo",
-    "attach", "limit", "premium", "limitsDetail", "retentionDetail",
+    "attach", "limit", "statutory", "premium", "limitsDetail", "retentionDetail",
     "participants", "notes",
 )
 _PARTICIPANT_KEYS = ("carrier", "share")
@@ -306,6 +307,10 @@ def program_to_jsonable(program: Program) -> dict[str, Any]:
                     "appliesTo": list(layer.applies_to),
                     "attach": layer.attach,
                     "limit": layer.limit,
+                    # emitted only when true (the followsUnderlying pattern):
+                    # untouched programs re-save byte-identically, and older
+                    # towerkit wheels only reject files that USE the feature
+                    "statutory": layer.statutory or None,
                     "premium": layer.premium,
                     "limitsDetail": layer.limits_detail,
                     "retentionDetail": layer.retention_detail,

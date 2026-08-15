@@ -10,20 +10,26 @@ from ..layout import GroupBand, LayerBlock, ParticipantBlock
 from ..money import format_money_compact, format_share, premium_share
 
 
-def layer_terms(attach: int, limit: int) -> str:
+def layer_terms(attach: int, limit: int, statutory: bool = False) -> str:
     """Market convention: a primary is quoted by its limit alone — 'xs $0'
-    is meaningless and reads as an error on a chart."""
+    is meaningless and reads as an error on a chart. Statutory cover has no
+    limit to quote at all."""
+    if statutory:
+        return "Statutory"
     if attach > 0:
         return f"{format_money_compact(limit)} xs {format_money_compact(attach)}"
     return format_money_compact(limit)
 
 
 def layer_heading(layer: LayerBlock, follows: bool, marker: str = "") -> str:
-    terms = (
-        f"{format_money_compact(layer.limit)} xs underlying"
-        if follows
-        else layer_terms(layer.attach, layer.limit)
-    )
+    # Statutory is checked first because the two are mutually exclusive —
+    # nothing underlies a statutory bar.
+    if layer.statutory:
+        terms = layer_terms(layer.attach, layer.limit, statutory=True)
+    elif follows:
+        terms = f"{format_money_compact(layer.limit)} xs underlying"
+    else:
+        terms = layer_terms(layer.attach, layer.limit)
     return f"{layer.name}{marker} — {terms}"
 
 

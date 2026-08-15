@@ -129,3 +129,65 @@ def test_soi_detail_keys_sit_between_premium_and_participants() -> None:
     block = text[text.index('"layers"'):]
     assert block.index('"limitsDetail"') < block.index('"retentionDetail"')
     assert block.index('"premium"') < block.index('"limitsDetail"') < block.index('"participants"')
+
+
+def _program_json(layer_extra: str) -> str:
+    return (
+        '{\n'
+        '  "$schema": "https://towerkit.dev/schema/program.schema.json",\n'
+        '  "insured": "Acme",\n'
+        '  "program": "Casualty",\n'
+        '  "placement": "bound",\n'
+        '  "period": {\n'
+        '    "start": "2026-01-01",\n'
+        '    "end": "2027-01-01"\n'
+        '  },\n'
+        '  "currency": "USD",\n'
+        '  "lines": [\n'
+        '    {\n'
+        '      "id": "wc",\n'
+        '      "name": "Workers Compensation"\n'
+        '    }\n'
+        '  ],\n'
+        '  "layers": [\n'
+        '    {\n'
+        '      "id": "wc-stat",\n'
+        '      "name": "Workers Compensation",\n'
+        '      "appliesTo": [\n'
+        '        "wc"\n'
+        '      ],\n'
+        '      "attach": 0,\n'
+        '      "limit": 0,\n'
+        f'{layer_extra}'
+        '      "participants": [\n'
+        '        {\n'
+        '          "carrier": "Travelers",\n'
+        '          "share": 1\n'
+        '        }\n'
+        '      ]\n'
+        '    }\n'
+        '  ],\n'
+        '  "retentions": [],\n'
+        '  "sublimits": []\n'
+        '}\n'
+    )
+
+
+def test_statutory_round_trips_zero_diff() -> None:
+    text = _program_json('      "statutory": true,\n')
+    assert dumps_program(loads_program(text)) == text
+
+
+def test_statutory_omitted_when_false() -> None:
+    """The followsUnderlying precedent: a program that does not use the
+    feature must not gain the key, so untouched files re-save byte-identically
+    and older wheels keep loading them."""
+    text = _program_json("")
+    assert dumps_program(loads_program(text)) == text
+    assert "statutory" not in text
+
+
+def test_statutory_key_sits_after_limit() -> None:
+    text = _program_json('      "statutory": true,\n')
+    out = dumps_program(loads_program(text))
+    assert out.index('"limit"') < out.index('"statutory"') < out.index('"participants"')

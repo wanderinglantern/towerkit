@@ -383,3 +383,139 @@ class TestGroupBuckets:
         alpha = tower.groups[0]
         assert alpha.limit == 3_000_000 + 10_000_000 * 2 // 4
         assert alpha.premium == 1_000_000 * 2 // 4
+
+
+def statutory_layer(id: str, applies: list[str], shares) -> Layer:
+    return Layer(
+        id=id, name=id, applies_to=applies, attach=0, limit=0, statutory=True,
+        participants=[Participant(carrier=c, share_bps=b) for c, b in shares],
+    )
+
+
+class TestStatutory:
+    def test_does_not_move_any_other_layer(self) -> None:
+        """THE load-bearing invariant. scale.py builds ONE global map over the
+        program's breakpoints and the whole design hangs on $52M sitting at the
+        same height in every column. A statutory layer must contribute no
+        breakpoints, so adding one cannot shift anything else by a single
+        float."""
+        layers = [
+            layer("gl-primary", ["gl"], 0, 5_000_000, [("A", 10_000)]),
+            layer("gl-excess", ["gl"], 5_000_000, 20_000_000, [("B", 10_000)]),
+        ]
+        before = build_layout(make_program(["gl"], layers))
+        after = build_layout(
+            make_program(
+                ["gl", "wc"],
+                [*layers, statutory_layer("wc-stat", ["wc"], [("C", 10_000)])],
+            )
+        )
+        baseline = {b.layer_id: (b.y0, b.y1) for b in before.layers}
+        for block in after.layers:
+            if block.layer_id in baseline:
+                assert (block.y0, block.y1) == baseline[block.layer_id], block.layer_id
+
+    def test_occupies_the_full_column(self) -> None:
+        tower = build_layout(
+            make_program(
+                ["gl", "wc"],
+                [
+                    layer("gl-primary", ["gl"], 0, 5_000_000, [("A", 10_000)]),
+                    statutory_layer("wc-stat", ["wc"], [("C", 10_000)]),
+                ],
+            )
+        )
+        stat = next(b for b in tower.layers if b.layer_id == "wc-stat")
+        assert (stat.y0, stat.y1) == (0.0, 1.0)
+        assert stat.statutory is True
+
+    def test_contributes_no_breakpoints(self) -> None:
+        tower = build_layout(
+            make_program(
+                ["gl", "wc"],
+                [
+                    layer("gl-primary", ["gl"], 0, 5_000_000, [("A", 10_000)]),
+                    statutory_layer("wc-stat", ["wc"], [("C", 10_000)]),
+                ],
+            )
+        )
+        assert tower.ymap.breakpoints == (0, 5_000_000)
+
+    def test_statutory_only_program_is_drawable(self) -> None:
+        """build_y_map([]) returns the degenerate YMap. The bar still draws
+        floor to top; there are simply no axis labels."""
+        tower = build_layout(
+            make_program(["wc"], [statutory_layer("wc-stat", ["wc"], [("C", 10_000)])])
+        )
+        stat = next(b for b in tower.layers if b.layer_id == "wc-stat")
+        assert (stat.y0, stat.y1) == (0.0, 1.0)
+        assert len(tower.participants) == 1
+
+    def test_participants_allocate_across_the_bar(self) -> None:
+        tower = build_layout(
+            make_program(
+                ["wc"],
+                [statutory_layer("wc-stat", ["wc"], [("A", 6_000), ("B", 4_000)])],
+            )
+        )
+        blocks = [b for b in tower.participants if b.layer_id == "wc-stat"]
+        assert [b.carrier for b in blocks] == ["A", "B"]
+        assert all(r.y0 == 0.0 and r.y1 == 1.0 for b in blocks for r in b.rects)
+
+    def test_a_stale_limit_on_a_statutory_layer_is_still_off_the_scale(self) -> None:
+        """limit == 0 is a SEMANTIC rule, not a schema one, and build_layout
+        tolerates draft data — so a layer with the box ticked and a stale
+        limit must still contribute no breakpoints. This is the case that
+        distinguishes build_y_map(scaled) from build_y_map(drawable); with
+        limit == 0 the two are bit-identical and nothing would catch the
+        difference."""
+        stat = statutory_layer("wc-stat", ["wc"], [("C", 10_000)])
+        stat.limit = 7_000_000  # draft: box ticked, limit never cleared
+        tower = build_layout(
+            make_program(
+                ["gl", "wc"],
+                [layer("gl-primary", ["gl"], 0, 5_000_000, [("A", 10_000)]), stat],
+            )
+        )
+        assert tower.ymap.breakpoints == (0, 5_000_000)
+        assert next(b for b in tower.layers if b.layer_id == "wc-stat").y1 == 1.0
+
+    def test_chevron_band_sits_above_the_tower(self) -> None:
+        from towerkit.layout import CHEVRON_BAND
+
+        tower = build_layout(
+            make_program(
+                ["gl", "wc"],
+                [
+                    layer("gl-primary", ["gl"], 0, 5_000_000, [("A", 10_000)]),
+                    statutory_layer("wc-stat", ["wc"], [("C", 10_000)]),
+                ],
+            )
+        )
+        assert len(tower.chevrons) == 1
+        band = tower.chevrons[0]
+        assert (band.y0, band.y1) == (1.0, 1.0 + CHEVRON_BAND)
+        stat = next(b for b in tower.layers if b.layer_id == "wc-stat")
+        assert (band.x0, band.x1) == (stat.outlines[0].x0, stat.outlines[0].x1)
+
+    def test_no_chevrons_without_statutory_cover(self) -> None:
+        """The band is added ONLY when a statutory layer exists, so every
+        existing program's geometry — and its golden hash — is untouched."""
+        tower = build_layout(
+            make_program(["gl"], [layer("gl-primary", ["gl"], 0, 5_000_000, [("A", 10_000)])])
+        )
+        assert tower.chevrons == ()
+
+    def test_one_chevron_per_run(self) -> None:
+        """A statutory layer spanning non-contiguous columns is several runs,
+        and each needs its own band."""
+        tower = build_layout(
+            make_program(
+                ["wc", "gl", "wc2"],
+                [
+                    layer("gl-primary", ["gl"], 0, 5_000_000, [("A", 10_000)]),
+                    statutory_layer("stat", ["wc", "wc2"], [("C", 10_000)]),
+                ],
+            )
+        )
+        assert len(tower.chevrons) == 2

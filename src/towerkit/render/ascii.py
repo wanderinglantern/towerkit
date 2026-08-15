@@ -86,18 +86,25 @@ def _render_layout(
     label_w = 0 if width < 46 else (14 if width < 76 else 20)
     chart_w = max(len(tower.columns) * 2, width - label_w - 1)
     ret_rows = 2 if tower.retentions else 0
-    tower_rows = max(4, height - ret_rows - 2)  # zero line + column labels
+    # one reserved row above the tower for the statutory chevron band; the
+    # band lives at y > 1.0, which to_row would otherwise map to a negative row
+    chev_rows = 1 if tower.chevrons else 0
+    tower_rows = max(4, height - ret_rows - 2 - chev_rows)
     carrier_colours = theme.carrier_colours(program.carriers())
 
     def to_col(x: float) -> int:
         return round(x / tower.width * chart_w)
 
     def to_row(y: float) -> int:
-        """Tower y ∈ [0,1] → grid row; y=1 is row 0, y=0 is the zero line."""
-        return round((1.0 - y) * tower_rows)
+        """Tower y ∈ [0,1] → grid row; y=1 is the first row under the chevron
+        band, y=0 is the zero line."""
+        return chev_rows + round((1.0 - y) * tower_rows)
 
-    grid = [[_Cell() for _ in range(chart_w)] for _ in range(tower_rows + 1 + ret_rows + 1)]
-    zero_row = tower_rows
+    grid = [
+        [_Cell() for _ in range(chart_w)]
+        for _ in range(chev_rows + tower_rows + 1 + ret_rows + 1)
+    ]
+    zero_row = chev_rows + tower_rows
 
     # dim background where a column exists but has no cover at that height;
     # a column with a validation error tints red — a gap lights up exactly
@@ -105,7 +112,7 @@ def _render_layout(
     for column in tower.columns:
         broken = column.line_id in error_lines
         bg = ansi256(DANGER) if broken else ansi256(theme.chrome.grid)
-        for row in range(tower_rows):
+        for row in range(chev_rows, zero_row):
             for col in range(to_col(column.x0), to_col(column.x1)):
                 grid[row][col] = _Cell(NO_COVER, bg, dim=not broken)
 
@@ -122,10 +129,16 @@ def _render_layout(
                 cell = _Cell(UNPLACED, ansi256(theme.chrome.unplaced))
             else:
                 cell = _Cell(FULL, ansi256(carrier_colours[block.carrier]))
-            for row in range(max(r0, 0), min(r1, tower_rows)):
+            for row in range(max(r0, chev_rows), min(r1, zero_row)):
                 for col in range(c0, min(c1, chart_w)):
                     grid[row][col] = _Cell(cell.char, cell.colour, cell.dim)
-            _stamp_initial(grid, block.carrier, r0, r1, c0, c1, tower_rows)
+            _stamp_initial(grid, block.carrier, r0, r1, c0, c1, chev_rows, zero_row)
+
+    # statutory chevron band: the bar's top edge, marking cover that continues
+    for rect in tower.chevrons:
+        for col in range(to_col(rect.x0), min(to_col(rect.x1), chart_w)):
+            for row in range(chev_rows):
+                grid[row][col] = _Cell("^", ansi256(theme.chrome.ink))
 
     # heavy zero line
     for col in range(chart_w):
@@ -153,7 +166,7 @@ def _render_layout(
 
     lines = [_row_to_text(row_cells, colour) for row_cells in grid]
     if label_w:
-        _attach_labels(lines, tower, label_w, zero_row, ret_rows)
+        _attach_labels(lines, tower, label_w, zero_row, ret_rows, chev_rows)
     return "\n".join(lines)
 
 
@@ -164,13 +177,14 @@ def _stamp_initial(
     r1: int,
     c0: int,
     c1: int,
-    tower_rows: int,
+    top_row: int,
+    zero_row: int,
 ) -> None:
     if carrier is None or c1 - c0 < 3:
         return
-    row = (max(r0, 0) + min(r1, tower_rows)) // 2
+    row = (max(r0, top_row) + min(r1, zero_row)) // 2
     col = (c0 + c1) // 2
-    if 0 <= row < tower_rows and 0 <= col < len(grid[0]):
+    if top_row <= row < zero_row and 0 <= col < len(grid[0]):
         base = grid[row][col]
         grid[row][col] = _Cell(carrier[0], base.colour, dim=False)
 
@@ -195,16 +209,21 @@ def _row_to_text(cells: list[_Cell], colour: bool) -> str:
 
 
 def _attach_labels(
-    lines: list[str], tower: TowerLayout, label_w: int, zero_row: int, ret_rows: int
+    lines: list[str],
+    tower: TowerLayout,
+    label_w: int,
+    zero_row: int,
+    ret_rows: int,
+    chev_rows: int = 0,
 ) -> None:
     """Right-gutter labels: layer names at their mid-height, $0 at the rule,
     'Retention' under it, and a not-to-scale caveat."""
-    tower_rows = zero_row
+    tower_rows = zero_row - chev_rows
     labels: dict[int, str] = {}
     for block in sorted(tower.layers, key=lambda b: -b.attach):
-        mid = round((1.0 - (block.y0 + block.y1) / 2) * tower_rows)
-        mid = min(max(mid, 0), tower_rows - 1)
-        while mid in labels and mid + 1 < tower_rows:
+        mid = chev_rows + round((1.0 - (block.y0 + block.y1) / 2) * tower_rows)
+        mid = min(max(mid, chev_rows), zero_row - 1)
+        while mid in labels and mid + 1 < zero_row:
             mid += 1
         placed = min(100.0, block.signed_bps / 100)
         suffix = "" if block.signed_bps >= 10_000 else f" ({placed:g}%)"
@@ -212,7 +231,7 @@ def _attach_labels(
     labels[zero_row] = "$0"
     if tower.layers:
         top_label = f"top {format_money_compact(tower.ymap.max_dollars)}"
-        labels.setdefault(0, top_label)
+        labels.setdefault(chev_rows, top_label)
     if ret_rows:
         labels[zero_row + 1] = "Retention"
     labels[zero_row + ret_rows + 1] = "(not to scale)" if tower.ymap.gamma != 1.0 else ""

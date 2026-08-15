@@ -1,8 +1,17 @@
 """ASCII preview: structural checks, driven only by the shared geometry."""
 
+from datetime import date
 from pathlib import Path
 
-from towerkit.model import load_program
+from towerkit.model import (
+    Layer,
+    Line,
+    Participant,
+    Period,
+    Placement,
+    Program,
+    load_program,
+)
 from towerkit.render.ascii import UNPLACED, ZERO, ansi256, render_ascii
 from towerkit.theme import load_theme
 
@@ -13,6 +22,59 @@ def render(colour: bool = False, **kw) -> str:
     program = load_program(SAMPLE)
     theme = load_theme()
     return render_ascii(program, theme, colour=colour, **kw)
+
+
+def _wc_program(*layers: Layer) -> Program:
+    return Program(
+        insured="T",
+        program="T",
+        placement=Placement.BOUND,
+        period=Period(start=date(2026, 1, 1), end=date(2027, 1, 1)),
+        lines=[Line(id="wc", name="Workers Compensation")],
+        layers=list(layers),
+    )
+
+
+def test_no_statutory_cover_reserves_no_extra_row() -> None:
+    """The chevron band must cost nothing when absent. Nothing else in this
+    file pins an absolute row index — every other test locates rows
+    dynamically or checks substring presence — so without this, an
+    unconditionally reserved top row would silently insert a blank row at
+    the top of every chart (grid sizing compensates so total line count
+    stays 26, which is why this checks row 0's content, not the line count).
+
+    Row 0 of the SAMPLE render is fully covered by the top layer, so it must
+    never be blank; an unconditionally reserved chevron row renders row 0 as
+    an empty string (nothing drawn into it, then rstripped away).
+    """
+    out = render(height=26)
+    lines = out.splitlines()
+    assert len(lines) == 26
+    assert lines[0] != ""
+    assert "top" in lines[0]
+
+
+def test_statutory_draws_a_caret_row() -> None:
+    program = _wc_program(
+        Layer(
+            id="wc-stat", name="Workers Compensation", applies_to=["wc"],
+            attach=0, limit=0, statutory=True,
+            participants=[Participant(carrier="Travelers", share_bps=10_000)],
+        )
+    )
+    out = render_ascii(program, load_theme(), colour=False)
+    assert "^" in out.splitlines()[0]
+
+
+def test_no_caret_row_without_statutory_cover() -> None:
+    program = _wc_program(
+        Layer(
+            id="gl-primary", name="Primary", applies_to=["wc"],
+            attach=0, limit=5_000_000,
+            participants=[Participant(carrier="A", share_bps=10_000)],
+        )
+    )
+    assert "^" not in render_ascii(program, load_theme(), colour=False)
 
 
 class TestStructure:

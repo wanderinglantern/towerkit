@@ -272,6 +272,60 @@ class TestLayersSheet:
             assert len(editor.session.program.layers) == n
             assert editor.session.undo()  # both edits were session-backed
 
+    async def test_limit_edits_ignored_while_statutory(self, sample_copy) -> None:
+        """The layers SHEET is a second writer of attach/limit alongside the
+        layer form's f-layer-attach/f-layer-limit inputs — it needs the same
+        statutory guard or a sheet edit slips a nonzero limit past the
+        invariant that keeps statutory cover out of every dollar total."""
+        from textual.coordinate import Coordinate
+
+        app = TowerkitApp(path=sample_copy)
+        async with app.run_test(size=(180, 50)) as pilot:
+            editor = app.screen
+            editor.session.mutate(
+                lambda p: (
+                    setattr(editor._layer("umbrella"), "statutory", True),
+                    setattr(editor._layer("umbrella"), "attach", 0),
+                    setattr(editor._layer("umbrella"), "limit", 0),
+                )
+            )
+            await pilot.press("v")
+            await pilot.pause()
+            sheet = editor.query_one("#layers-sheet", SheetTable)
+            row = sheet.get_row_index("umbrella")
+            sheet.focus()
+            sheet.move_cursor(row=row, column=3)  # the limit column
+            await pilot.pause()
+            sheet._open_editor(Coordinate(row, 3))
+            await pilot.pause()
+            cell = editor.query_one(SheetCellEditor)
+            cell.value = "5m"
+            await pilot.press("enter")
+            await pilot.pause()
+            assert editor._layer("umbrella").limit == 0
+
+    async def test_layers_sheet_shows_statutory_in_limit_column(self, sample_copy) -> None:
+        """money_text(0) reads as '—' (no data) — wrong for a statutory
+        layer, where the missing limit is a design choice, not an absence."""
+        app = TowerkitApp(path=sample_copy)
+        async with app.run_test(size=(180, 50)) as pilot:
+            editor = app.screen
+            editor.session.mutate(
+                lambda p: (
+                    setattr(editor._layer("umbrella"), "statutory", True),
+                    setattr(editor._layer("umbrella"), "attach", 0),
+                    setattr(editor._layer("umbrella"), "limit", 0),
+                )
+            )
+            await pilot.press("v")
+            await pilot.pause()
+            sheet = editor.query_one("#layers-sheet", SheetTable)
+            row = sheet.get_row_index("umbrella")
+            from textual.coordinate import Coordinate
+
+            cell_value = sheet.get_cell_at(Coordinate(row, 3))
+            assert str(cell_value) == "Statutory"
+
     async def test_name_cells_carry_layer_name_suggester(self, sample_copy) -> None:
         app = TowerkitApp(path=sample_copy)
         async with app.run_test(size=(180, 50)) as pilot:

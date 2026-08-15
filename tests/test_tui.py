@@ -11,7 +11,7 @@ import shutil
 from pathlib import Path
 
 import pytest
-from textual.widgets import Button, Input
+from textual.widgets import Button, Checkbox, Input
 
 from towerkit.model import dumps_program, load_program
 from towerkit.money import BPS_SCALE
@@ -230,6 +230,65 @@ class TestEditor:
             assert any(
                 d.code == "line-gap" for d in editor.session.diagnostics().errors
             )
+
+    @pytest.mark.asyncio
+    async def test_statutory_checkbox_forces_the_invariant(
+        self, sample_copy, monkeypatch
+    ) -> None:
+        """Checking it must FORCE limit=0 / attach=0, not merely record
+        intent — otherwise the user keeps a limit that is silently invalid,
+        which is the exact failure visible-validation exists to prevent."""
+        monkeypatch.chdir(sample_copy.parent.parent)
+        app = TowerkitApp(path=sample_copy)
+        async with app.run_test(size=(140, 45)) as pilot:
+            editor = app.screen
+            editor.selected = ("layer", "umbrella")
+            await editor._rebuild_detail()
+            await pilot.pause()
+            editor.query_one("#f-layer-statutory", Checkbox).value = True
+            await pilot.pause()
+            layer = editor._layer("umbrella")
+            assert layer.statutory is True
+            assert layer.limit == 0
+            assert layer.attach == 0
+            assert layer.follows_underlying is False
+
+    @pytest.mark.asyncio
+    async def test_unchecking_statutory_clears_the_flag(
+        self, sample_copy, monkeypatch
+    ) -> None:
+        monkeypatch.chdir(sample_copy.parent.parent)
+        app = TowerkitApp(path=sample_copy)
+        async with app.run_test(size=(140, 45)) as pilot:
+            editor = app.screen
+            editor.selected = ("layer", "umbrella")
+            await editor._rebuild_detail()
+            await pilot.pause()
+            checkbox = editor.query_one("#f-layer-statutory", Checkbox)
+            checkbox.value = True
+            await pilot.pause()
+            checkbox.value = False
+            await pilot.pause()
+            assert editor._layer("umbrella").statutory is False
+
+    @pytest.mark.asyncio
+    async def test_limit_edits_ignored_while_statutory(
+        self, sample_copy, monkeypatch
+    ) -> None:
+        monkeypatch.chdir(sample_copy.parent.parent)
+        app = TowerkitApp(path=sample_copy)
+        async with app.run_test(size=(140, 45)) as pilot:
+            editor = app.screen
+            editor.selected = ("layer", "umbrella")
+            await editor._rebuild_detail()
+            await pilot.pause()
+            editor.query_one("#f-layer-statutory", Checkbox).value = True
+            await pilot.pause()
+            limit = editor.query_one("#f-layer-limit")
+            limit.value = "5m"
+            editor._commit_input(limit)
+            await pilot.pause()
+            assert editor._layer("umbrella").limit == 0
 
     @pytest.mark.asyncio
     async def test_undo_key(self, sample_copy, monkeypatch) -> None:
