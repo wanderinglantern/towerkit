@@ -1750,3 +1750,59 @@ class TestSaveFailures:
             assert any(
                 "could not save" in n.message for n in app._notifications
             )
+
+
+class TestExitGuards:
+    @pytest.mark.asyncio
+    async def test_esc_does_not_discard_text_still_sitting_in_a_field(
+        self, sample_copy, monkeypatch
+    ) -> None:
+        monkeypatch.chdir(sample_copy.parent.parent)
+        app = TowerkitApp(path=sample_copy)
+        async with app.run_test(size=(140, 45)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, EditorScreen)
+            field = screen.query_one("#f-insured", Input)
+            field.focus()
+            await pilot.pause()
+            field.value = "Acme Holdings"
+
+            # dirty is still False here: the text has not reached the model
+            assert not screen.session.dirty
+
+            await pilot.press("escape")
+            await pilot.pause()
+
+            assert app.is_running, "esc left the editor with typed text unsaved"
+            assert screen.session.program.insured == "Acme Holdings"
+
+    @pytest.mark.asyncio
+    async def test_ctrl_q_asks_before_discarding_unsaved_edits(
+        self, sample_copy, monkeypatch
+    ) -> None:
+        monkeypatch.chdir(sample_copy.parent.parent)
+        app = TowerkitApp(path=sample_copy)
+        async with app.run_test(size=(140, 45)) as pilot:
+            screen = app.screen
+            assert isinstance(screen, EditorScreen)
+            screen.session.mutate(lambda p: setattr(p, "insured", "Mine"))
+
+            await pilot.press("ctrl+q")
+            await pilot.pause()
+
+            assert app.is_running, "ctrl+q quit past the unsaved-changes prompt"
+            assert "ExitChoiceModal" in [type(s).__name__ for s in app.screen_stack]
+
+    @pytest.mark.asyncio
+    async def test_ctrl_q_still_quits_when_there_is_nothing_to_lose(
+        self, sample_copy, monkeypatch
+    ) -> None:
+        monkeypatch.chdir(sample_copy.parent.parent)
+        app = TowerkitApp(path=sample_copy)
+        async with app.run_test(size=(140, 45)) as pilot:
+            assert isinstance(app.screen, EditorScreen)
+
+            await pilot.press("ctrl+q")
+            await pilot.pause()
+
+            assert not app.is_running

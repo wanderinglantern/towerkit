@@ -48,3 +48,18 @@ class TowerkitApp(App):
             )
         else:
             self.push_screen(ProgramBrowser(theme_path=self.theme_path))
+
+    async def action_quit(self) -> None:
+        """ctrl+q must not be a shortcut past the unsaved-changes prompt.
+
+        Textual binds it straight to `App.exit`, so a whole session of tower
+        edits died on one keypress — and the built-in ctrl+c toast actively
+        advertises it ("Press ctrl+q to quit the app"). Routing it into the
+        editor's own esc handler makes both keys mean the same thing, and
+        makes that toast honest.
+        """
+        screen = self.screen
+        if isinstance(screen, EditorScreen) and screen.session.dirty:
+            await screen.action_back()
+            return
+        self.exit()

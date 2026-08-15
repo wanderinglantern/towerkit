@@ -1939,10 +1939,14 @@ class EditorScreen(Screen):
             # esc from the layers sheet returns to the form, never exits
             await self.action_layers_sheet()
             return
+        # Drain FIRST. Text sitting in a focused Input has not reached the
+        # model yet, so `dirty` cannot see it — checking dirty before
+        # draining is exactly how typed-but-uncommitted edits used to
+        # vanish on esc, with no prompt and no undo.
+        self._drain_focused_input()
         if not self.session.dirty:
             self.dismiss_editor()
             return
-        self._drain_focused_input()
 
         def on_choice(choice: str | None) -> None:
             if choice == "discard":
