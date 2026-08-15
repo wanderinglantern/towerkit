@@ -284,12 +284,23 @@ def _check_line_stack(program: Program, line_id: str, diags: Diagnostics) -> Non
         # A statutory bar owns its column floor to top. Base/gap/overlap are
         # dollar questions and do not apply; the only error possible here is
         # something ELSE trying to share the column, which would draw straight
-        # through the full-height bar.
-        if stack:
+        # through the full-height bar. That "something else" can be a dollar
+        # layer OR a second statutory layer — two statutory layers stacked on
+        # one line silently draw on top of each other with no dollar layer
+        # in sight, so len(statutory) > 1 has to trip this too.
+        if stack or len(statutory) > 1:
+            if stack:
+                detail = f"{stack[0].name!r} also covers {line.name}"
+            else:
+                other_names = ", ".join(repr(ly.name) for ly in statutory[1:])
+                detail = (
+                    f"so does {other_names} — only one statutory layer may cover "
+                    f"{line.name}"
+                )
             diags.error(
                 "statutory-line-shared",
                 f"{line_id}: {statutory[0].name} is statutory and covers the whole "
-                f"column, but {stack[0].name!r} also covers {line.name}",
+                f"column, but {detail}",
                 ("line", line_id),
             )
         return

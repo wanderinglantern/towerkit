@@ -365,6 +365,16 @@ class TestStatutoryRules:
         )
         assert "statutory-line-shared" in codes(program)
 
+    def test_two_statutory_layers_on_one_line_is_an_error(self) -> None:
+        """Two statutory layers stacked on one line have no dollar layer to
+        trip the shared-column rule the old way — both still (y0, y1) = (0, 1)
+        and silently draw over each other, so the second one must trip it too."""
+        program = _wc_program(
+            _stat(id="wc-stat", name="WC Statutory"),
+            _stat(id="wc-stat-2", name="WC Statutory (dup)"),
+        )
+        assert "statutory-line-shared" in codes(program)
+
     def test_statutory_unplaced_is_reported_as_a_share_not_dollars(self) -> None:
         program = _wc_program(
             _stat(participants=[Participant(carrier="Travelers", share_bps=6_000)])
