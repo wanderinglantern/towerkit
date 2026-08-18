@@ -1,5 +1,6 @@
 """Schematic worksheet: quantizer first (pure), then cell content (Task 4)."""
 
+import re
 import xml.etree.ElementTree as ET
 import zipfile
 from datetime import date
@@ -25,6 +26,7 @@ from towerkit.render.schematic_xlsx import (
     LINE_ROW,
     SPACER_UNITS,
     TOTAL_ROWS,
+    SchematicOverlapError,
     _label_spans,
     add_schematic_sheet,
     label_row_floor,
@@ -36,6 +38,7 @@ from towerkit.render.schematic_xlsx import (
 )
 from towerkit.render.table_xlsx import _argb, finalize_workbook
 from towerkit.theme import load_theme
+from towerkit.validate import validate_program
 
 REPO = Path(__file__).parent.parent
 _SML_NS = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
@@ -892,3 +895,168 @@ class TestStatutory:
         rows = quantize_boundaries(ys)
         assert rows[1.0] == TOTAL_ROWS
         assert max(rows.values()) == TOTAL_ROWS
+
+
+# --- statutory sharing a line of cover -------------------------------------
+#
+# A statutory layer is drawn floor-to-top over its WHOLE column (layout.py's
+# `y0, y1 = 0.0, 1.0`, off the dollar scale). A dollar-limited layer on the
+# SAME line is drawn in the same column at its own y-map height, so the two
+# rects genuinely overlap. Before the guard this reached openpyxl as
+# `AttributeError: 'MergedCell' object attribute 'value' is read-only` from
+# inside `_block` — and, when the two rects coincided exactly, as no error at
+# all and a silently overpainted deliverable. validate.py already names this
+# shape `statutory-line-shared`; the renderer now refuses it too, because
+# `add_schematic_sheet` is a library entry point that bookkit and the MCP
+# server reach without going through the CLI's validation gate.
+
+_WC = Line(id="wc", name="Workers Compensation")
+_GL = Line(id="gl", name="General Liability")
+
+
+def _part_a() -> Layer:
+    return Layer(
+        id="wc-a", name="WC Part A", applies_to=["wc"], attach=0, limit=0,
+        statutory=True,
+        participants=[Participant(carrier="Travelers", share_bps=10_000)],
+    )
+
+
+def _part_b() -> Layer:
+    return Layer(
+        id="wc-b", name="Employers Liability", applies_to=["wc"], attach=0,
+        limit=1_000_000,
+        participants=[Participant(carrier="Travelers", share_bps=10_000)],
+    )
+
+
+def _gl_primary() -> Layer:
+    return Layer(
+        id="gl-p", name="Primary GL", applies_to=["gl"], attach=0,
+        limit=2_000_000,
+        participants=[Participant(carrier="Chubb", share_bps=10_000)],
+    )
+
+
+def _casualty(layers: list[Layer], lines: list[Line]) -> Program:
+    return Program(
+        insured="T", program="Casualty", placement=Placement.BOUND,
+        period=Period(start=date(2026, 1, 1), end=date(2027, 1, 1)),
+        lines=lines, layers=layers,
+    )
+
+
+def _render(program: Program, theme) -> Workbook:
+    wb = Workbook()
+    wb.remove(wb.active)
+    add_schematic_sheet(wb, program, theme)
+    return wb
+
+
+def _drawn_cells(wb: Workbook) -> int:
+    ws = wb.worksheets[0]
+    return sum(
+        1 for row in ws.iter_rows() for c in row
+        if c.value is not None or (c.fill is not None and c.fill.patternType)
+    )
+
+
+class TestStatutorySharedLine:
+    def test_part_a_plus_part_b_plus_gl_refuses_by_name(self, marsh) -> None:
+        """The reported crash, exactly: statutory + a second layer on the
+        same line + a second line of cover. The second line is what makes
+        the two wc rects DIFFERENT heights (a second dollar breakpoint
+        enters the global y-map), so the inner rect's anchor lands inside
+        the outer rect's merge rather than on it."""
+        program = _casualty([_part_a(), _part_b(), _gl_primary()], [_WC, _GL])
+        with pytest.raises(SchematicOverlapError) as excinfo:
+            _render(program, marsh)
+        message = str(excinfo.value)
+        assert "Employers Liability" in message  # the block being drawn
+        assert "WC Part A" in message            # the block already there
+        assert re.search(r"overlap at [A-Z]+\d+", message), message
+
+    def test_part_a_plus_part_b_alone_refuses_too(self, marsh) -> None:
+        """Without a second line the two wc rects quantize to the SAME
+        range, so openpyxl never complained — `merge_cells` is idempotent
+        and (r0, c0) stays the anchor — and the sheet shipped with one
+        block painted straight over the other. Same invalid geometry, so
+        the same refusal: a wrong client deliverable is worse than none."""
+        program = _casualty([_part_a(), _part_b()], [_WC])
+        with pytest.raises(SchematicOverlapError):
+            _render(program, marsh)
+
+    def test_the_refusal_matches_what_the_validator_already_says(self) -> None:
+        """The renderer refuses exactly the shape validate.py names, so the
+        message's `towerctl validate` pointer leads somewhere useful."""
+        program = _casualty([_part_a(), _part_b(), _gl_primary()], [_WC, _GL])
+        codes = {d.code for d in validate_program(program).errors}
+        assert "statutory-line-shared" in codes
+
+    @pytest.mark.parametrize(
+        ("name", "layers", "lines"),
+        [
+            ("statutory alone", [_part_a()], [_WC]),
+            ("statutory + a second line", [_part_a(), _gl_primary()], [_WC, _GL]),
+            ("two layers on one line, no statutory",
+             [_part_b(), _gl_primary()], [_WC, _GL]),
+        ],
+    )
+    def test_neighbouring_shapes_still_render(self, marsh, name, layers, lines) -> None:
+        """The guard must be reachable ONLY by real overlap. These three are
+        the shapes one edit away from the crash; each must still produce a
+        drawn tower."""
+        wb = _render(_casualty(layers, lines), marsh)
+        assert _drawn_cells(wb) > 0, name
+
+    def test_a_clean_program_never_trips_the_guard(self, program, marsh) -> None:
+        """`occupied` now carries a label per cell and every `_block` call
+        checks it; the ordinary multi-line, multi-layer program with
+        retentions must be untouched by that."""
+        assert _drawn_cells(_render(program, marsh)) > 0
+
+    def test_overlap_below_a_free_anchor_is_caught_too(self, marsh) -> None:
+        """The guard scans the WHOLE range, not just the anchor cell — and
+        this is the shape that needs it. A blanket primary spanning both
+        lines is drawn FIRST (bottom half of both columns), then the
+        statutory bar's own rect runs the full height of the wc column:
+        its anchor (top-left) is free, and the collision only starts
+        halfway down.
+
+        Unguarded, this one does not even raise. `ws.cell(r0, c0)` finds a
+        real Cell, so openpyxl's read-only MergedCell never comes up — the
+        render "succeeds" and writes a workbook with two OVERLAPPING merged
+        ranges, which Excel opens as damaged or silently repairs. That is
+        strictly worse than the reported crash, so an anchor-only check
+        would not be enough."""
+        blanket = Layer(
+            id="blk", name="Blanket Primary", applies_to=["wc", "gl"],
+            attach=0, limit=1_000_000,
+            participants=[Participant(carrier="Chubb", share_bps=10_000)],
+        )
+        excess = Layer(
+            id="gl-x", name="GL Excess", applies_to=["gl"],
+            attach=1_000_000, limit=1_000_000,
+            participants=[Participant(carrier="AIG", share_bps=10_000)],
+        )
+        program = _casualty([blanket, excess, _part_a()], [_WC, _GL])
+        layout = build_layout(program)
+        rows = quantize_boundaries(
+            y_boundaries(layout), label_spans=_label_spans(layout, program)
+        )
+        col_of, col_of_close = line_column_slots(layout, x_boundaries(layout))
+        drawn: dict[tuple[int, int], str] = {}
+        anchors: dict[str, tuple[int, int]] = {}
+        for block in layout.participants:
+            for rect in block.rects:
+                r0, r1 = sheet_rows(rows, rect.y0, rect.y1)
+                c0, c1 = col_of[rect.x0], col_of_close[rect.x1] - 1
+                anchors.setdefault(block.layer_id, (r0, c0))
+                for r in range(r0, r1 + 1):
+                    for c in range(c0, c1 + 1):
+                        drawn.setdefault((r, c), block.layer_id)
+        # the premise: the statutory bar's anchor is NOT the colliding cell
+        assert drawn[anchors["wc-a"]] == "wc-a"
+        with pytest.raises(SchematicOverlapError) as excinfo:
+            _render(program, marsh)
+        assert "Blanket Primary" in str(excinfo.value)

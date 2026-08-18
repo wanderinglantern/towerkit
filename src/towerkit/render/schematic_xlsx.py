@@ -439,7 +439,7 @@ def add_schematic_sheet(
     headings = heading_blocks(layout.participants)
     layer_by_id = {ly.layer_id: ly for ly in layout.layers}
 
-    occupied: set[tuple[int, int]] = set()
+    occupied: dict[tuple[int, int], str] = {}
 
     for index, block in enumerate(layout.participants):
         owner = layer_by_id[block.layer_id]
@@ -491,6 +491,7 @@ def add_schematic_sheet(
                 fill=fill,
                 border=border,
                 font=Font(name=chrome.font, size=8, color=_argb(text_colour)),
+                label=owner.name,
                 shrink=shrink if rect is anchor_rect else False,
                 occupied=occupied,
             )
@@ -509,6 +510,7 @@ def add_schematic_sheet(
                 fill=fill,
                 border=Border(left=edge, right=edge, top=edge, bottom=edge),
                 font=Font(name=chrome.font, size=7, color=_argb(chrome.ink)),
+                label=f"{retention.type} retention",
                 occupied=occupied,
             )
 
@@ -522,6 +524,7 @@ def add_schematic_sheet(
             fill=None,
             border=Border(),
             font=Font(name=chrome.font, size=8, color=_argb(chrome.ink)),
+            label="statutory chevron band",
             occupied=occupied,
         )
 
@@ -584,6 +587,53 @@ def _add_border_edge(ws: Worksheet, row: int, col: int, *, side: str, edge: Side
     cell.border = Border(**sides)
 
 
+class SchematicOverlapError(RuntimeError):
+    """Two blocks quantized onto the same worksheet cell.
+
+    The tower's rects tile by construction (the module docstring's
+    per-BOUNDARY quantization), so this is never a rounding artefact: it
+    means the LAYOUT itself has two shapes drawn over each other, which
+    only invalid program data produces. The known source is a statutory
+    layer — which owns its column floor-to-top, y 0..1, off the dollar
+    scale — sharing a line of cover with a dollar-limited layer, exactly
+    the `statutory-line-shared` error validate.py already names.
+
+    Refusing here is deliberate. openpyxl's own failure for this is
+    `AttributeError: 'MergedCell' object attribute 'value' is read-only`
+    from deep inside `_block`, which names neither block nor cell; and
+    when the two rects happen to be IDENTICAL (a statutory bar and a
+    same-line primary on a single-line program quantize to the same
+    range) openpyxl does not fail at all — it silently paints one block
+    over the other and ships a wrong client deliverable. Both outcomes
+    are worse than a refusal that says which two blocks collided, where."""
+
+
+def _overlap_guard(
+    occupied: dict[tuple[int, int], str],
+    label: str,
+    r0: int,
+    r1: int,
+    c0: int,
+    c1: int,
+) -> None:
+    """Refuse BEFORE `ws.merge_cells` mutates anything: a raise from
+    half-merged state would leave the caller's workbook inconsistent."""
+    for r in range(r0, r1 + 1):
+        for c in range(c0, c1 + 1):
+            previous = occupied.get((r, c))
+            if previous is None:
+                continue
+            coord = f"{get_column_letter(c)}{r}"
+            raise SchematicOverlapError(
+                f"schematic blocks overlap at {coord}: {label!r} would draw "
+                f"over {previous!r}, which already occupies that cell. Two "
+                f"blocks cannot share a cell, so this program's geometry is "
+                f"invalid — run `towerctl validate` for the diagnosis (a "
+                f"statutory layer owns its whole column, so no other layer "
+                f"may cover the same line of cover)."
+            )
+
+
 def _block(
     ws: Worksheet,
     rect: Rect,
@@ -595,16 +645,23 @@ def _block(
     fill: PatternFill | None,
     border: Border,
     font: Font,
+    label: str,
     shrink: bool = False,
-    occupied: set[tuple[int, int]] | None = None,
+    occupied: dict[tuple[int, int], str] | None = None,
 ) -> None:
     """One rect → one merged range. MUST merge BEFORE styling non-anchor
     cells: openpyxl's merge_cells() replaces every non-anchor cell with a
     fresh MergedCell (worksheet.py's _clean_merge_range), so any fill/value
     set on those coordinates first is discarded — merge first, style after,
-    the same order render_table_sheet already uses in table_xlsx.py."""
+    the same order render_table_sheet already uses in table_xlsx.py.
+
+    `label` names this block for `SchematicOverlapError`; `occupied` both
+    feeds `_gridlines` and carries the previous occupant's label, so a
+    collision can name BOTH sides."""
     r0, r1 = sheet_rows(rows, rect.y0, rect.y1)
     c0, c1 = col_of[rect.x0], col_of_close[rect.x1] - 1
+    if occupied is not None:
+        _overlap_guard(occupied, label, r0, r1, c0, c1)
     if (r0, c0) != (r1, c1):  # a 1×1 block is already one cell; no merge
         ws.merge_cells(start_row=r0, start_column=c0, end_row=r1, end_column=c1)
     anchor = ws.cell(row=r0, column=c0, value=text or None)
@@ -621,7 +678,7 @@ def _block(
                 cell.fill = fill
             cell.border = border
             if occupied is not None:
-                occupied.add((r, c))
+                occupied[(r, c)] = label
 
 
 def _title(ws: Worksheet, program: Program, chrome: Chrome, *, last_col: int) -> None:
@@ -745,7 +802,7 @@ def _gridlines(
     rows: dict[float, int],
     chrome: Chrome,
     last_col: int,
-    occupied: set[tuple[int, int]],
+    occupied: dict[tuple[int, int], str],
 ) -> None:
     """Faint hairline top border at every quantized attachment boundary —
     the SAME breakpoints `_axis` labels — but only through EMPTY grid
