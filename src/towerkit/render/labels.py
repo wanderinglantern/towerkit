@@ -44,6 +44,18 @@ def carrier_only_label(carrier: str) -> str:
     return carrier
 
 
+def is_pending(layer: LayerBlock) -> bool:
+    """A layer nobody has signed at all: "To be placed", distinct from a
+    partially-open remainder. This is a claim about the world, and it must be
+    decided ONCE — `unplaced_label` below renders the two cases and this
+    predicate chooses between them, so a renderer that re-derives it can
+    disagree with one that does not.
+
+    It lives here because this module is the authority every renderer quotes.
+    `render/web.py` and `render/mpl_program.py` both call it."""
+    return layer.signed_bps == 0
+
+
 def unplaced_label(share_bps: int, pending: bool) -> str:
     """Pending layer (nothing signed): 'To be placed'. Partially-open
     remainder: the open share."""

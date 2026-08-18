@@ -37,6 +37,7 @@ from .labels import (
     carrier_only_label,
     group_label,
     heading_blocks,
+    is_pending,
     layer_heading,
     layer_terms,
     participant_label,
@@ -83,18 +84,6 @@ NOT_TO_SCALE_CAVEAT = (
 )
 
 
-def is_pending(layer: LayerBlock) -> bool:
-    """A layer nobody has signed at all: 'To be placed', distinct from a
-    partially-open remainder. This is a claim about the world and must be
-    decided ONCE — `unplaced_label(..., pending)` renders the two cases and
-    this predicate chooses between them.
-
-    It belongs beside that label in `labels.py`; it lives here only because
-    slice 1 may not touch existing files. `mpl_program.py:128` still spells
-    the same expression inline — when that module is next edited it should
-    call this instead of re-deriving it.
-    """
-    return layer.signed_bps == 0
 
 
 @dataclass(frozen=True)
