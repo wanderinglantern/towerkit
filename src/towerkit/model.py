@@ -243,7 +243,15 @@ class Program(_Model):
     program: str = Field(min_length=1)
     placement: Placement
     period: Period
-    currency: str = "USD"
+    # 3 letters, an ISO 4217 code. The bound is on the MODEL and not only in
+    # `program.schema.json` because that is the difference between a write
+    # being refused and a bad file being written and then reported: currency
+    # is writable over MCP (Grant struck it from the denylist), the schema has
+    # carried `minLength: 3, maxLength: 3` from the start, and with no rule
+    # here `program_edit_field(field="currency", value="EU")` wrote a file
+    # `towerctl validate` exits 1 on. The hard tier (`loads_program`) is what
+    # blocks a write, and it only ever sees the model.
+    currency: str = Field(min_length=3, max_length=3, default="USD")
     render: RenderSettings | None = None
     lines: list[Line] = Field(default_factory=list)
     layers: list[Layer] = Field(default_factory=list)

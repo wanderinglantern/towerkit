@@ -1632,6 +1632,65 @@ class TestEditField:
         # into the validator's warnings.
         assert "currency" not in str(out["warnings"])
 
+    def test_a_currency_the_schema_would_refuse_is_refused_before_the_write(
+        self, roots
+    ) -> None:
+        """`currency` is writable (Grant struck it from the denylist) and the
+        schema has always carried `minLength: 3, maxLength: 3`. The model
+        carried no rule, so `'EU'` was written and the response said
+        `errors: []` while `towerctl validate` exited 1 with `schema: currency:
+        'EU' is too short`. The rule is on the MODEL now, which is the tier
+        that BLOCKS, and the refusal names a length rather than the value's
+        own repr.
+
+        Mutation drill (2026-08-19): dropped `min_length=3, max_length=3` from
+        `Program.currency` in model.py. Failed with `Failed: DID NOT RAISE
+        ValueError`. Restored.
+        """
+        programs = Programs(roots)
+        _program_read(programs, "atomic-2026")
+        for bad in ("EU", "Euro", "\u20ac"):
+            with pytest.raises(ValueError) as caught:
+                _program_edit_field(programs, "atomic-2026", "program", "currency", bad, "USD")
+            assert caught.value.code == "bad_value"
+            assert "exactly 3 characters" in str(caught.value)
+        assert _program_read(programs, "atomic-2026")["currency"] == "USD"
+
+    def test_a_write_reports_what_towerctl_validate_reports(self, roots) -> None:
+        """`_write` computed its `errors` from `validate_program`, which does
+        NOT run the JSON Schema pass, so a write could answer `errors: []`
+        about a file `towerctl validate` exits 1 on. `_program_check` had been
+        repaired to `validate_file` the round before and `_write` had not, so
+        the two tools disagreed about the same file.
+
+        The field is added to the MODEL only, so the packaged schema has never
+        heard of it — the same `brokerRef` reproduction the schema derivation
+        was built for, driven through the write path.
+
+        Mutation drill (2026-08-19): put `validate_program(load_program(path))`
+        back in `_written_diagnostics`. Failed with `AssertionError: assert []
+        == [{'code': 'schema', ...}]`. Restored.
+        """
+        from pydantic import Field as PydanticField
+        from test_serializer_derived import model_field
+
+        from towerkit.model import Layer
+
+        with model_field(
+            Layer, "broker_ref", str | None, PydanticField(alias="brokerRef", default=None)
+        ):
+            with pytest.MonkeyPatch.context() as patch:
+                patch.setattr(mcpsurface, "SURFACE", mcpsurface.build_surface())
+                programs = Programs(roots)
+                _program_read(programs, "atomic-2026")
+                out = _program_edit_field(
+                    programs, "atomic-2026", "layer", "brokerRef", "x", None, target="xs-1"
+                )
+            # The write and the check are the same verdict, or a client cannot
+            # tell which of the two tools to believe.
+            assert out["errors"] == _program_check(programs, "atomic-2026")["errors"]
+            assert [d["code"] for d in out["errors"]] == ["schema"]
+
     def test_an_id_less_row_needs_its_row_guard_and_honours_it(self, roots) -> None:
         """An index is a position in a list the caller read a moment ago, and
         nothing about the position says the list has not moved. The guard is

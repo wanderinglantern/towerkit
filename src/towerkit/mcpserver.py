@@ -358,15 +358,57 @@ def _write(
     ref = write_ref()
     snapshot(path, ref, pre_image)
     programs.note(path)
-    diags = validate_program(program)
     return {
         "wrote": name,
         "summary": summary,
         "write_ref": ref,
         "resync": run_hook(path),
-        "errors": _diag(diags.errors),
-        "warnings": _diag(diags.warnings),
+        **_written_diagnostics(path),
     }
+
+
+def _written_diagnostics(path: Path) -> dict[str, Any]:
+    """What `towerctl validate` would say about the file just written.
+
+    `validate_file`, not `validate_program`, and the difference is the JSON
+    Schema pass. Reproduced 2026-08-19 on the write path (`_program_check` had
+    already been repaired the same way and this had not):
+    `program_edit_field(kind="program", field="currency", value="EU")` came
+    back `errors: []` with `"currency": "EU"` on disk, and `towerctl validate`
+    on that same file exited 1 with `schema: currency: 'EU' is too short`. A
+    caller cannot act on a verdict the CLI contradicts, and the write path is
+    the one place the caller is TOLD the verdict.
+
+    A schema error does NOT block the write, deliberately, and this is the
+    place to say why:
+
+    - The soft tier exists because a tower under construction is invalid by
+      construction. A schema error is still a statement about the file's
+      CONTENT, and content errors have never blocked.
+    - Blocking would hand the veto to `program.schema.json`, which is the
+      least-derived document in the system: its property set and required
+      lists are reconciled against `model.py` by `schemagen`, but its
+      `minLength`/`minimum`/`pattern` keywords are hand-authored and checked
+      against nothing. A drift there would go from "the file already written
+      is invalid" to "towerkit cannot write its own file at all".
+    - Structural impossibility is already blocked, one tier up:
+      `loads_program(text)` refuses anything the model cannot hold. When a
+      schema constraint genuinely must be fatal, the repair is to put it on
+      the MODEL — which is what `Program.currency`'s `min_length=3` now does,
+      so `'EU'` is refused before anything is written rather than reported
+      after.
+
+    Cost, stated: a client that ignores `errors` can still leave a file on
+    disk that `towerctl validate` exits 1 on. That was already true of every
+    semantic error; what changes is that the response now says so instead of
+    claiming `errors: []`. Silence was the defect, not the write.
+
+    Second cost: the file is read and parsed twice more (once as plain JSON
+    for the schema, once with Decimal floats for the model). One extra parse
+    of a file measured in kilobytes, per write, to stop lying about it.
+    """
+    _program, diags = validate_file(path)
+    return {"errors": _diag(diags.errors), "warnings": _diag(diags.warnings)}
 
 
 def _reason(exc: Exception) -> str:
@@ -1121,14 +1163,15 @@ def _program_create(
     path.parent.mkdir(parents=True, exist_ok=True)
     _atomic_write(path, text)
     programs.note(path)
-    diags = validate_program(fresh)
     return {
         "created": name,
         "file": str(path),
         "lines": [ln.id for ln in fresh.lines],
         "resync": run_hook(path),
-        "errors": _diag(diags.errors),
-        "warnings": _diag(diags.warnings),
+        # The same verdict `_write` gives, for the same reason: a create is a
+        # write, and a caller told `errors: []` by one call and contradicted by
+        # `towerctl validate` cannot tell which surface to believe.
+        **_written_diagnostics(path),
     }
 
 
@@ -1146,15 +1189,13 @@ def _program_clone_renewal(programs: Programs, source: str, dest: str) -> dict[s
     dest_path.parent.mkdir(parents=True, exist_ok=True)
     _atomic_write(dest_path, text)
     programs.note(dest_path)
-    diags = validate_program(clone)
     return {
         "created": dest,
         "from": source,
         "file": str(dest_path),
         "period": _period(clone),
         "resync": run_hook(dest_path),
-        "errors": _diag(diags.errors),
-        "warnings": _diag(diags.warnings),
+        **_written_diagnostics(dest_path),
     }
 
 

@@ -28,7 +28,11 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 
-from towerkit.schemagen import dumps_schema, sync_document  # noqa: E402
+from towerkit.schemagen import (  # noqa: E402
+    SchemaDerivationError,
+    dumps_schema,
+    sync_document,
+)
 
 COPIES = (
     REPO / "schema" / "program.schema.json",
@@ -39,7 +43,14 @@ COPIES = (
 def main(argv: list[str]) -> int:
     check = "--check" in argv
     source = json.loads(COPIES[0].read_text("utf-8"))
-    wanted = dumps_schema(sync_document(source))
+    try:
+        wanted = dumps_schema(sync_document(source))
+    except SchemaDerivationError as exc:
+        # Not a stack trace. This is the branch where the generator REFUSES to
+        # guess — a hand-authored fact contradicts the model, or a shape needs a
+        # `$def` nobody has written — and the message is the whole instruction.
+        print(f"cannot derive: {exc}", file=sys.stderr)
+        return 1
 
     stale = [path for path in COPIES if path.read_text("utf-8") != wanted]
     if not stale:

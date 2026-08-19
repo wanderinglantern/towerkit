@@ -150,7 +150,12 @@ def test_a_new_money_field_joins_the_never_a_float_guard() -> None:
 def test_a_new_model_field_is_writable_over_mcp_with_no_connector_edit(tmp_path) -> None:
     """The verifier's reproduction, end to end. `_program_edit_field` returned
     a write_ref and an empty `errors` list for a value that reached neither the
-    file nor the next `program_read`."""
+    file nor the next `program_read`.
+
+    Mutation drill (2026-08-19), for the changed assertion: put
+    `validate_program` back in `mcpserver._written_diagnostics`. Failed with
+    `AssertionError: assert [] == ['schema']`. Restored.
+    """
     from towerkit import mcpserver, mcpsurface
 
     root = tmp_path / "programs"
@@ -176,7 +181,17 @@ def test_a_new_model_field_is_writable_over_mcp_with_no_connector_edit(tmp_path)
                 None,
                 target=load_program(root / "atomic-2026.json").layers[0].id,
             )
-            assert out["errors"] == []
+            # NOT `errors == []`. This test adds the field to the MODEL only,
+            # so the packaged `program.schema.json` — which forbids additional
+            # properties — has never heard of `brokerRef`, and `_write` now runs
+            # the schema pass and says so. That report is the 2026-08-19 repair,
+            # not a regression: a real field addition runs
+            # `tools/sync_schema.py` (and `test_conventions.py` fails until it
+            # does), which is the half a monkeypatched model cannot do. What
+            # this test is about is that the write LANDS with no connector edit,
+            # so the assertion is that nothing else went wrong.
+            assert [d["code"] for d in out["errors"]] == ["schema"]
+            assert "brokerRef" in out["errors"][0]["message"]
 
             assert '"brokerRef"' in (root / "atomic-2026.json").read_text(encoding="utf-8")
             after = mcpserver._program_read(programs, "atomic-2026")

@@ -10,6 +10,8 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+import pytest
+
 REPO = Path(__file__).parent.parent
 
 TUI = REPO / "src" / "towerkit" / "tui"
@@ -292,3 +294,250 @@ def test_every_schema_def_is_mapped_to_a_model_or_declared_a_scalar() -> None:
     sync_document(doc)  # raises on an unmapped $def
     mapped = {p.removeprefix("$defs/") for p in SCHEMA_MODELS if p.startswith("$defs/")}
     assert set(doc["$defs"]) == mapped | set(SCALAR_DEFS)
+
+
+# --- the derivable facts INSIDE a property, not just the property set --------
+#
+# The tests above derive the property SET. Three facts inside it were left
+# hand-maintained, cross-checked by nothing, and each drifts in BOTH
+# directions — proved 2026-08-19 with one-line mutations that all left
+# `tools/sync_schema.py --check` printing "schema is in sync with model.py":
+#
+# - `required` was FILTERED and never added to. A new required field on a
+#   model was not required by the schema; making `Layer.name` optional left
+#   the schema still demanding it.
+# - An EXISTING property was never re-derived, so retyping `Layer.limit` left
+#   the schema describing the old type.
+# - An enum's VALUE LIST was never re-derived, so adding one member to
+#   `Placement` — a one-line change nobody would call a schema change — made
+#   `describe()` advertise a value `program_edit_field` wrote with
+#   `errors: []` and `towerctl validate` then exited 1 on.
+#
+# These four ask the checked-in document the question directly, rather than
+# through `sync_document`, so a bug in the reconciliation fails here by name
+# instead of hiding behind its own output.
+
+
+def _reconcilable_properties():
+    """(where, key, model field info, the checked-in property) for every
+    property `schemagen` derives a type for.
+
+    Skips the two it deliberately does not: a child written INLINE as its own
+    mapped object (`render`), and a field whose disk form is converted
+    (`Participant.share_bps`), both of which are hand-authored entire.
+    """
+    from towerkit.model import disk_fields, disk_form_is_derived
+    from towerkit.schemagen import SCHEMA_MODELS, properties_at
+
+    doc = _schema_document()
+    out = []
+    for pointer, model in SCHEMA_MODELS.items():
+        properties = properties_at(doc, pointer)
+        for key, name, info in disk_fields(model):
+            child = f"{pointer}/properties/{key}" if pointer else f"properties/{key}"
+            if child in SCHEMA_MODELS or not disk_form_is_derived(model, name):
+                continue
+            if key not in properties:
+                continue  # reported by test_every_model_field_has_a_schema_property
+            out.append((pointer or "$", key, model, name, info, properties[key]))
+    return out
+
+
+def _required_lists():
+    """(where, pointer, model, the model's required keys, the schema's)."""
+    from towerkit.model import disk_fields
+    from towerkit.schemagen import SCHEMA_MODELS, _at
+
+    doc = _schema_document()
+    out = []
+    for pointer, model in SCHEMA_MODELS.items():
+        node = _at(doc, pointer)
+        out.append(
+            (
+                pointer or "$",
+                pointer,
+                model,
+                [key for key, _, info in disk_fields(model) if info.is_required()],
+                list(node.get("required", [])),
+            )
+        )
+    return out
+
+
+def test_every_required_model_field_is_required_by_the_schema() -> None:
+    """A field with no default is a key every file must carry, and a schema
+    that does not say so passes files `model.py` refuses to load.
+
+    Mutation drill (2026-08-19): added `mandate: str = Field(min_length=1)` to
+    `Layer`. Failed with `AssertionError: the model requires these and the
+    schema does not: $defs/layer: mandate — run tools/sync_schema.py`.
+    Restored.
+    """
+    missing = [
+        f"{where}: {key}"
+        for where, _pointer, _model, model_required, schema_required in _required_lists()
+        for key in model_required
+        if key not in schema_required
+    ]
+    assert not missing, (
+        "the model requires these and the schema does not: "
+        + ", ".join(missing)
+        + " — run tools/sync_schema.py"
+    )
+
+
+def test_no_schema_required_entry_is_optional_on_the_model() -> None:
+    """The other direction, and the one that needs a human. A schema that
+    demands a key the model defaults REFUSES a file `model.py` loads happily —
+    which is either a leftover from making the field optional, or a deliberate
+    file-format rule, and only a person can say which. `STRICTER_THAN_MODEL`
+    is where the deliberate ones are written down, with the reason.
+
+    Mutation drill (2026-08-19): gave `Layer.name` a default
+    (`Field(min_length=1, default="unnamed")`). Failed with `AssertionError:
+    the schema requires these and the model makes them optional: $defs/layer:
+    name — make the model field required, or declare it in
+    schemagen.STRICTER_THAN_MODEL with the reason`. Restored.
+    """
+    from towerkit.schemagen import STRICTER_THAN_MODEL
+
+    stray = [
+        f"{where}: {key}"
+        for where, pointer, _model, model_required, schema_required in _required_lists()
+        for key in schema_required
+        if key not in model_required and key not in STRICTER_THAN_MODEL.get(pointer, frozenset())
+    ]
+    assert not stray, (
+        "the schema requires these and the model makes them optional: "
+        + ", ".join(stray)
+        + " — make the model field required, or declare it in "
+        "schemagen.STRICTER_THAN_MODEL with the reason"
+    )
+
+
+def _derivable_shape(node: dict) -> dict:
+    """Only the keywords `derive_property` emits, with an enum's VALUES left
+    out — those are the next test's subject, and a property that changed BOTH
+    should say so once per fact."""
+    from towerkit.schemagen import DERIVED_KEYWORDS
+
+    shape = {}
+    for key, value in node.items():
+        if key not in DERIVED_KEYWORDS:
+            continue
+        if key == "enum":
+            shape[key] = "<values checked separately>"
+        elif key == "items" and isinstance(value, dict):
+            shape[key] = _derivable_shape(value)
+        else:
+            shape[key] = value
+    return shape
+
+
+def test_every_schema_property_type_matches_the_model() -> None:
+    """A property the schema already knew was never re-derived, so a retyped
+    model field left the schema describing the old type — and the schema is
+    what decides whether the file towerkit just wrote is valid.
+
+    Mutation drill (2026-08-19): changed `Layer.limit` from
+    `Annotated[int, MONEY]` to `str`. Failed with `AssertionError: schema
+    properties whose type no longer matches the model: $defs/layer: limit is
+    {'type': 'integer'} and the model says {'type': 'string'} — run
+    tools/sync_schema.py`. Restored.
+    """
+    from towerkit.schemagen import derive_property
+
+    wrong = [
+        f"{where}: {key} is {_derivable_shape(existing)} and the model says "
+        f"{_derivable_shape(derive_property(model, name, info))}"
+        for where, key, model, name, info, existing in _reconcilable_properties()
+        if _derivable_shape(existing) != _derivable_shape(derive_property(model, name, info))
+    ]
+    assert not wrong, (
+        "schema properties whose type no longer matches the model: "
+        + ", ".join(wrong)
+        + " — run tools/sync_schema.py"
+    )
+
+
+def test_every_schema_enum_lists_the_models_members() -> None:
+    """Adding a member to an enum is a one-line change nobody calls a schema
+    change, and the schema is the only thing that then refuses it.
+
+    Reproduced 2026-08-19: with `QUOTED = "quoted"` on `Placement`,
+    `describe()` advertised `quoted`, `program_edit_field` wrote it and
+    answered `errors: []`, and `towerctl validate` exited 1 with
+    `placement: 'quoted' is not one of ['bound', 'proposed']`.
+
+    Mutation drill (2026-08-19): added `QUOTED = "quoted"` to `Placement`.
+    Failed with `AssertionError: schema enums that are not the model's
+    members: $: placement lists ['bound', 'proposed'] and the model has
+    ['bound', 'proposed', 'quoted'] — run tools/sync_schema.py`. Restored.
+    """
+    from towerkit.schemagen import derive_property
+
+    wrong = []
+    for where, key, model, name, info, existing in _reconcilable_properties():
+        wanted = derive_property(model, name, info).get("enum")
+        if wanted is None and "enum" not in existing:
+            continue
+        if existing.get("enum") != wanted:
+            wrong.append(
+                f"{where}: {key} lists {existing.get('enum')} and the model has {wanted}"
+            )
+    assert not wrong, (
+        "schema enums that are not the model's members: "
+        + ", ".join(wrong)
+        + " — run tools/sync_schema.py"
+    )
+
+
+def test_a_hand_authored_constraint_the_model_stranded_raises() -> None:
+    """The reconciliation overwrites what it DERIVES and refuses what it would
+    have to judge. A `minLength` left on a property the model retyped to an
+    integer is not a small mess: JSON Schema ignores a keyword that does not
+    apply to the instance type, so it reads as a rule and enforces nothing —
+    and dropping it silently would discard a bound a human chose. The
+    generator says so and lets the maintainer pick.
+
+    Mutation drill (2026-08-19): deleted the `stranded` check from
+    `schemagen.reconcile_property`. Failed with `Failed: DID NOT RAISE
+    SchemaDerivationError`. Restored.
+    """
+    from towerkit.schemagen import SchemaDerivationError, reconcile_property
+
+    with pytest.raises(SchemaDerivationError) as caught:
+        reconcile_property(
+            "$defs/layer:name", {"type": "string", "minLength": 1}, {"type": "integer"}
+        )
+    assert "minLength" in str(caught.value)
+    assert "integer" in str(caught.value)
+
+
+def test_reconciling_a_property_keeps_the_hand_authored_half_in_place() -> None:
+    """The whole bet: derive the type, keep the prose, and keep it WHERE it
+    was — `appliesTo` is written `type, minItems, items` while the derivation
+    emits `type, items`, so a merge that appended would reorder the file and
+    every no-op regeneration would churn.
+
+    Mutation drill (2026-08-19): made `reconcile_property` start from
+    `dict(derived)` instead of `dict(existing)`. Failed with `AssertionError:
+    assert {'type': 'arr...e': 'string'}} == {'description...inLength': 1}}`,
+    and `test_the_checked_in_schema_is_what_the_generator_produces` failed
+    with it. Restored.
+    """
+    from towerkit.schemagen import reconcile_property
+
+    merged = reconcile_property(
+        "$defs/layer:states",
+        {"description": "Jurisdictions.", "type": "array", "minItems": 1,
+         "items": {"type": "string", "minLength": 1}},
+        {"type": "array", "items": {"type": "string"}},
+    )
+    assert merged == {
+        "description": "Jurisdictions.",
+        "type": "array",
+        "minItems": 1,
+        "items": {"type": "string", "minLength": 1},
+    }
+    assert list(merged) == ["description", "type", "minItems", "items"]

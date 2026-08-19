@@ -371,6 +371,11 @@ class Entry:
     # inside this class body, and `type[BaseModel]` would name a `str`.
     container_model: builtins.type[BaseModel] | None = None
     accepts_comma_string: bool = False
+    # A `text` field's own length bounds, read off the model's constraints so
+    # the surface refuses what the model would refuse — with a message the
+    # caller can act on. See `_length`.
+    min_length: int | None = None
+    max_length: int | None = None
 
 
 # --- derivation ----------------------------------------------------------------
@@ -404,6 +409,30 @@ def _flatten(info: FieldInfo) -> tuple[Any, list[Any], bool]:
         metadata = [*metadata, *nested]
         annotation = annotation.__origin__
     return annotation, metadata, optional
+
+
+def _length(metadata: list[Any]) -> tuple[int | None, int | None]:
+    """A string field's `min_length`/`max_length`, as pydantic records them.
+
+    Read from the MODEL rather than declared here, for the reason the whole
+    module exists. `Program.currency` carries `min_length=3, max_length=3`;
+    without this the only thing enforcing it is pydantic's assignment
+    validator, whose refusal reaches the client as a four-line
+    `1 validation error for Program\ncurrency\n  String should have at least
+    3 characters [type=string_too_short, ...]`. That breaks the standard the
+    design doc sets for every refusal — name a value that WOULD be accepted —
+    and a model handed it has to guess what the rule is.
+    """
+    low: int | None = None
+    high: int | None = None
+    for item in metadata:
+        bound = getattr(item, "min_length", None)
+        if isinstance(bound, int):
+            low = bound
+        bound = getattr(item, "max_length", None)
+        if isinstance(bound, int):
+            high = bound
+    return low, high
 
 
 def _le(metadata: list[Any]) -> int | None:
@@ -460,6 +489,7 @@ def _entry(
 ) -> Entry:
     key = f"{kind}.{field}"
     kind_of, values = _classify(key, base, metadata)
+    low, high = _length(metadata) if kind_of == "text" else (None, None)
     return Entry(
         kind=kind,
         field=field,
@@ -473,6 +503,8 @@ def _entry(
         container=container,
         container_model=container_model,
         accepts_comma_string=key in _COMMA_STRING,
+        min_length=low,
+        max_length=high,
     )
 
 
@@ -687,7 +719,37 @@ def parse_value(entry: Entry, value: object) -> Any:
         return value
     if not isinstance(value, str):
         raise BadValue(f"{entry.field} takes {VALUE_RULES['text']}")
+    _check_length(entry, value)
     return value
+
+
+def _check_length(entry: Entry, value: str) -> None:
+    """The model's own length bounds, refused here so the message is usable.
+
+    Not a second rule — `_length` read it off the model, and pydantic would
+    refuse the same value on assignment a moment later. What this adds is the
+    sentence: the pydantic refusal reaches the client as its own multi-line
+    repr and never names an acceptable length.
+    """
+    low, high = entry.min_length, entry.max_length
+    if low is not None and len(value) < low:
+        raise BadValue(f"{value!r} is too short for {entry.field} — {_length_rule(low, high)}")
+    if high is not None and len(value) > high:
+        raise BadValue(f"{value!r} is too long for {entry.field} — {_length_rule(low, high)}")
+
+
+def _length_rule(low: int | None, high: int | None) -> str:
+    if low == high:
+        return f"it takes exactly {_chars(low)}"
+    if low is None:
+        return f"it takes at most {_chars(high)}"
+    if high is None:
+        return f"it takes at least {_chars(low)}"
+    return f"it takes {low}-{high} characters"
+
+
+def _chars(count: int | None) -> str:
+    return f"{count} character" + ("" if count == 1 else "s")
 
 
 def _parse_money(entry: Entry, value: object) -> int:
@@ -908,6 +970,9 @@ def describe(kind: str | None = None) -> dict[str, Any]:
             }
             if entry.values is not None:
                 payload["values"] = list(entry.values)
+            if entry.min_length is not None or entry.max_length is not None:
+                # Published, or the caller learns the bound only by tripping it.
+                payload["length"] = [entry.min_length, entry.max_length]
             if entry.guard is not None:
                 payload["guard"] = entry.guard
             fields[field] = payload
