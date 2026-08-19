@@ -141,9 +141,38 @@ writable.
 ## Write safety
 
 **`expect_sha`** becomes an optional argument on every write. Supplied, it is
-authoritative — which is what ends the cross-process deadlock, since bookkit
-holds a second `Programs.seen` that no towerkit write updates. Omitted, the
-in-session map is used exactly as today, so nothing existing breaks.
+authoritative; omitted, the in-session map is used exactly as today, so
+nothing existing breaks.
+
+**Correction, 2026-08-19 (after surveying bookkit).** The bug doc asserts
+bookkit "consults a different `Programs.seen` dict". It does not. bookkit
+never imports `towerkit.mcpserver`, never builds a `Programs`, and never
+calls `note()`. Its token is a persisted SQLite column,
+`placement.source_sha256` (`bookkit/sync.py:226,276`), refreshed by exactly
+one function, `sync.project`.
+
+So there are two independent wedges, and `expect_sha` fixes only one:
+
+- *towerkit refuses* because its in-process map goes stale when bookkit or
+  the TUI writes. `expect_sha` fixes this, as specified.
+- *bookkit refuses* at `bookkit/sync.py:1164` because `source_sha256` goes
+  stale when towerkit writes — and **no bookkit MCP tool can re-arm it**.
+  `sync.project` is reachable from the CLI, the TUI, the seed and the import
+  committer, and from no MCP tool. `expect_sha` does nothing here.
+
+The bookkit-side repair is therefore a re-projection reachable from MCP:
+`bookkit/mcpserver.py:1415` (`program_layers`) calls bare `load_program`,
+and its own docstring already tells the assistant to call it before any
+program write. Making that read project — the way towerkit's `program_read`
+arms `note()` — clears the wedge on the read the agent was already doing.
+`TOWERKIT_POST_WRITE_CMD='bookctl sync --path {path}'` (README:112, already
+built) helps but does not suffice: a hook failure never fails the write.
+
+**Consequence for "towerkit owns the file".** `write_through` refuses on any
+byte change, with no field-level diff and no merge, by declared design
+(`bookkit/sync.py:20-22`). Two active writers on the same fields makes every
+interleaved edit a hard refusal. The re-projection above is what makes the
+boundary reversal survivable rather than progressively disabling bookkit.
 
 Refusals must name a call that works. Today's stale-sha message names the
 possible writers and no tool; it will name `program_read`.
@@ -229,6 +258,14 @@ guards, contract tests 1–11.
 **Phase 2 — the verbs.** `layer_add` composite and bulk, participants,
 named limits, program-level edits, `layer_statutory`, `line_transfer`,
 tests 12–13.
+
+Phase 2 lands a **required bookkit change with it**. `bookkit/tests/
+test_conventions.py:151-155` asserts the old boundary by name: "If towerkit
+ever grows `edit.add_participant`, add `.participants.append(` here and
+delegate." Phase 2 grows exactly that, so bookkit's hand-rolled append at
+`bookkit/sync.py:892` must delegate to towerkit's new API and the convention
+test must be extended. The test failing is the system working; it is not
+optional to fix.
 
 **Phase 3 — artifacts.** `--exports`, render, SOI, compare, import,
 template, `program_search`, `program_history`, multi-step revert.
