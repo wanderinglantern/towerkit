@@ -266,10 +266,19 @@ class TestDurableWrites:
 
 class TestLayerDetailFields:
     """`states`, `namedLimits`, `premiumDetail` — the setters the editor calls
-    and the MCP server will. None of them enforces a validator rule: every
-    refusal (monopolistic states, duplicates, prose-versus-structure) belongs
-    to validate.py, and a setter that quietly repaired the input would delete
-    the refusal instead of delivering it."""
+    and the MCP server will.
+
+    `namedLimits` and `premiumDetail` enforce no validator rule: every refusal
+    (duplicates, prose-versus-structure, a premium detail on a priced layer)
+    belongs to validate.py, and a setter that quietly repaired the input would
+    delete the refusal instead of delivering it.
+
+    `states` is the one exception, and it is a GUARD rather than a repair: on a
+    dollar-limited layer the field means nothing at all, so the write is
+    refused outright at `edit.set_field`. The guard and its refusal live in
+    tests/test_edit_guards.py; what is asserted here is that the setter still
+    replaces wholesale and keeps order on a layer that can carry states.
+    """
 
     def test_parse_states_splits_trims_and_drops_the_typing_artefacts(self) -> None:
         assert edit.parse_states("NY, NJ") == ["NY", "NJ"]
@@ -286,12 +295,23 @@ class TestLayerDetailFields:
         assert edit.parse_states("NY, NY") == ["NY", "NY"]
 
     def test_set_states_replaces_wholesale_and_keeps_order(self) -> None:
+        """On a STATUTORY layer — the only place the field has a meaning. The
+        umbrella this used to run against is dollar-limited, and the write is
+        now refused there (tests/test_edit_guards.py)."""
         program = _sample()
-        edit.set_states(program, "umbrella", ["NY", "CT", "NJ"])
-        layer = next(ly for ly in program.layers if ly.id == "umbrella")
+        layer = edit.set_statutory(program, "primary-el", True)
+        edit.set_states(program, "primary-el", ["NY", "CT", "NJ"])
         assert layer.states == ["NY", "CT", "NJ"]
-        edit.set_states(program, "umbrella", [])
+        edit.set_states(program, "primary-el", [])
         assert layer.states == []
+
+    def test_set_states_is_refused_on_a_dollar_limited_layer(self) -> None:
+        """The tier change, stated where the old policy used to be: this is no
+        longer an editable-but-flagged draft, it is a blocked write."""
+        program = _sample()
+        with pytest.raises(edit.GuardRefused):
+            edit.set_states(program, "umbrella", ["NY"])
+        assert next(ly for ly in program.layers if ly.id == "umbrella").states == []
 
     def test_set_states_refuses_an_unknown_layer(self) -> None:
         with pytest.raises(KeyError):

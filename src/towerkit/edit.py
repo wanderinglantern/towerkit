@@ -11,6 +11,8 @@ Money is integer whole dollars, as on disk. Callers parse human strings.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
+from typing import Any
 
 from .model import (
     Layer,
@@ -21,6 +23,36 @@ from .model import (
     RetentionType,
     Sublimit,
 )
+from .money import format_money
+from .validate import WARNING, Diagnostic
+
+
+class Refusal(ValueError):
+    """A refusal carrying a STABLE code, in the message and on the object.
+
+    Two callers, two channels, one code. bookkit runs towerkit as a library
+    and catches the exception OBJECT, so it branches on `.code`; an MCP
+    client sees only text, because the SDK's error path is a flat string —
+    `Tool.run` re-raises anything as `ToolError(f"Error executing tool …:
+    {e}")` and the server turns that into `CallToolResult(content=[TextContent
+    (...)], is_error=True)`. There is no structured channel on an error
+    result, no `structuredContent` and no JSON-RPC `data`, so the code has to
+    travel inside the message and the `[code] ` prefix is how.
+
+    It lives HERE, not in a surface, for the same reason the guards do: the
+    guards attach their own codes at the raise site, and the alternative — a
+    surface string-matching this module's prose to decide which code a
+    refusal deserves — is exactly the drift that hand-written second table
+    became. A code is assigned where the refusal is RAISED, never by reading
+    a message back.
+
+    It subclasses `ValueError` so every existing `except (ValidationError,
+    ValueError, …)` still catches it and nothing is written.
+    """
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(f"[{code}] {message}")
+        self.code = code
 
 
 def slugify(name: str) -> str:
@@ -351,12 +383,25 @@ def remove_sublimit(program: Program, index: int) -> None:
 # reachable only by hand-editing JSON. These are the one definition of what
 # setting each MEANS, so the editor and any later tool cannot drift apart.
 #
-# None of them enforces a validator rule. `validate.py` owns every refusal
-# (monopolistic states, duplicates, prose-versus-structure, a premium detail on
-# a priced layer) and reports it as a diagnostic the surface shows the user.
+# `namedLimits` and `premiumDetail` enforce no validator rule. `validate.py`
+# owns those refusals (duplicates, prose-versus-structure, a premium detail on
+# a priced layer) and reports each as a diagnostic the surface shows the user.
 # Silently repairing the input here would delete the refusal instead of
 # delivering it — a draft that breaks a semantic rule must stay editable and
 # stay flagged, exactly as a zero limit does.
+#
+# `states` is the ONE exception, and the reason does not generalise to the
+# others: it is not a value the validator repairs, it is a field that MEANS
+# NOTHING where it is refused. States say where STATUTORY cover is FILED; a
+# dollar-limited layer has no filing to describe, so the field quietly becomes
+# a general-purpose note and the one check it exists for — the monopolistic
+# funds — is never applied to anything. So `set_states` delegates to
+# `set_field` and is REFUSED there (`_guard_states`); the write does not land
+# and the draft never carries the meaningless value at all.
+#
+# validate.py keeps `states-non-statutory` regardless. That is a different
+# tier: a file hand-edited on disk, or built by `ingest`, never passes through
+# this module, and deleting the validator copy would leave those unnetted.
 
 
 def parse_states(text: str) -> list[str]:
@@ -372,9 +417,19 @@ def parse_states(text: str) -> list[str]:
 
 
 def set_states(program: Program, layer_id: str, states: list[str]) -> Layer:
-    """Replace a layer's states wholesale. See `parse_states` for the syntax."""
+    """Replace a layer's states wholesale. See `parse_states` for the syntax.
+
+    A thin wrapper over `set_field`, not a second door: the guard that refuses
+    states on a dollar-limited layer lives at the choke point, so this setter
+    and the generic one cannot come to disagree about what the field means."""
     layer = _layer(program, layer_id)
-    layer.states = [state.strip() for state in states if state.strip()]
+    set_field(
+        program,
+        "layer",
+        "states",
+        [state.strip() for state in states if state.strip()],
+        layer_id,
+    )
     return layer
 
 
@@ -420,3 +475,245 @@ def remove_named_limit(program: Program, layer_id: str, index: int) -> None:
     layer = _layer(program, layer_id)
     _at(list(layer.named_limits), index, "named limit")
     layer.named_limits.pop(index)
+
+
+# -- guarded field set ---------------------------------------------------------
+#
+# One choke point and one table. Always-derived fields are denied to the
+# generic setter outright; the CONDITIONAL ones cannot be, because `attach` is
+# free on an ordinary layer and derived on a follows-underlying one, and
+# `limit` is free until the statutory flag is set. A generic setter walks past
+# every one of those unless the rule lives here, where the TUI, the MCP server
+# and anything later all inherit it.
+#
+# The table is one findable block rather than four rules scattered through the
+# entity sections above, and a key absent from it is set with no guard — which
+# is what makes a NEW model field writable with no edit to this file.
+
+
+class GuardRefused(ValueError):
+    """A cross-field invariant refusing a write, in words that name the fix.
+
+    Both halves of the base class are load-bearing. It subclasses `ValueError`
+    so the MCP server's existing `except (ValidationError, ValueError,
+    KeyError, IndexError, RuntimeError)` still catches it and NOTHING is
+    written; it is a DISTINCT type so a surface can attach the `guard_refused`
+    error code without matching on message text, and so the TUI can catch a
+    guard specifically rather than every ValueError a field commit can raise.
+    """
+
+    def __init__(self, message: str, code: str = "guard_refused") -> None:
+        super().__init__(message)
+        self.code = code
+
+
+def _guard_attach(program: Program, layer: Layer, value: object) -> None:
+    """`attach` is derived on a follows-underlying layer and zero on a
+    statutory one.
+
+    EXEMPT, by name: `heal_follows`, `restack` and `transfer.py` assign
+    `layer.attach` directly. They are the DERIVERS of the value this guard
+    protects — routed through the choke point they would refuse themselves,
+    and every follows-underlying layer would stop healing.
+    """
+    if layer.follows_underlying:
+        raise GuardRefused(
+            f"{layer.name}: attach is DERIVED on a follows-underlying layer — it "
+            f"reseats itself on the highest underlying top "
+            f"({format_money(max(program.underlying_tops(layer).values(), default=0))}) "
+            f"on every write. Change the underlying layer's limit, or clear the flag "
+            f"first with layer_follows(layer_id={layer.id!r}, follows=false)."
+        )
+    if layer.statutory:
+        # Not in the spec's table, deliberately added: the TUI already blocked
+        # attach on a statutory layer, so a guard covering only the follows
+        # case would open a hole the editor had closed.
+        raise GuardRefused(
+            f"{layer.name}: statutory cover owns its column from $0 — the invariant "
+            f"is statutory implies attach == 0. Clear the flag with "
+            f"layer_statutory(layer_id={layer.id!r}, statutory=false), then set the "
+            f"attachment."
+        )
+
+
+def _guard_limit(program: Program, layer: Layer, value: object) -> None:
+    """`statutory ⇒ limit == 0` is what keeps the bar out of every dollar
+    total by construction, and out of the global vertical scale."""
+    if layer.statutory:
+        raise GuardRefused(
+            f"{layer.name}: statutory cover has no dollar limit — the invariant is "
+            f"statutory implies limit == 0. Clear the flag with "
+            f"layer_statutory(layer_id={layer.id!r}, statutory=false), then set the limit."
+        )
+
+
+def _guard_states(program: Program, layer: Layer, value: object) -> None:
+    """States are a coverage FACT about a statutory layer, not a note.
+
+    Clearing to `[]` is always allowed: a layer that has just lost its
+    statutory flag must stay tidyable, or the guard strands exactly the data
+    it exists to keep off dollar-limited layers.
+
+    The four states that cannot be privately covered at all — ND, OH, WA, WY —
+    are `validate.MONOPOLISTIC_STATES` and STAY there. This guard decides only
+    whether the field may be written; whether the codes name a monopolistic
+    fund, or a US jurisdiction at all, is validate's question. A second copy of
+    that list here is the exact bug this pass exists to kill.
+    """
+    if layer.statutory or not value:
+        return
+    raise GuardRefused(
+        f"{layer.name}: states say where STATUTORY cover is FILED; a dollar-"
+        f"limited layer cannot carry them, or the field becomes a general-purpose "
+        f"note. Set statutory first with "
+        f"layer_statutory(layer_id={layer.id!r}, statutory=true), or put the text in notes."
+    )
+
+
+def _advise_currency(program: Program, value: object) -> list[Diagnostic]:
+    """NOT a refusal — an advisory, because the write does far less than it
+    looks like it does and silence about that was the failure mode.
+
+    The second sentence is not decoration. `currency` is read in exactly three
+    places (the canonical dump, the MCP read, and construction in `ingest`),
+    and `money.py` hard-codes "USD" into `format_currency` and
+    `format_compact_currency` — so setting it changes the file and the read,
+    and NOTHING a reader of the chart, the SOI or the CLI ever sees.
+    """
+    return [
+        Diagnostic(
+            WARNING,
+            "currency-not-converted",
+            f"currency is now {value}: NO figure was converted — every amount is the "
+            f"same integer it was, and only the label moved. towerkit formats money as "
+            f"US dollars wherever it renders, so this changes the file and program_read "
+            f"and nothing a reader of the chart or SOI sees. Restate the amounts "
+            f"yourself if the program was re-quoted.",
+            ("program", None),
+        )
+    ]
+
+
+# Keyed by (mcpsurface kind, field). Absent from both tables means "set it".
+_GUARDS: dict[tuple[str, str], Callable[[Program, Any, object], None]] = {
+    ("layer", "attach"): _guard_attach,
+    ("layer", "limit"): _guard_limit,
+    ("layer", "states"): _guard_states,
+}
+
+_ADVISORIES: dict[tuple[str, str], Callable[[Program, object], list[Diagnostic]]] = {
+    ("program", "currency"): _advise_currency,
+}
+
+# Kinds addressed by a list index rather than an id.
+_INDEXED: dict[str, str] = {"retention": "retentions", "sublimit": "sublimits"}
+
+
+def _entity(program: Program, kind: str, target: str | int | None) -> Any:
+    """The object `field` is set on. `target` is the id for a line or layer,
+    the list index for a retention or sublimit, and None for the program."""
+    if kind == "program":
+        return program
+    if target is None:
+        raise ValueError(f"{kind} needs a target")
+    if kind == "line":
+        return _line(program, str(target))
+    if kind == "layer":
+        return _layer(program, str(target))
+    attr = _INDEXED.get(kind)
+    if attr is None:
+        # `participant` and `named_limit` hang off a LAYER as well as an index,
+        # which `target` cannot express. They stay verb-owned (add_named_limit,
+        # edit_named_limit) rather than getting an addressing scheme invented
+        # here for one caller.
+        raise ValueError(f"{kind!r} is not addressable by set_field; use its verbs")
+    items = getattr(program, attr)
+    index = int(target)
+    _at(list(items), index, kind)
+    return items[index]
+
+
+def _resolve(entity: Any, kind: str, field: str) -> tuple[str, str]:
+    """(attribute, canonical) for a field addressed by EITHER name.
+
+    Callers name fields as the FILE does (`policyNumber`), the model names
+    them as Python does (`policy_number`), and both have to reach the same
+    guard key — otherwise a caller spelling it the other way slips past."""
+    for name, info in type(entity).model_fields.items():
+        alias = info.alias or name
+        if field in (name, alias):
+            return name, alias
+    raise KeyError(f"no {kind} field {field!r}")
+
+
+def set_field(
+    program: Program,
+    kind: str,
+    field: str,
+    value: object,
+    target: str | int | None = None,
+) -> list[Diagnostic]:
+    """Set one field, through the guards. THE choke point.
+
+    Every generic write takes this path and the named setters delegate to it,
+    never the reverse: a generic setter that fell back to a bare `setattr` for
+    fields with no named setter would mean a newly guarded field needs editing
+    in two files again, which is the rot this whole pass exists to stop.
+
+    Returns write-time advisories — statements about what the write did NOT
+    do. They are not validator diagnostics: re-reading the file will not
+    reproduce them, which is why they must not be merged into `warnings`.
+
+    Raises `GuardRefused` for a guard, `KeyError` for an unknown target or
+    field, `IndexError` for an out-of-range index, and `ValueError` /
+    pydantic's `ValidationError` for a value the model refuses.
+    """
+    entity = _entity(program, kind, target)
+    head, _, rest = field.partition(".")
+    attr, canonical = _resolve(entity, kind, head)
+    if rest:
+        # Scalars nested one level are addressed by dotted path; the
+        # CONTAINING object is denied, so setting one member can never blank
+        # its siblings the way a wholesale set would.
+        container = getattr(entity, attr)
+        if container is None:
+            raise ValueError(
+                f"{kind}.{canonical} is not set, so there is nothing for {field!r} "
+                f"to write into"
+            )
+        sub_attr, _ = _resolve(container, canonical, rest)
+        setattr(container, sub_attr, value)
+        return []
+    guard = _GUARDS.get((kind, canonical))
+    if guard is not None:
+        guard(program, entity, value)
+    setattr(entity, attr, value)
+    advise = _ADVISORIES.get((kind, canonical))
+    return advise(program, value) if advise is not None else []
+
+
+def set_statutory(program: Program, layer_id: str, statutory: bool) -> Layer:
+    """Set the flag that OWNS `statutory ⇒ limit == 0`, forcing the invariant
+    rather than recording an intent that the validator then refuses.
+
+    This is the last copy of that invariant, which lived in a closure inside
+    the TUI's statutory checkbox. It does NOT go through `set_field`: the flag
+    is denied to the generic setter precisely because it carries these three
+    consequences, and routing the zeros through the choke point would have
+    `_guard_limit` refuse the write it is performing.
+
+    Clearing the flag does not invent a limit, and deliberately does not drop
+    any `states` already there: guard C blocks WRITING them onto a
+    dollar-limited layer, and deleting typed data to satisfy a rule the
+    validator already reports by name (`states-non-statutory`) would be the
+    silent repair this module refuses everywhere else.
+    """
+    layer = _layer(program, layer_id)
+    layer.statutory = statutory
+    if statutory:
+        # A statutory layer owns its column from $0 with no dollar limit, and
+        # has nothing beneath it to follow.
+        layer.limit = 0
+        layer.attach = 0
+        layer.follows_underlying = False
+    return layer

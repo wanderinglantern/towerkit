@@ -26,7 +26,32 @@ from .money import bps_to_json_number, share_to_bps
 
 SCHEMA_ID = "https://towerkit.dev/schema/program.schema.json"
 
-Money = Annotated[int, Field(ge=0)]
+
+class _MoneyTag:
+    """Marker carried inside `Money`'s annotation: this integer is whole dollars.
+
+    Nothing structural distinguishes money from the other integers in this
+    file. `Layer.attach` is `int` with `ge=0` and so is `Participant.
+    share_bps`; `Layer.limit` carries no constraint at all, deliberately, and
+    is money anyway. A surface that wants to know which fields take
+    '$5,000,000' therefore has to be TOLD, and the type is the only honest
+    place to say it — the alternative is a second hand-written list of money
+    fields somewhere else, which is the exact rot the derived MCP surface
+    exists to stop.
+
+    Pydantic ignores unrecognised `Annotated` members, so the tag costs
+    nothing at validation time and survives in `FieldInfo.metadata` (and, for
+    an optional money field, in the annotation's own `__metadata__`).
+    """
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:  # so a derived error message reads sensibly
+        return "MONEY"
+
+
+MONEY = _MoneyTag()
+Money = Annotated[int, Field(ge=0), MONEY]
 
 
 class Placement(StrEnum):
@@ -111,7 +136,10 @@ class Layer(_Model):
     follows_underlying: bool = Field(alias="followsUnderlying", default=False)
     applies_to: list[str] = Field(alias="appliesTo", min_length=1)
     attach: Money
-    limit: int
+    # Money with NO `ge=0`: positivity is a SEMANTIC rule (validate.py reports
+    # a non-positive limit as a diagnostic) so a draft stays loadable and
+    # editable. The tag says how to read the number, not what it may be.
+    limit: Annotated[int, MONEY]
     # Several coordinate limits where `limit` states one. Order is the file's
     # order and is display order — never sorted.
     named_limits: list[NamedLimit] = Field(alias="namedLimits", default_factory=list)

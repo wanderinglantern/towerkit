@@ -1289,14 +1289,15 @@ class EditorScreen(Screen):
                 self._mutate_and_refresh(rename)
                 if self.selected == ("layer", event.row_key):
                     self.selected = ("layer", layer.id)
-        elif field_key == "attach" and event.value is not None:
-            if not layer.statutory:  # the invariant owns this; the checkbox is the only writer
-                amount = int(event.value)
-                self._mutate_and_refresh(lambda p: setattr(layer, "attach", amount))
-        elif field_key == "limit" and event.value is not None:
-            if not layer.statutory:  # the invariant owns this; the checkbox is the only writer
-                amount = int(event.value)
-                self._mutate_and_refresh(lambda p: setattr(layer, "limit", amount))
+        elif field_key in ("attach", "limit") and event.value is not None:
+            # The invariants that own these — statutory, follows-underlying —
+            # live in edit.py's guards, so this cell inherits them instead of
+            # spelling out a wordless `if not layer.statutory` of its own.
+            amount = int(event.value)
+            layer_id = layer.id
+            self._guarded_mutate(
+                lambda p: edit.set_field(p, "layer", field_key, amount, layer_id)
+            )
         elif field_key == "premium":
             premium = int(event.value) if event.value is not None else None
             self._mutate_and_refresh(lambda p: setattr(layer, "premium", premium))
@@ -1422,6 +1423,22 @@ class EditorScreen(Screen):
         self.session.mutate(fn)
         self.refresh_all()
 
+    def _guarded_mutate(self, fn) -> bool:
+        """Run a mutation that a cross-field guard may refuse, and SAY the
+        refusal. Returns False when the write did not land.
+
+        The guards live in `edit.py` so all three surfaces inherit them; this
+        is the half the surface owes them. `GuardRefused` is caught by name
+        rather than as a bare ValueError so a genuinely broken value still
+        reaches the handler that knows how to phrase it."""
+        try:
+            self._mutate_and_refresh(fn)
+        except edit.GuardRefused as exc:
+            self.notify(exc.args[0], severity="error")
+            self.refresh_all()
+            return False
+        return True
+
     def _notify_layer_refusals(self, layer_id: str) -> None:
         """Say the layer's detail refusals out loud, at the moment they are
         earned. A REFUSAL SAYS SOMETHING: these rules never block the write —
@@ -1525,7 +1542,13 @@ class EditorScreen(Screen):
             states = edit.parse_states(widget.value)
             widget.value = ", ".join(states)  # echo back the canonical entry form
             layer_id = layer.id
-            self._mutate_and_refresh(lambda p: edit.set_states(p, layer_id, states))
+            if not self._guarded_mutate(
+                lambda p: edit.set_states(p, layer_id, states)
+            ):
+                # refused: the field must show what the layer ACTUALLY carries,
+                # or the form claims a write that never happened
+                widget.value = ", ".join(layer.states)
+                return
             self._notify_layer_refusals(layer_id)
             return
         if wid == "f-layer-premium-detail":
@@ -1551,12 +1574,15 @@ class EditorScreen(Screen):
         if amount is None and widget.value.strip():
             self.notify(f"can't parse {widget.value!r} as money", severity="error")
             return
-        if layer.statutory and wid in ("f-layer-attach", "f-layer-limit"):
-            return  # the invariant owns these; the checkbox is the only writer
-        if wid == "f-layer-attach" and amount is not None:
-            self._mutate_and_refresh(lambda p: setattr(layer, "attach", amount))
-        elif wid == "f-layer-limit" and amount is not None:
-            self._mutate_and_refresh(lambda p: setattr(layer, "limit", amount))
+        if wid in ("f-layer-attach", "f-layer-limit") and amount is not None:
+            # edit.py's guards own statutory and follows-underlying; a refusal
+            # arrives here as words rather than as a silent early return
+            field = "attach" if wid == "f-layer-attach" else "limit"
+            layer_id, money = layer.id, amount
+            if not self._guarded_mutate(
+                lambda p: edit.set_field(p, "layer", field, money, layer_id)
+            ):
+                widget.set_amount(getattr(layer, field))
         elif wid == "f-layer-premium":
             self._mutate_and_refresh(lambda p: setattr(layer, "premium", amount))
             self._refresh_participant_premiums(layer)
@@ -1704,8 +1730,13 @@ class EditorScreen(Screen):
                     and any(lid in ly.applies_to for lid in layer.applies_to)
                 ]
                 suggestion = max(others, default=0)
-                self._mutate_and_refresh(lambda p: setattr(layer, "attach", suggestion))
-                if suggestion:
+                layer_id = layer.id
+                # a follows-underlying layer refuses this: its attachment is
+                # derived, and the guard says so rather than the value snapping
+                # back on the next heal with nothing said
+                if self._guarded_mutate(
+                    lambda p: edit.set_field(p, "layer", "attach", suggestion, layer_id)
+                ) and suggestion:
                     self.notify(f"attach suggested at {format_money(suggestion)}")
             try:
                 self.query_one("#f-layer-attach", MoneyInput).set_amount(layer.attach)
@@ -1717,20 +1748,12 @@ class EditorScreen(Screen):
             layer = self._layer(key) if kind == "layer" else None
             if layer is None:
                 return
-            target = layer  # mypy: closures don't keep the None-narrowing
+            layer_id = layer.id
             flag = bool(event.value)
-
-            def set_statutory(p: Program) -> None:
-                target.statutory = flag
-                if flag:
-                    # force the invariant rather than recording intent: a
-                    # statutory layer owns its column from $0 with no limit,
-                    # and has nothing beneath it to follow
-                    target.limit = 0
-                    target.attach = 0
-                    target.follows_underlying = False
-
-            self._mutate_and_refresh(set_statutory)
+            # edit.set_statutory forces the whole invariant (limit 0, attach 0,
+            # follows cleared). It lived here as a closure inside a screen —
+            # the last copy of `statutory implies limit == 0` on a surface.
+            self._mutate_and_refresh(lambda p: edit.set_statutory(p, layer_id, flag))
             for widget_id in ("#f-layer-attach", "#f-layer-limit"):
                 try:
                     self.query_one(widget_id, MoneyInput).set_amount(None if flag else 0)

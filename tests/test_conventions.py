@@ -108,3 +108,18 @@ def test_no_renderer_re_derives_the_pending_predicate() -> None:
     assert not offenders, (
         "re-derives labels.is_pending instead of calling it:\n  " + "\n  ".join(offenders)
     )
+
+
+def test_validate_never_imports_edit() -> None:
+    """edit.py now imports validate.py — the guards need `Diagnostic` and the
+    advisory severity. That direction is fine and the reverse is a cycle, so
+    the import has to stay one-way. Nothing enforces this but a test: an
+    innocent `from .edit import slugify` inside a validator would break every
+    surface at import time, and no other test imports the two in isolation."""
+    source = (REPO / "src" / "towerkit" / "validate.py").read_text("utf-8")
+    offenders = [
+        f"{number}: {text.strip()}"
+        for number, text in enumerate(source.splitlines(), start=1)
+        if "import edit" in text or "from .edit" in text
+    ]
+    assert not offenders, "validate.py must not import edit.py:\n  " + "\n  ".join(offenders)

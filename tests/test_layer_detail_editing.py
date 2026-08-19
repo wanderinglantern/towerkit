@@ -347,6 +347,21 @@ class TestRefusalsSaySomething:
             ), _messages(app)
 
     @pytest.mark.asyncio
+    async def test_states_on_a_dollar_limited_layer_do_not_land_at_all(
+        self, program_file
+    ) -> None:
+        """The refusal used to be soft: the value landed and the validator
+        flagged it. `edit._guard_states` blocks the write, so the layer keeps
+        what it had and the FIELD has to show that — a form still displaying
+        the typed text claims a write that never happened."""
+        app = TowerkitApp(path=program_file)
+        async with app.run_test(size=(160, 48)) as pilot:
+            editor = await _open_layer(pilot, "el-primary")
+            await _type_into(pilot, "#f-layer-states", "NY")
+            assert editor._layer("el-primary").states == []
+            assert editor.query_one("#f-layer-states").value == ""
+
+    @pytest.mark.asyncio
     async def test_monopolistic_state(self, program_file) -> None:
         app = TowerkitApp(path=program_file)
         async with app.run_test(size=(160, 48)) as pilot:
