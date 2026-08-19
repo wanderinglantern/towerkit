@@ -152,6 +152,31 @@ class TestDropThresholds:
         assert wide.spans_columns == 2 and wide.show_name
         assert narrow.spans_columns == 1 and not narrow.show_name
 
+    def test_a_block_confined_to_one_column_of_several_spans_one(self) -> None:
+        """The spans count decides which bar a name has to clear — 13px when
+        the block is wide enough to hold text on one line, 30px when it is not.
+
+        Every other spans test uses a one-column program or a layer covering
+        every column, so both read the same under open OR closed interval
+        comparison. This one does not: the GL block's right edge sits exactly
+        on the AL column's left edge, so `<=`/`>=` would count the column it
+        merely touches and drop the block onto the 13px bar — keeping a name
+        in a block with no room for it, which is the failure this module
+        exists to prevent."""
+        program = make_program(
+            ["gl", "al"],
+            [
+                layer("g", ["gl"], 0, 10_000_000, [("Solo", 10_000)]),
+                layer("a", ["al"], 0, 10_000_000, [("Other", 10_000)]),
+            ],
+        )
+        web = build_web_tower(program, 240.0)
+        assert len(web.layout.columns) == 2, "fixture must have two columns"
+        for block in web.blocks:
+            assert block.spans_columns == 1, (
+                f"{block.layer_id} covers one line of two and must span one column"
+            )
+
     def test_money_survives_a_block_too_short_for_a_name(self) -> None:
         block = low_block(two_layer_program(["gl"]), 110.0)
         assert block.height_px == 11.0
@@ -351,6 +376,36 @@ class TestAgreement:
         assert [r.label for r in web.retentions] == [
             retention_label(r.type, r.amount, r.vehicle) for r in tower.retentions
         ]
+
+    def test_each_layers_heading_belongs_to_that_layer(self) -> None:
+        """heading_blocks says WHICH block carries a heading; it does not say
+        WHOSE. With a single-layer fixture those are the same question, so
+        handing every block the first layer's heading is undetectable — the
+        two renderers would then disagree about which layer a name describes,
+        which is a fact divergence, not a fit difference."""
+        program = make_program(
+            ["gl"],
+            [
+                layer("low", ["gl"], 0, 5_000_000, [("Small", 2_000), ("Big", 8_000)]),
+                layer("high", ["gl"], 5_000_000, 20_000_000,
+                      [("Tiny", 1_000), ("Huge", 9_000)]),
+            ],
+        )
+        tower = build_layout(program)
+        owner = heading_blocks(tower.participants)
+        assert len(owner) == 2, "fixture must exercise two layers"
+        web = build_web_tower(program, 240.0)
+        seen = {}
+        for block in web.blocks:
+            if block.heading is not None:
+                seen[block.layer_id] = block.heading
+        assert set(seen) == {"low", "high"}, "each layer carries exactly one heading"
+        for layer_id, heading in seen.items():
+            block = next(ly for ly in tower.layers if ly.layer_id == layer_id)
+            assert heading == layer_heading(block, follows=False), (
+                f"{layer_id} carries another layer's heading: {heading!r}"
+            )
+        assert seen["low"] != seen["high"], "the two headings must differ"
 
     def test_the_heading_goes_where_labels_py_says(self) -> None:
         """heading_blocks gives the layer name to the WIDEST block — a narrow

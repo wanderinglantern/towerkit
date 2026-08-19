@@ -25,12 +25,15 @@ from ..model import Program
 from ..money import format_money, format_money_compact
 from ..scale import DEFAULT_GAMMA
 from ..theme import Theme, contrast_text
+
+# Module-qualified: `is_pending` is a local in draw_tower, and a bare
+# import of that name is shadowed for the whole function.
+from . import labels
 from .common import rc_params, save_figure
 from .labels import (
     block_premium_label,
     group_label,
     heading_blocks,
-    is_pending,
     layer_heading,
     participant_label,
     retention_label,
@@ -129,7 +132,7 @@ def draw_tower(
     # The predicate is labels.is_pending, not an inline ==0, because
     # render/web.py asks the same question and the two must not be able to
     # answer it differently (R66: the renderers agree about the facts).
-    pending = {ly.layer_id for ly in tower.layers if is_pending(ly)}
+    pending = {ly.layer_id for ly in tower.layers if labels.is_pending(ly)}
 
     # the layer title rides the WIDEST cell of each layer — a narrow lead
     # share must not doom the name
@@ -173,18 +176,15 @@ def draw_tower(
     # A statutory layer is drawn open-topped — its top edge is the chevron
     # band below, not a line.
     for layer in tower.layers:
-        # renamed off `is_pending` when that name became the shared predicate
-        # imported from labels: an assignment here makes the name local to the
-        # whole function, so the call at the top of it raised UnboundLocalError.
-        layer_pending = layer.layer_id in pending
+        is_pending = layer.layer_id in pending
         if layer.statutory:
             for outline in layer.outlines:
                 ax.plot(
                     [outline.x0, outline.x0, outline.x1, outline.x1],
                     [outline.y1, outline.y0, outline.y0, outline.y1],
                     color=chrome.ink,
-                    linewidth=1.2 if layer_pending else 1.1,
-                    linestyle=(0, (4, 3)) if layer_pending else "solid",
+                    linewidth=1.2 if is_pending else 1.1,
+                    linestyle=(0, (4, 3)) if is_pending else "solid",
                     zorder=3,
                     solid_capstyle="butt",
                 )
@@ -194,8 +194,8 @@ def draw_tower(
                 Rectangle(
                     (outline.x0, outline.y0), outline.width, outline.height,
                     facecolor="none", edgecolor=chrome.ink,
-                    linewidth=1.2 if layer_pending else 1.1,
-                    linestyle=(0, (4, 3)) if layer_pending else "solid",
+                    linewidth=1.2 if is_pending else 1.1,
+                    linestyle=(0, (4, 3)) if is_pending else "solid",
                     zorder=3,
                 )
             )
