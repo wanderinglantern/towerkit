@@ -154,6 +154,16 @@ class TestCompositionHelpers:
         p.layers[0].limits_detail = "Each Occurrence $1,000,000"
         assert limits_text(p.layers[0], p) == "Each Occurrence $1,000,000"
 
+    def test_prose_limits_do_not_swallow_the_sublimit_tail(self) -> None:
+        """Prose wins for the HEAD of the cell; a line-scoped sublimit was
+        never part of it. See limits_text and the rendered-cell tests in
+        test_soi_xlsx.TestSublimitsSurviveProseLimits."""
+        p = make_program()
+        p.layers[3].limits_detail = "$10,000,000 per occurrence, all perils"
+        assert limits_text(p.layers[3], p) == (
+            "$10,000,000 per occurrence, all perils; Sublimit: Flood $5,000,000"
+        )
+
     def test_primary_retention_composed_with_aggregate(self) -> None:
         p = make_program()
         assert retention_text(p.layers[0], p) == "SIR $250,000; Aggregate $1,000,000"

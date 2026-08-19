@@ -88,8 +88,8 @@ def _covered_lines(layer: Layer, program: Program) -> list[Line]:
 _STATUTORY_TEXT = "Statutory - State Limits"
 
 
-def limits_text(layer: Layer, program: Program) -> str:
-    """The Limits cell for one row.
+def _limits_base(layer: Layer) -> str:
+    """How this layer STATES ITS OWN LIMIT — the head of the Limits cell.
 
     PROSE WINS, and it is first on purpose — `limits_detail` is documented as
     exported verbatim and every composed form below is a fallback for its
@@ -100,7 +100,11 @@ def limits_text(layer: Layer, program: Program) -> str:
     STATUTORY IS AHEAD OF NAMED LIMITS, and this function stays total on draft
     data the validator would refuse: a statutory layer must never print a
     dollar figure, whatever else it is carrying, because "no dollar limit" is
-    the invariant the whole statutory design rests on."""
+    the invariant the whole statutory design rests on.
+
+    What this function does NOT decide is the sublimit tail. A sublimit is
+    scoped to LINES, not to this layer, so it is not one of the forms prose
+    replaces — see `limits_text`."""
     if layer.limits_detail:
         return layer.limits_detail
     if layer.statutory:
@@ -111,16 +115,47 @@ def limits_text(layer: Layer, program: Program) -> str:
             # broker's order is data); towerkit still writes no sentence about
             # any state's law.
             base = f"{base} ({', '.join(layer.states)})"
-    elif layer.named_limits:
-        base = "; ".join(
+        return base
+    if layer.named_limits:
+        return "; ".join(
             f"{named.name} {format_money(named.amount)}" for named in layer.named_limits
         )
-    elif layer.follows_underlying:
-        base = f"{format_money(layer.limit)} xs underlying"
-    elif layer.attach == 0:
-        base = format_money(layer.limit)  # primaries by limit alone, never "xs $0"
-    else:
-        base = f"{format_money(layer.limit)} xs {format_money(layer.attach)}"
+    if layer.follows_underlying:
+        return f"{format_money(layer.limit)} xs underlying"
+    if layer.attach == 0:
+        return format_money(layer.limit)  # primaries by limit alone, never "xs $0"
+    return f"{format_money(layer.limit)} xs {format_money(layer.attach)}"
+
+
+def limits_text(layer: Layer, program: Program) -> str:
+    """The Limits cell for one row: how the layer states its limit, then the
+    sublimits carved out of the lines it covers.
+
+    THE SUBLIMIT TAIL IS NOT PART OF THE PROSE CONTRACT, so prose cannot
+    swallow it. `limits_detail` used to `return` before the tail was appended,
+    and because sublimits are scoped to LINES rather than layers the fact then
+    re-attached itself to whatever OTHER layer happened to touch the same line
+    — or vanished from the sheet entirely when every layer on the line carried
+    prose. A property primary written out in words read "$100,000,000 ... for
+    the perils of fire, lightning, windstorm, hail and all other perils not
+    otherwise excluded" while the $25,000,000 flood sublimit printed only on
+    the unplaced excess row above it, so the schedule told the reader flood was
+    covered to $100,000,000. The chart footer printed the sublimits all along:
+    two renderers of one file disagreed, and the one a client reads was the
+    wrong one (2026-08-18).
+
+    Prose still wins for the HEAD of the cell and is still exported verbatim —
+    that contract is untouched. It is a statement of this layer's limit, and a
+    line-scoped carve-out was never inside it to be replaced. A layer with
+    prose limits therefore prints its prose, then `; Sublimit: <name> <amount>`
+    for every sublimit touching its lines, exactly as a composed layer does.
+
+    Sublimits still print on EVERY row whose lines they touch. That repetition
+    is deliberate and unchanged: unlike a retention (C10) a sublimit is not a
+    figure the reader adds up, and a tower whose excess rows silently dropped
+    the flood cap would understate cover row by row — the failure this fix
+    exists to remove."""
+    base = _limits_base(layer)
     covered = set(layer.applies_to)
     subs = [s for s in program.sublimits if covered & set(s.applies_to)]
     if subs:

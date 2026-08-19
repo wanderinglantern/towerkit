@@ -371,3 +371,122 @@ def test_schematic_golden_content(program, theme, tmp_path):
         program, theme=theme, out_path=tmp_path / "sg.xlsx", include_schematic=True
     )
     assert _content_hash(path) == SCHEMATIC_GOLDEN_SHA
+
+
+# --- CRITICAL 1: a sublimit must not disappear behind prose limits ----------
+#
+# Deliberately NOT the golden fixture, for the reason TestRowHeightColumnIndices
+# gives: a fixture row exists to be read by twenty other assertions, and this
+# defect needs a shape (prose on the layer that carries the line's cover, a
+# sublimit on the line) that the golden fixture does not have.
+#
+# The assertions are on RENDERED CELLS, not on limits_text's return value. The
+# bug is about what reaches the reader of the workbook, and the reader reads
+# cells.
+
+_PROSE = (
+    "$100,000,000 per occurrence and in the annual aggregate for the perils "
+    "of fire, lightning, windstorm, hail and all other perils not otherwise "
+    "excluded"
+)
+
+
+def _prose_limits_program():
+    """The reproduction: a bound property primary stating its limit in words,
+    a to-be-placed excess above it, and two sublimits on the line."""
+    from towerkit.model import Program
+
+    return Program.model_validate({
+        "insured": "Harbor Point Holdings, LLC",
+        "program": "Property",
+        "placement": "bound",
+        "period": {"start": "2026-01-01", "end": "2027-01-01"},
+        "lines": [{"id": "prop", "name": "Property"}],
+        "layers": [
+            {
+                "id": "prop-primary", "name": "Primary", "appliesTo": ["prop"],
+                "attach": 0, "limit": 100_000_000, "premium": 500_000,
+                "limitsDetail": _PROSE,
+                "participants": [
+                    {"carrier": "FM Global", "share_bps": 6_000},
+                    {"carrier": "Chubb", "share_bps": 4_000},
+                ],
+            },
+            {
+                "id": "prop-x1", "name": "1st Excess", "appliesTo": ["prop"],
+                "attach": 100_000_000, "limit": 150_000_000,
+            },
+        ],
+        "sublimits": [
+            {"name": "Flood", "amount": 25_000_000, "appliesTo": ["prop"]},
+            {"name": "Earthquake", "amount": 10_000_000, "appliesTo": ["prop"]},
+        ],
+    })
+
+
+def _limits_cells(ws) -> dict[str, str]:
+    """{coverage cell -> limits cell} for every body row on the sheet."""
+    out = {}
+    for row in ws.iter_rows(min_row=2):
+        coverage, limits = row[1].value, row[7].value
+        if coverage and limits:
+            out[str(coverage)] = str(limits)
+    return out
+
+
+class TestSublimitsSurviveProseLimits:
+    def test_the_prose_row_still_states_the_sublimits(self, theme, tmp_path) -> None:
+        """H18 in the reproduction: the in-force primary printed the prose and
+        NOTHING about flood, so the schedule told the reader flood was covered
+        to $100,000,000 when it is covered to $25,000,000."""
+        p = _prose_limits_program()
+        ws = load_workbook(_write(p, theme, tmp_path / "s.xlsx")).active
+        cell = _limits_cells(ws)["Property — Primary"]
+        assert "Sublimit: Flood $25,000,000" in cell
+        assert "Sublimit: Earthquake $10,000,000" in cell
+
+    def test_the_prose_is_still_first_and_still_verbatim(self, theme, tmp_path):
+        """Prose winning is the shipped contract and it stays: the sublimit
+        tail is appended to it, never allowed to displace or reword it."""
+        p = _prose_limits_program()
+        ws = load_workbook(_write(p, theme, tmp_path / "s.xlsx")).active
+        cell = _limits_cells(ws)["Property — Primary"]
+        assert cell == (
+            f"{_PROSE}; Sublimit: Flood $25,000,000; "
+            "Sublimit: Earthquake $10,000,000"
+        )
+
+    def test_the_two_rows_no_longer_contradict_each_other(self, theme, tmp_path):
+        """The excess row printed the sublimits all along. A schedule whose
+        unplaced layer names a cap its bound layer does not is telling the
+        reader two different things about one line."""
+        p = _prose_limits_program()
+        ws = load_workbook(_write(p, theme, tmp_path / "s.xlsx")).active
+        cells = _limits_cells(ws)
+        for coverage in ("Property — Primary", "Property — 1st Excess"):
+            assert "Sublimit: Flood $25,000,000" in cells[coverage], coverage
+
+    def test_prose_on_every_layer_no_longer_loses_the_sublimit_entirely(
+        self, theme, tmp_path
+    ) -> None:
+        """The worst case: with prose on BOTH layers there was no other layer
+        on the line for the tail to re-attach itself to, so the sublimit left
+        the workbook without a trace."""
+        p = _prose_limits_program()
+        p.layers[1].limits_detail = "$150,000,000 excess of the primary layer"
+        ws = load_workbook(_write(p, theme, tmp_path / "s.xlsx")).active
+        sheet_text = "\n".join(_limits_cells(ws).values())
+        assert sheet_text.count("Sublimit: Flood $25,000,000") == 2
+        assert sheet_text.count("Sublimit: Earthquake $10,000,000") == 2
+
+    def test_statutory_prose_keeps_its_sublimit_too(self, theme, tmp_path) -> None:
+        """The statutory escape hatch is prose by another name; it must not
+        become a second way to lose the tail."""
+        p = _prose_limits_program()
+        p.layers[0].limits_detail = None
+        p.layers[0].statutory = True
+        p.layers[0].limit = 0
+        ws = load_workbook(_write(p, theme, tmp_path / "s.xlsx")).active
+        cell = _limits_cells(ws)["Property — Primary"]
+        assert cell.startswith("Statutory - State Limits")
+        assert "Sublimit: Flood $25,000,000" in cell
