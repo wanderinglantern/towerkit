@@ -324,6 +324,27 @@ class TestTempFileNaming:
         assert len(sidecar_temps) == 2
         assert sidecar_temps[0] != sidecar_temps[1]
 
+    def test_a_name_collision_refuses_the_write_instead_of_sharing_an_inode(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """O_EXCL, not the random number generator, is what makes the temp
+        file private. The token makes a collision unimaginable; O_EXCL makes
+        the consequence of one a loud refusal rather than two writers
+        truncating each other into a single inode, which is the whole defect."""
+        target = tmp_path / "p.json"
+        target.write_text("v1", encoding="utf-8")
+        fixed = tmp_path / ".p.json.collision.tmp"
+        fixed.write_bytes(b"another writer's bytes")
+        monkeypatch.setattr("towerkit.atomicio._temp_name", lambda _p: fixed)
+
+        with pytest.raises(OSError):
+            atomic_write_text(target, "v2")
+
+        assert target.read_text(encoding="utf-8") == "v1"
+        assert fixed.read_bytes() == b"another writer's bytes", (
+            "the other writer's temp file was truncated"
+        )
+
 
 class TestDurability:
     def test_the_directory_entry_is_fsynced_after_the_replace(
@@ -345,6 +366,37 @@ class TestDurability:
         atomic_write_text(tmp_path / "p.json", "v1", backup=False)
 
         assert any(synced_dirs), "only the file was fsynced, never its directory"
+
+    def test_a_failed_sidecar_replace_leaves_no_scratch_link_behind(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """The other way the sidecar can fail: the link is made and the
+        `os.replace` into position is what raises. The write still lands, and
+        the scratch link must not outlive it either."""
+        target = tmp_path / "p.json"
+        target.write_text("v1", encoding="utf-8")
+        real = os.replace
+
+        def spy(src, dst):  # type: ignore[no-untyped-def]
+            if os.fspath(dst).endswith(".bak"):
+                raise OSError(errno.EIO, "Input/output error")
+            return real(src, dst)
+
+        monkeypatch.setattr(os, "replace", spy)
+        atomic_write_text(target, "v2")
+
+        assert target.read_text(encoding="utf-8") == "v2"
+        assert list(tmp_path.glob(".*.tmp")) == []
+
+    def test_the_directory_handle_is_closed_every_time(self, tmp_path: Path) -> None:
+        """The durability fsync opens a NEW descriptor on every save. A save
+        loop is the normal way to use this module, so a leaked handle here is
+        an EMFILE somewhere else entirely, hours later."""
+        target = tmp_path / "p.json"
+        before = len(os.listdir("/dev/fd"))
+        for i in range(60):
+            atomic_write_text(target, f"v{i}", backup=False)
+        assert len(os.listdir("/dev/fd")) <= before + 2
 
     def test_a_directory_that_refuses_fsync_does_not_fail_the_write(
         self, tmp_path: Path, monkeypatch
@@ -404,3 +456,25 @@ class TestPermissions:
         assert stat.S_IMODE(target.stat().st_mode) == stat.S_IMODE(
             reference.stat().st_mode
         )
+
+    def test_the_temp_inode_is_never_more_permissive_than_what_it_replaces(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """The temp file is created with the target's mode, not widened and
+        then narrowed: a 0600 program file must not exist under a second name
+        at 0644, however briefly."""
+        target = tmp_path / "p.json"
+        target.write_text("v1", encoding="utf-8")
+        target.chmod(0o600)
+
+        at_creation: list[int] = []
+        real = os.fchmod
+
+        def spy(fd: int, mode: int) -> None:
+            at_creation.append(stat.S_IMODE(os.fstat(fd).st_mode))
+            real(fd, mode)
+
+        monkeypatch.setattr(os, "fchmod", spy)
+        atomic_write_text(target, "v2", backup=False)
+
+        assert at_creation == [0o600]
