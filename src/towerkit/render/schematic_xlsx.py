@@ -79,6 +79,12 @@ from ..model import Program
 from ..money import format_money_compact
 from ..scale import DEFAULT_GAMMA
 from ..theme import Chrome, Theme, contrast_text
+
+# Module-qualified on purpose: `is_pending` is already a local and a
+# parameter name in this file, and a bare import of that name is shadowed
+# for the whole enclosing function — which is an UnboundLocalError at the
+# call, not a name clash at import. Same trap bit mpl_program.py.
+from . import labels
 from .labels import (
     block_premium_label,
     carrier_only_label,
@@ -238,7 +244,7 @@ def _label_spans(
     candidate-line assembly the main render loop uses, so the floor always
     matches what will actually be drawn."""
     follows = {ly.id for ly in program.layers if ly.follows_underlying}
-    pending = {ly.layer_id for ly in layout.layers if ly.signed_bps == 0}
+    pending = {ly.layer_id for ly in layout.layers if labels.is_pending(ly)}
     headings = heading_blocks(layout.participants)
     layer_by_id = {ly.layer_id: ly for ly in layout.layers}
     spans: list[tuple[float, float, int]] = []
@@ -434,7 +440,7 @@ def add_schematic_sheet(
     _headers(ws, layout, chrome, col_of, col_of_close, chars_per_unit)
     _axis(ws, layout, rows, chrome)
 
-    pending = {ly.layer_id for ly in layout.layers if ly.signed_bps == 0}
+    pending = {ly.layer_id for ly in layout.layers if labels.is_pending(ly)}
     follows = {ly.id for ly in program.layers if ly.follows_underlying}
     headings = heading_blocks(layout.participants)
     layer_by_id = {ly.layer_id: ly for ly in layout.layers}

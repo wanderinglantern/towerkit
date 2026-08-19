@@ -72,3 +72,35 @@ def test_snapshot_dirs_are_ignored_wherever_they_land() -> None:
         != 0
     ]
     assert not missed, f"client-data snapshots not gitignored: {missed}"
+
+
+RENDER = REPO / "src" / "towerkit" / "render"
+
+# The one predicate every renderer must quote rather than re-derive. "Is this
+# layer pending?" chooses between "To be placed" and a partially-open
+# remainder — different claims about the world, so two renderers that decide
+# it separately can disagree about a fact rather than about a fit.
+_PENDING_INLINE = "signed_bps == 0"
+
+
+def test_no_renderer_re_derives_the_pending_predicate() -> None:
+    """labels.is_pending is the single authority; a renderer spelling the
+    comparison inline is how the graphic and the panel drift apart.
+
+    This is the same shape as the ban above: it fails the moment someone
+    reaches past the API instead of calling it. labels.py itself is exempt —
+    that is where the definition lives.
+    """
+    offenders = []
+    for path in sorted(RENDER.rglob("*.py")):
+        if path.name == "labels.py":
+            continue
+        for number, text in enumerate(path.read_text("utf-8").splitlines(), start=1):
+            stripped = text.strip()
+            if stripped.startswith("#"):
+                continue
+            if _PENDING_INLINE in text:
+                offenders.append(f"{path.relative_to(REPO)}:{number}: {stripped}")
+    assert not offenders, (
+        "re-derives labels.is_pending instead of calling it:\n  " + "\n  ".join(offenders)
+    )

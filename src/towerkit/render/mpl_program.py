@@ -25,6 +25,10 @@ from ..model import Program
 from ..money import format_money, format_money_compact
 from ..scale import DEFAULT_GAMMA
 from ..theme import Theme, contrast_text
+
+# Module-qualified: `is_pending` is a local in draw_tower, and a bare
+# import of that name is shadowed for the whole function.
+from . import labels
 from .common import rc_params, save_figure
 from .labels import (
     block_premium_label,
@@ -124,8 +128,11 @@ def draw_tower(
     }
 
     # a layer with no participants at all is pending: dashed outline, empty
-    # fill, "To be placed" — distinct from a partially-open remainder
-    pending = {ly.layer_id for ly in tower.layers if ly.signed_bps == 0}
+    # fill, "To be placed" — distinct from a partially-open remainder.
+    # The predicate is labels.is_pending, not an inline ==0, because
+    # render/web.py asks the same question and the two must not be able to
+    # answer it differently (R66: the renderers agree about the facts).
+    pending = {ly.layer_id for ly in tower.layers if labels.is_pending(ly)}
 
     # the layer title rides the WIDEST cell of each layer — a narrow lead
     # share must not doom the name
