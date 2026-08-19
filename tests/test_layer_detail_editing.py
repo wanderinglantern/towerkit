@@ -196,6 +196,123 @@ class TestZeroDiffThroughTheEditor:
         assert program_file.read_bytes() == before
 
     @pytest.mark.asyncio
+    async def test_a_trailing_comma_is_a_typing_artefact_not_a_state(
+        self, program_file
+    ) -> None:
+        """And the field echoes back what it stored, so the user can see that
+        the phrase they typed became a list."""
+        app = TowerkitApp(path=program_file)
+        async with app.run_test(size=(160, 48)) as pilot:
+            editor = await _open_layer(pilot, "wc-stat")
+            await _type_into(pilot, "#f-layer-states", "NY, NJ,")
+            assert editor._layer("wc-stat").states == ["NY", "NJ"]
+            assert editor.query_one("#f-layer-states").value == "NY, NJ"
+
+    @pytest.mark.asyncio
+    async def test_a_named_limit_cell_opens_prefilled_with_what_is_there(
+        self, program_file
+    ) -> None:
+        """i on an existing row edits it — an editor that opens empty is a
+        delete with extra steps."""
+        app = TowerkitApp(path=program_file)
+        async with app.run_test(size=(160, 48)) as pilot:
+            editor = await _open_layer(pilot, "el-primary")
+            editor.session.mutate(
+                lambda p: p.layers[1].named_limits.append(
+                    NamedLimit(name="Each Accident", amount=1_000_000)
+                )
+            )
+            await editor._rebuild_detail()
+            await pilot.pause()
+            sheet = editor.query_one("#named-limits-sheet", SheetTable)
+            sheet.focus()
+            sheet.move_cursor(row=0, column=0)
+            await pilot.pause()
+            await pilot.press("i")
+            await pilot.pause()
+            assert editor.query_one(SheetCellEditor).value == "Each Accident"
+            await pilot.press("escape")
+            await pilot.pause()
+            sheet.move_cursor(row=0, column=1)
+            await pilot.press("i")
+            await pilot.pause()
+            assert editor.query_one(SheetCellEditor).value == "$1,000,000"
+
+    @pytest.mark.asyncio
+    async def test_the_row_under_the_cursor_is_the_row_that_moves(
+        self, program_file
+    ) -> None:
+        """Three rows, so an edit or a delete that always lands on the first
+        one cannot hide. With one row every index is index 0."""
+        app = TowerkitApp(path=program_file)
+        async with app.run_test(size=(160, 48)) as pilot:
+            editor = await _open_layer(pilot, "el-primary")
+
+            def furnish(p):
+                for name in ("A", "B", "C"):
+                    p.layers[1].named_limits.append(
+                        NamedLimit(name=name, amount=1_000_000)
+                    )
+
+            editor.session.mutate(furnish)
+            await editor._rebuild_detail()
+            await pilot.pause()
+
+            sheet = editor.query_one("#named-limits-sheet", SheetTable)
+            sheet.focus()
+            sheet.move_cursor(row=1, column=1)  # B's amount
+            await pilot.pause()
+            await pilot.press("i")
+            await pilot.pause()
+            editor.query_one(SheetCellEditor).value = "2m"
+            await pilot.press("enter")
+            await pilot.pause()
+            assert [
+                (nl.name, nl.amount) for nl in editor._layer("el-primary").named_limits
+            ] == [("A", 1_000_000), ("B", 2_000_000), ("C", 1_000_000)]
+
+            sheet = editor.query_one("#named-limits-sheet", SheetTable)
+            sheet.focus()
+            sheet.move_cursor(row=1, column=0)
+            await pilot.pause()
+            await pilot.press("delete")
+            await pilot.pause()
+            assert [
+                nl.name for nl in editor._layer("el-primary").named_limits
+            ] == ["A", "C"]
+
+    @pytest.mark.asyncio
+    async def test_the_form_shows_what_is_already_on_file(self, program_file) -> None:
+        """A form that renders a stored value blank is worse than no form: the
+        next commit of that field writes the blank back, which is exactly the
+        clear the round-trip tests above perform on purpose."""
+        app = TowerkitApp(path=program_file)
+        async with app.run_test(size=(160, 48)) as pilot:
+            editor = app.screen
+
+            def furnish(p):
+                layer = p.layers[0]
+                layer.states = ["NY", "NJ"]
+                layer.premium_detail = "Included with Part A"
+                layer.named_limits.append(
+                    NamedLimit(name="Each Accident", amount=1_000_000)
+                )
+
+            editor.session.mutate(furnish)
+            editor.selected = ("layer", "wc-stat")
+            await editor._rebuild_detail()
+            await pilot.pause()
+
+            assert editor.query_one("#f-layer-states").value == "NY, NJ"
+            assert (
+                editor.query_one("#f-layer-premium-detail").value
+                == "Included with Part A"
+            )
+            sheet = editor.query_one("#named-limits-sheet", SheetTable)
+            assert sheet.row_count == 1
+            assert sheet.get_row_at(0)[0] == "Each Accident"
+
+    @pytest.mark.asyncio
     async def test_the_other_layer_is_never_written(self, program_file) -> None:
         """The write lands on the layer whose form is open, and only there."""
         app = TowerkitApp(path=program_file)
