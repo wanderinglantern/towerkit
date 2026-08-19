@@ -203,8 +203,8 @@ def test_statutory_key_sits_after_limit() -> None:
 
 def test_old_file_round_trips_byte_identical_through_the_new_fields() -> None:
     """The load-bearing one. A file written before any of these fields existed
-    must come back out of the new code byte for byte — if `_ordered` gained a
-    key that is emitted as an empty list rather than dropped, EVERY stored
+    must come back out of the new code byte for byte — if one of these fields
+    lost its OMIT_EMPTY tag and started emitting an empty list, EVERY stored
     program's canonical form changes and every one of them looks dirty."""
     original = SAMPLE.read_text(encoding="utf-8")
     assert dumps_program(loads_program(original)) == original
@@ -284,7 +284,8 @@ def test_premium_detail_omitted_when_absent() -> None:
 
 
 def test_new_layer_keys_sit_in_the_canonical_order() -> None:
-    """_ordered's hand-written order is the thing that breaks silently. Pin
+    """Key order is the thing that breaks silently — it is model declaration
+    order now, and reordering a model class reorders every stored file. Pin
     every new key's neighbours, not just its presence."""
     text = _program_json(
         '      "namedLimits": [\n'
@@ -309,13 +310,44 @@ def test_new_layer_keys_sit_in_the_canonical_order() -> None:
     assert found == sorted(found), dict(zip(order, found, strict=True))
 
 
-def test_canonical_order_refuses_a_field_it_has_not_learned() -> None:
-    """The guard behind all of the above: _ordered raises rather than dropping
-    a key it does not know, so a future field added to the model without a
-    place in the order fails loudly instead of vanishing from the file."""
+def test_the_canonical_guard_refuses_to_drop_a_field_that_is_set() -> None:
+    """The guard behind all of the above, and it points the other way now.
+
+    The old one compared the hand-built dict against a hand-written key order,
+    so it could only fire on a key ADDED to the dict with no place in the order
+    — a mistake you can see, because the value lands somewhere wrong. It was
+    structurally blind to a field MISSING from the dict, which is silent, and
+    silent is what shipped: a write returned a write_ref and an empty error
+    list, and the value was in neither the file nor the next read.
+
+    This one reads the MODEL and refuses to let a field that is set leave
+    without being written.
+    """
     import pytest
 
-    from towerkit.model import _LAYER_KEYS, _ordered
+    from towerkit.model import _check_nothing_was_dropped, _model_to_jsonable
 
-    with pytest.raises(RuntimeError, match="canonical key order is missing"):
-        _ordered({"id": "x", "notAField": 1}, _LAYER_KEYS)
+    layer = Layer(
+        id="x", name="X", applies_to=["gl"], attach=0, limit=1_000_000,
+        notes="do not lose me",
+    )
+    emitted = _model_to_jsonable(layer)
+    assert emitted.pop("notes") == "do not lose me"
+
+    with pytest.raises(RuntimeError, match="Layer.notes is set and was not written"):
+        _check_nothing_was_dropped(layer, emitted)
+
+
+def test_the_canonical_guard_refuses_a_type_it_cannot_write() -> None:
+    """The other half of the derivation's safety. A field typed something the
+    serialiser has never seen must fail at the boundary, not reach json.dumps
+    to be guessed at or rounded — money is integer whole dollars and a generic
+    encoder is exactly how it would stop being."""
+    from decimal import Decimal
+
+    import pytest
+
+    from towerkit.model import _jsonable
+
+    with pytest.raises(RuntimeError, match="cannot write a Decimal"):
+        _jsonable(Decimal("0.35"))

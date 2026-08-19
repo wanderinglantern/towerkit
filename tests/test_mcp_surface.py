@@ -215,7 +215,8 @@ def test_a_nested_model_is_denied_and_expanded_by_rule() -> None:
 
 def test_a_model_two_levels_deep_is_loud_at_build_time() -> None:
     """Depth is exactly one. A silent skip makes a field unreachable and
-    nothing says so — `model._ordered` raises for the same reason."""
+    nothing says so — the canonical serialiser's drop guard raises for the
+    same reason."""
 
     class Outer(_Model):
         inner: Period = Period(start=date(2026, 1, 1), end=date(2027, 1, 1))

@@ -13,13 +13,15 @@ Round-tripping an untouched file must produce a zero diff.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from datetime import date
 from decimal import Decimal
-from enum import StrEnum
+from enum import Enum, StrEnum
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, get_args
 
 from pydantic import BaseModel, ConfigDict, Field
+from pydantic.fields import FieldInfo
 
 from .atomicio import atomic_write_text
 from .money import bps_to_json_number, share_to_bps
@@ -52,6 +54,32 @@ class _MoneyTag:
 
 MONEY = _MoneyTag()
 Money = Annotated[int, Field(ge=0), MONEY]
+
+
+class _OmitEmptyTag:
+    """Marker: write this field only when it is truthy — otherwise no key.
+
+    `followsUnderlying` set the precedent and `statutory`, `namedLimits`,
+    `states` and `soiSchematic` follow it: a program that does not use the
+    feature must not gain the key, so a file written before the field existed
+    re-saves byte-identically, and an older towerkit wheel rejects only a file
+    that actually USES the feature.
+
+    It is a decision per FIELD, never a rule about falsy values: `attach: 0`,
+    `premium: 0`, `showTotals: false` and an empty `participants` list are all
+    written, and dropping any of them would rewrite files nobody edited. The
+    decision therefore lives on the field, where the next person adding one
+    reads it, instead of in a table beside the model — a table beside the model
+    is exactly what the canonical serialiser stopped being.
+    """
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:  # so a derived error message reads sensibly
+        return "OMIT_EMPTY"
+
+
+OMIT_EMPTY = _OmitEmptyTag()
 
 
 class Placement(StrEnum):
@@ -133,7 +161,9 @@ class Layer(_Model):
     name: str = Field(min_length=1)
     policy_number: str | None = Field(alias="policyNumber", default=None)
     period: Period | None = None
-    follows_underlying: bool = Field(alias="followsUnderlying", default=False)
+    follows_underlying: Annotated[bool, OMIT_EMPTY] = Field(
+        alias="followsUnderlying", default=False
+    )
     applies_to: list[str] = Field(alias="appliesTo", min_length=1)
     attach: Money
     # Money with NO `ge=0`: positivity is a SEMANTIC rule (validate.py reports
@@ -142,15 +172,17 @@ class Layer(_Model):
     limit: Annotated[int, MONEY]
     # Several coordinate limits where `limit` states one. Order is the file's
     # order and is display order — never sorted.
-    named_limits: list[NamedLimit] = Field(alias="namedLimits", default_factory=list)
-    statutory: bool = False  # no dollar limit (WC Part A); limit MUST be 0
+    named_limits: Annotated[list[NamedLimit], OMIT_EMPTY] = Field(
+        alias="namedLimits", default_factory=list
+    )
+    statutory: Annotated[bool, OMIT_EMPTY] = False  # no dollar limit; limit MUST be 0
     # Jurisdictions a STATUTORY layer covers. A coverage fact, not a display
     # string: cover in a state the policy is not filed in is worth nothing, and
     # four states (ND/OH/WA/WY) cannot be covered by a private policy at all —
     # `validate` owns both rules. Meaningless on a dollar-limited layer, and
     # refused there, or it becomes a general-purpose note by accident.
     # Stored VERBATIM: normalising case here would rewrite files nobody edited.
-    states: list[str] = Field(default_factory=list)
+    states: Annotated[list[str], OMIT_EMPTY] = Field(default_factory=list)
     premium: Money | None = None
     limits_detail: str | None = Field(alias="limitsDetail", default=None)
     retention_detail: str | None = Field(alias="retentionDetail", default=None)
@@ -198,7 +230,9 @@ class RenderSettings(_Model):
     show_premiums: bool = Field(alias="showPremiums", default=True)
     cell_premiums: bool = Field(alias="cellPremiums", default=False)
     cell_dates: bool = Field(alias="cellDates", default=False)
-    soi_schematic: bool = Field(alias="soiSchematic", default=False)
+    soi_schematic: Annotated[bool, OMIT_EMPTY] = Field(
+        alias="soiSchematic", default=False
+    )
 
 
 class Program(_Model):
@@ -282,156 +316,139 @@ def _plus_year(d: date) -> date:
 
 
 # --- canonical serialisation -------------------------------------------------
-
-# Key order is frozen to match the schema. If the TUI reformatted files
-# arbitrarily, git diffs between renewal years would be unreadable.
-_PROGRAM_KEYS = (
-    "$schema", "insured", "program", "placement", "period", "currency",
-    "render", "lines", "layers", "retentions", "sublimits", "notes",
-)
-_LINE_KEYS = ("id", "name", "abbr", "group")
-_LAYER_KEYS = (
-    "id", "name", "policyNumber", "period", "followsUnderlying", "appliesTo",
-    "attach", "limit", "namedLimits", "statutory", "states", "premium",
-    "limitsDetail", "retentionDetail", "premiumDetail", "participants", "notes",
-)
-_NAMED_LIMIT_KEYS = ("name", "amount")
-_PARTICIPANT_KEYS = ("carrier", "share")
-_RETENTION_KEYS = ("appliesTo", "type", "amount", "aggregate", "vehicle", "notes")
-_SUBLIMIT_KEYS = ("name", "amount", "appliesTo", "notes")
-_PERIOD_KEYS = ("start", "end")
-_RENDER_KEYS = (
-    "theme", "showTotals", "showPremiums", "cellPremiums", "cellDates", "soiSchematic",
-)
+#
+# DERIVED from the models, exactly as `program_read` and the MCP surface are.
+#
+# This used to be a THIRD hand-written field table (`_PROGRAM_KEYS`,
+# `_LAYER_KEYS`, …) and it is why "add a field to model.py and it is writable"
+# was false end to end: the write reached the in-memory model, the MCP response
+# came back `{"wrote": ..., "errors": []}`, and the value was in neither the
+# file nor the next read. The guard meant to catch that ran BACKWARDS —
+# `set(raw) - set(keys)` over the hand-built dict could only see a key ADDED to
+# the table, and was structurally blind to one MISSING from it, which is the
+# only failure that ever actually happens.
+#
+# Key ORDER is model DECLARATION order, and that is not a new convention: every
+# one of the deleted tuples was already in declaration order, field for field.
+# `Participant` was the single deviation and only in the NAME — `share_bps` in
+# memory, `share` on disk, same position — which `_DISK_FORM` carries.
 
 
-def _ordered(raw: dict[str, Any], keys: tuple[str, ...]) -> dict[str, Any]:
-    missing = set(raw) - set(keys)
-    if missing:  # a field exists in the model but not in the canonical order
-        raise RuntimeError(f"canonical key order is missing {sorted(missing)}")
-    return {k: raw[k] for k in keys if k in raw and raw[k] is not None}
+# The one place the file's shape departs from the model's, and the one thing
+# here that cannot be derived: a participant's share is basis points in memory
+# and a decimal fraction on disk. It is not a validator because an integer `1`
+# on disk means 100%, which no field validator could tell apart from 1 bps —
+# see `Participant`. (model, python field) -> (disk key, converter).
+_DISK_FORM: dict[tuple[type[BaseModel], str], tuple[str, Callable[[Any], Any]]] = {
+    (Participant, "share_bps"): ("share", bps_to_json_number),
+}
+
+
+def _has_tag(info: FieldInfo, tag: object) -> bool:
+    """Is `tag` on this field's annotation?
+
+    Two shapes, because pydantic flattens them differently: `Annotated[bool,
+    OMIT_EMPTY]` lands the tag in `FieldInfo.metadata`, while an optional
+    (`Money | None`) keeps it on the inner `Annotated`'s own `__metadata__` and
+    leaves `FieldInfo.metadata` empty. `mcpsurface._flatten` pays the same cost
+    for MONEY.
+    """
+    if any(item is tag for item in info.metadata):
+        return True
+    annotation = info.annotation
+    for candidate in (annotation, *get_args(annotation)):
+        if any(item is tag for item in getattr(candidate, "__metadata__", ())):
+            return True
+    return False
+
+
+def _disk_key(model: type[BaseModel], name: str, info: FieldInfo) -> str:
+    """The key the FILE uses: the `_DISK_FORM` rename, else the alias, else the
+    python name. Aliases are the on-disk names — `policyNumber`, `appliesTo`,
+    `$schema` — and the model is the only place they are written down."""
+    override = _DISK_FORM.get((model, name))
+    return override[0] if override is not None else (info.alias or name)
+
+
+def _omitted(info: FieldInfo, value: Any) -> bool:
+    """Is this field left out of the file entirely?
+
+    A None is always absent: the canonical format never writes `null`, and an
+    absent key means the default. A falsy value is absent only when the field
+    carries OMIT_EMPTY — see that tag for why it is per-field and not a rule.
+    """
+    return value is None or (not value and _has_tag(info, OMIT_EMPTY))
+
+
+def _jsonable(value: Any) -> Any:
+    """One value, in the form `json.dumps` must see it.
+
+    The final `raise` is the other half of the derivation's safety: a field
+    typed something this does not know (a Decimal, a set, a UUID) fails loudly
+    at the boundary instead of getting whatever `json.dumps` guesses, or
+    whatever a generic encoder would round to a float — money is integer whole
+    dollars and stays that way.
+    """
+    if isinstance(value, BaseModel):
+        return _model_to_jsonable(value)
+    if isinstance(value, list):
+        return [_jsonable(item) for item in value]
+    if isinstance(value, Enum):  # before the scalar check: StrEnum IS a str
+        return value.value
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, bool | int | float | str):
+        return value
+    raise RuntimeError(
+        f"the canonical serialiser cannot write a {type(value).__name__}; teach "
+        f"`_jsonable` how, rather than letting json.dumps guess"
+    )
+
+
+def _model_to_jsonable(model: BaseModel) -> dict[str, Any]:
+    cls = type(model)
+    out: dict[str, Any] = {}
+    for name, info in cls.model_fields.items():
+        value = getattr(model, name)
+        if _omitted(info, value):
+            continue
+        override = _DISK_FORM.get((cls, name))
+        if override is not None:
+            value = override[1](value)
+        out[_disk_key(cls, name, info)] = _jsonable(value)
+    _check_nothing_was_dropped(model, out)
+    return out
+
+
+def _check_nothing_was_dropped(model: BaseModel, emitted: dict[str, Any]) -> None:
+    """The guard, pointing the direction that actually fails.
+
+    The old one compared the hand-built dict against the hand-written key order
+    and so could only fire when a key was ADDED to the dict without a place in
+    the order — a mistake that leaves the value visibly in the wrong place. It
+    could not fire on a field missing from the dict, which is silent, and
+    silent is what shipped.
+
+    This asks the question the other way round, off `model_fields` rather than
+    off the loop above: is every field the model declares either in the file or
+    absent for a stated reason? A stray `continue` in the loop, or a
+    `_DISK_FORM` entry that renames a key into nothing, fails here instead of
+    dropping a broker's data into a success receipt.
+    """
+    cls = type(model)
+    for name, info in cls.model_fields.items():
+        if _disk_key(cls, name, info) in emitted:
+            continue
+        if _omitted(info, getattr(model, name)):
+            continue
+        raise RuntimeError(
+            f"{cls.__name__}.{name} is set and was not written to the file"
+        )
 
 
 def program_to_jsonable(program: Program) -> dict[str, Any]:
     """The exact object tree the canonical file contains."""
-    raw = {
-        "$schema": program.schema_id,
-        "insured": program.insured,
-        "program": program.program,
-        "placement": program.placement.value,
-        "period": _ordered(
-            {"start": program.period.start.isoformat(), "end": program.period.end.isoformat()},
-            _PERIOD_KEYS,
-        ),
-        "currency": program.currency,
-        "render": (
-            _ordered(
-                {
-                    "theme": program.render.theme,
-                    "showTotals": program.render.show_totals,
-                    "showPremiums": program.render.show_premiums,
-                    "cellPremiums": program.render.cell_premiums,
-                    "cellDates": program.render.cell_dates,
-                    # emitted only when true (the followsUnderlying pattern):
-                    # untouched programs re-save byte-identically, and older
-                    # towerkit wheels only reject files that USE the feature
-                    "soiSchematic": program.render.soi_schematic or None,
-                },
-                _RENDER_KEYS,
-            )
-            if program.render is not None
-            else None
-        ),
-        "lines": [
-            _ordered(
-                {"id": ln.id, "name": ln.name, "abbr": ln.abbr, "group": ln.group},
-                _LINE_KEYS,
-            )
-            for ln in program.lines
-        ],
-        "layers": [
-            _ordered(
-                {
-                    "id": layer.id,
-                    "name": layer.name,
-                    "policyNumber": layer.policy_number,
-                    "period": (
-                        _ordered(
-                            {
-                                "start": layer.period.start.isoformat(),
-                                "end": layer.period.end.isoformat(),
-                            },
-                            _PERIOD_KEYS,
-                        )
-                        if layer.period is not None
-                        else None
-                    ),
-                    "followsUnderlying": layer.follows_underlying or None,
-                    "appliesTo": list(layer.applies_to),
-                    "attach": layer.attach,
-                    "limit": layer.limit,
-                    # `or None` on the LISTS too, not just the bools: _ordered
-                    # drops None and nothing else, so an empty list would emit
-                    # `[]` into every existing file and make every stored
-                    # program look dirty on its next save
-                    "namedLimits": [
-                        _ordered(
-                            {"name": nl.name, "amount": nl.amount}, _NAMED_LIMIT_KEYS
-                        )
-                        for nl in layer.named_limits
-                    ]
-                    or None,
-                    # emitted only when true (the followsUnderlying pattern):
-                    # untouched programs re-save byte-identically, and older
-                    # towerkit wheels only reject files that USE the feature
-                    "statutory": layer.statutory or None,
-                    "states": list(layer.states) or None,
-                    "premium": layer.premium,
-                    "limitsDetail": layer.limits_detail,
-                    "retentionDetail": layer.retention_detail,
-                    "premiumDetail": layer.premium_detail,
-                    "participants": [
-                        _ordered(
-                            {"carrier": p.carrier, "share": bps_to_json_number(p.share_bps)},
-                            _PARTICIPANT_KEYS,
-                        )
-                        for p in layer.participants
-                    ],
-                    "notes": layer.notes,
-                },
-                _LAYER_KEYS,
-            )
-            for layer in program.layers
-        ],
-        "retentions": [
-            _ordered(
-                {
-                    "appliesTo": list(r.applies_to),
-                    "type": r.type.value,
-                    "amount": r.amount,
-                    "aggregate": r.aggregate,
-                    "vehicle": r.vehicle,
-                    "notes": r.notes,
-                },
-                _RETENTION_KEYS,
-            )
-            for r in program.retentions
-        ],
-        "sublimits": [
-            _ordered(
-                {
-                    "name": s.name,
-                    "amount": s.amount,
-                    "appliesTo": list(s.applies_to),
-                    "notes": s.notes,
-                },
-                _SUBLIMIT_KEYS,
-            )
-            for s in program.sublimits
-        ],
-        "notes": program.notes,
-    }
-    return _ordered(raw, _PROGRAM_KEYS)
+    return _model_to_jsonable(program)
 
 
 def dumps_program(program: Program) -> str:

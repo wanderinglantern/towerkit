@@ -260,7 +260,9 @@ relitigated here.
 ## Layer detail fields: states / namedLimits / premiumDetail (2026-08-18)
 
 One canonical-format change carrying three findings, because each touches
-`_LAYER_KEYS` and the zero-diff round trip.
+the layer's canonical key order and the zero-diff round trip. (The
+hand-written `_LAYER_KEYS` named here was deleted on 2026-08-19 — see
+*Canonical serialisation is derived*.)
 
 - **`states` is on the layer, statutory only** (Grant's C15 call: modelling
   over free text). Cover in a state we are not filed in is worth nothing, so
@@ -350,3 +352,36 @@ One canonical-format change carrying three findings, because each touches
   discovers them by name (`*_HINT`) rather than listing them, since a hint
   constant the arbiter does not know about is the exact drift it exists to
   catch.
+
+## Canonical serialisation is derived (2026-08-19)
+
+- **`program_to_jsonable` is computed from `model_fields`, not typed.** It was
+  the THIRD hand-written field table in the tree, after the MCP write surface
+  and `program_read`, and it is why the branch's claim — "add a field to
+  `model.py` and it is writable with no MCP edit" — was false end to end. The
+  write reached the in-memory model, the response came back `{"wrote": ...,
+  "errors": []}`, and the value was in neither the file nor the next read. A
+  success receipt for a lost edit is the worst failure mode this connector has.
+- **The guard ran backwards and is now turned round.** `_ordered` computed
+  `set(raw) - set(keys)` over the HAND-BUILT dict, so it could only fire on a
+  key ADDED to the dict with no place in the order — visible, because the value
+  lands somewhere wrong. It was structurally blind to a field MISSING from the
+  dict, which is silent. `_check_nothing_was_dropped` reads the model instead
+  and refuses to let a field that is SET leave without being written.
+- **Key order is model DECLARATION order, and no file changed.** Every deleted
+  tuple (`_PROGRAM_KEYS`, `_LAYER_KEYS`, …) was already in declaration order,
+  field for field — checked before the rewrite, not assumed. `Participant` was
+  the one deviation and only in the NAME, `share_bps` in memory against `share`
+  on disk at the same position, which `_DISK_FORM` carries. Reordering a model
+  class now reorders every stored file, so the classes are the canonical order.
+- **Omit-when-empty is a tag on the field, not a rule about falsy values.**
+  `attach: 0`, `premium: 0`, `showTotals: false` and an empty `participants`
+  list are written; `followsUnderlying`, `statutory`, `namedLimits`, `states`
+  and `soiSchematic` are not. Dropping any of the first group would rewrite
+  files nobody edited, so the decision sits on the field as `OMIT_EMPTY`,
+  beside `MONEY`, where the next person adding a field reads it — a table
+  beside the model is precisely what this change deleted.
+- **An unknown value type raises rather than reaching `json.dumps`.** The other
+  half of the derivation's safety: a field typed a Decimal or a set fails at
+  the boundary instead of being guessed at or rounded, and money is integer
+  whole dollars.

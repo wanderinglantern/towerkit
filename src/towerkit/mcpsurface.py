@@ -457,8 +457,9 @@ def build_surface(
 ) -> dict[str, dict[str, Entry]]:
     """kind → advertised field → entry, in MODEL declaration order.
 
-    Declaration order is canonical file order (it matches `model._LAYER_KEYS`),
-    so `describe` reads like the file a broker opens. Never alphabetical.
+    Declaration order IS canonical file order — `model.program_to_jsonable`
+    derives the file's key order from the same `model_fields` this walks — so
+    `describe` reads like the file a broker opens. Never alphabetical.
     """
     models = KIND_MODELS if models is None else models
     denied = DENIED if denied is None else denied
@@ -508,7 +509,8 @@ def _expand(
         base, metadata, optional = _flatten(child_info)
         if _is_model(base):
             # Loud, never a silent skip that leaves a field unreachable with
-            # nothing saying so — the same call `model._ordered` makes.
+            # nothing saying so — the same call the canonical serialiser's
+            # `_check_nothing_was_dropped` makes.
             raise RuntimeError(
                 f"{kind}.{alias}.{child_alias} nests a model inside a nested model; "
                 f"the surface addresses scalars one level deep only"
