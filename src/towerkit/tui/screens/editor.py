@@ -114,6 +114,11 @@ Data sheets
   v          layers sheet: every layer in one grid — name, attach,
              limit and premium edit in place; enter opens the
              selected layer's form; v or esc returns to the form
+  p          participants: jump the cursor straight onto the
+             selected layer's carrier/share grid, skipping the
+             form fields in between. With no layer selected it
+             opens the layers sheet — pick a row and press p
+             again.
   i          edit the cell under the cursor, spreadsheet style
              (layers sheet, and the participants grid in a
              layer form)
@@ -150,24 +155,38 @@ NodeRef = tuple[str, Any]
 NODE_HINTS: dict[str, str] = {
     "program": (
         "[b]t[/b] render options · [b]x[/b] SOI export · [b]=[/b] restack · "
-        "[b]v[/b] layers sheet"
+        "[b]v[/b] layers sheet · [b]p[/b] participants"
     ),
     "lines-group": "[b]a[/b] add line",
     "line": (
         "[b]a[/b] add line · [b]del[/b] remove · [b]\\[ ][/b] move column · "
         "[b]>[/b] send to program"
     ),
-    "layers-group": "[b]a[/b] add layer · [b]=[/b] restack · [b]v[/b] layers sheet",
+    "layers-group": (
+        "[b]a[/b] add layer · [b]=[/b] restack · [b]v[/b] layers sheet · "
+        "[b]p[/b] participants"
+    ),
     "layer": (
         "[b]a[/b] add layer · [b]del[/b] remove · [b]=[/b] restack · "
-        "[b]v[/b] layers sheet · participants: [b]i[/b] edit cell · "
-        "[b]a[/b]/[b]del[/b] row"
+        "[b]v[/b] layers sheet · [b]p[/b] participants"
     ),
     "retentions-group": "[b]a[/b] add retention",
     "retention": "[b]a[/b] add retention · [b]del[/b] remove",
     "sublimits-group": "[b]a[/b] add sublimit",
     "sublimit": "[b]a[/b] add sublimit · [b]del[/b] remove",
 }
+
+# The two sheet hint lines, hoisted out of the widgets that print them so
+# tests/test_dead_keys.py can read them: a hint naming an unbound key is the
+# failure mode these constants exist to make checkable.
+LAYERS_SHEET_HINT = (
+    "[b]p[/b] participants · [b]i[/b] edit cell · [b]tab[/b] next cell · "
+    "[b]enter[/b] open layer form · [b]a[/b] add layer · [b]del[/b] remove · "
+    "[b]v[/b]/[b]esc[/b] back to form · [b]?[/b] all keys"
+)
+PARTICIPANTS_SHEET_HINT = (
+    "[b]i[/b] edit cell · [b]a[/b] add · [b]del[/b] remove · [b]tab[/b] next cell"
+)
 
 
 def _opts(screen: Screen) -> Any:
@@ -203,6 +222,7 @@ class EditorScreen(Screen):
         Binding("equals_sign", "restack", "restack", show=False),
         Binding("greater_than_sign", "send_line", "send", show=False),
         Binding("v", "layers_sheet", "Layers sheet", show=False),
+        Binding("p", "participants", "Participants", show=False),
     ]
 
     DEFAULT_CSS = """
@@ -414,11 +434,27 @@ class EditorScreen(Screen):
         self._select_tree_node(ref)
         await self._rebuild_detail()
 
-    def _select_tree_node(self, ref: NodeRef) -> None:
+    def _select_tree_node(self, ref: NodeRef, *, rebuild: bool = True) -> None:
+        """Point the outline at a node the SCREEN already selected.
+
+        `select_node` posts NodeSelected, which arrives as a SECOND
+        `_rebuild_detail` telling the screen what the screen just decided.
+        Callers that invalidated the open form rely on it — the line rename
+        redraws its own inputs that way, and `_commit_ref` is re-stamped
+        with the new id there.
+
+        `rebuild=False` moves the cursor without the post, for callers that
+        already rebuilt and then focused something: that late rebuild
+        replaces the widget under the focus and drops it on the floor
+        (`p` landed on #detail instead of the participants grid).
+        """
         tree = self.query_one("#structure", Tree)
         for node in self._walk(tree.root):
             if node.data == ref:
-                tree.select_node(node)
+                if rebuild:
+                    tree.select_node(node)
+                else:
+                    tree.move_cursor(node)
                 tree.scroll_to_node(node)
                 return
 
@@ -447,10 +483,7 @@ class EditorScreen(Screen):
             # (2fr against the preview's 1fr keeps `signed` on screen)
             detail.styles.width = "2fr"
             self.query_one("#key-hint", Static).update(
-                f"[{DIM}][b]i[/b] edit cell · [b]tab[/b] next cell · "
-                "[b]enter[/b] open layer form · [b]a[/b] add layer · "
-                "[b]del[/b] remove · [b]v[/b]/[b]esc[/b] back to form · "
-                "[b]?[/b] all keys[/]"
+                f"[{DIM}]{LAYERS_SHEET_HINT}[/]"
             )
             await detail.mount_all(self._layers_sheet_widgets())
             return
@@ -682,8 +715,7 @@ class EditorScreen(Screen):
             Label("— Participants —", classes="field-label"),
             self._participants_sheet(layer),
             Static(
-                f"[{DIM}][b]i[/b] edit cell · [b]a[/b] add · [b]del[/b] remove · "
-                "[b]tab[/b] next cell[/]",
+                f"[{DIM}]{PARTICIPANTS_SHEET_HINT}[/]",
                 classes="sheet-hint",
             ),
             Static(self._signed_summary(layer), id="signed-summary", classes="row-total"),
@@ -893,6 +925,65 @@ class EditorScreen(Screen):
             except Exception:
                 pass
         else:
+            self.query_one("#structure", Tree).focus()
+
+    # -- participants, one key away --------------------------------------------
+
+    def _layer_in_context(self) -> str | None:
+        """Which layer `p` should drill into.
+
+        The layers sheet's cursor row wins while that sheet is up — it is
+        what the user is looking at, and the outline behind it is still on
+        whatever was selected before `v`. Otherwise it is the outline's own
+        selection.
+        """
+        if self._layers_sheet_open:
+            try:
+                sheet = self.query_one("#layers-sheet", SheetTable)
+            except Exception:
+                return None
+            row_key = sheet._row_key_at(sheet.cursor_row)
+            return row_key if row_key and self._layer(row_key) else None
+        kind, key = self.selected
+        if kind == "layer" and self._layer(key) is not None:
+            return str(key)
+        return None
+
+    async def action_participants(self) -> None:
+        """Put the cursor on the selected layer's participants grid.
+
+        This is the whole friction fix. The editing was never the problem —
+        the grid already does carrier and share in place — but reaching it
+        meant selecting the layer and then tabbing past twenty form fields,
+        which measured 50 keystrokes through the outline and 37 through `v`
+        for one share change. `p` deletes that second leg.
+        """
+        self._drain_focused_input()
+        layer_id = self._layer_in_context()
+        if layer_id is None:
+            # A refusal says something. Returning in silence here would read
+            # as a broken key on the one node (the program root) the editor
+            # opens on, so `p` opens the picker and names the next step —
+            # and the SAME key finishes the job from there.
+            if not self.session.program.layers:
+                self.notify(
+                    "no layers yet — press a on Layers to add one",
+                    severity="warning",
+                )
+                return
+            if not self._layers_sheet_open:
+                await self.action_layers_sheet()
+            self.notify("pick a layer with up/down, then p for its participants")
+            return
+        self._layers_sheet_open = False
+        self.selected = ("layer", layer_id)
+        await self._rebuild_detail()
+        self._select_tree_node(self.selected, rebuild=False)
+        try:
+            self.query_one("#participants-sheet", SheetTable).focus()
+        except Exception:
+            # every layer form mounts the grid; if that ever stops being
+            # true, land somewhere navigable rather than nowhere
             self.query_one("#structure", Tree).focus()
 
     # -- sheet message plumbing ------------------------------------------------
