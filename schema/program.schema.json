@@ -203,7 +203,7 @@
           "$ref": "#/$defs/money"
         },
         "limitsDetail": {
-          "description": "SOI Limits column prose, exported verbatim; composed from limit/attach/sublimits when absent.",
+          "description": "SOI Limits column prose for THIS LAYER'S limit, exported verbatim; composed from limit/attach when absent. Sublimits are scoped to lines, not layers, so they are appended to the cell either way and this never replaces them.",
           "type": "string",
           "minLength": 1
         },
