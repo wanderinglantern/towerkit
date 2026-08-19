@@ -839,13 +839,65 @@ class TestDerivedRead:
             missing += [f"{label}.{f}" for f in sorted(_advertised(cls) - set(payload))]
         assert not missing, f"program_read has gone lossy again: {missing}"
 
-    def test_the_read_speaks_the_file_s_own_keys(self, roots) -> None:
+    def test_every_tool_that_returns_a_period_speaks_the_file_s_own_keys(
+        self, roots
+    ) -> None:
         """One naming convention, not three. The old read mixed aliases for
         layer fields, the python name for a share, and invented `from`/`to`
-        keys for a period — so a caller could not tell what to send back."""
-        read = _program_read(Programs(roots), "atomic-2026")
+        keys for a period — so a caller could not tell what to send back.
+
+        This guarded `program_read` alone until 2026-08-19 while its docstring
+        condemned the convention generally, and `_period` was still shipping
+        `from`/`to` on `program_list` and `program_clone_renewal`. A caller
+        that read a period off the list got two keys no tool accepts: the
+        writable fields are `period.start` and `period.end`. The convention is
+        extended rather than the docstring narrowed — a read that teaches a
+        vocabulary the write refuses is the defect, wherever it happens.
+
+        Mutation drill (2026-08-19): restored `{"from": ..., "to": ...}` in
+        `_period`. Failed with `AssertionError: program_list period keys are
+        {'from', 'to'}` — and, with the summary left alone, on the clone.
+        """
+        programs = Programs(roots)
+        read = _program_read(programs, "atomic-2026")
         assert set(read["period"]) == {"start", "end"}
-        assert "from" not in read["period"]
+
+        listed = next(
+            row for row in _program_list(programs)["programs"] if row["name"] == "atomic-2026"
+        )
+        assert set(listed["period"]) == {"start", "end"}, (
+            f"program_list period keys are {set(listed['period'])}"
+        )
+
+        cloned = _program_clone_renewal(programs, "atomic-2026", "atomic-2027")
+        assert set(cloned["period"]) == {"start", "end"}, (
+            f"program_clone_renewal period keys are {set(cloned['period'])}"
+        )
+        # The clone's own `from` is the SOURCE PROGRAM, not a date — it is the
+        # word doing honest work here, which is part of why the period had to
+        # stop borrowing it.
+        assert cloned["from"] == "atomic-2026"
+
+    def test_one_function_builds_every_period_a_tool_returns(self) -> None:
+        """The convention above holds only while `_period` is the sole
+        producer. A tool that formatted the dates inline would satisfy no test
+        here and would drift on the next rename — the same shape as the
+        no-renderer-re-derives-the-pending-predicate ban.
+
+        Mutation drill (2026-08-19): inlined `{"start": program.period.start
+        .isoformat(), ...}` into `_program_summary`. Failed with `2 places
+        format a period`. Restored.
+        """
+        source = (SRC / "mcpserver.py").read_text("utf-8")
+        places = [
+            f"{number}: {text.strip()}"
+            for number, text in enumerate(source.splitlines(), start=1)
+            if "period.start.isoformat()" in text
+        ]
+        assert len(places) == 1, (
+            f"{len(places)} places format a period; `_period` is the only one "
+            f"allowed to:\n  " + "\n  ".join(places)
+        )
 
     def test_rows_with_no_id_carry_the_index_the_edit_tools_address(self, roots) -> None:
         """Derived from the ABSENCE of an id field, not from a list of

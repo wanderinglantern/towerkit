@@ -21,8 +21,8 @@ from pathlib import Path
 import pytest
 
 from towerkit import edit, mcpsurface
-from towerkit.model import load_program
-from towerkit.validate import WARNING
+from towerkit.model import Period, RenderSettings, load_program
+from towerkit.validate import WARNING, Diagnostic
 
 SAMPLE = Path(__file__).parent.parent / "programs" / "atomic-2026.json"
 
@@ -469,3 +469,156 @@ class TestSetStatutory:
     def test_an_unknown_layer_raises_key_error(self) -> None:
         with pytest.raises(KeyError):
             edit.set_statutory(_sample(), "no-such-layer", True)
+
+
+class TestADottedWriteTakesTheSameGuardPath:
+    """Defect 6, found 2026-08-19 by a verifier and not by a test.
+
+    `set_field`'s dotted branch resolved the container, did the `setattr` and
+    RETURNED — before the `_GUARDS` lookup, and without ever consulting
+    `_ADVISORIES`. Nothing was exploitable, because no dotted key was in either
+    table. What was broken was the module's CONTRACT: a key absent from
+    `_GUARDS` is set with no guard, which is exactly what makes a field added
+    to `model.py` writable with no edit here. That contract was silently false
+    for every nested scalar, and `period.start`, `period.end` and the render
+    flags are where the next cross-field rule (start before end) has to live.
+    A guard registered there would have been dead on arrival with nothing in
+    the suite failing.
+
+    So the guard tables are exercised on a dotted key here, rather than the
+    fixed code being taken on trust. The guard is registered by the TEST — a
+    real one would be a change to `_GUARDS` and would carry its own test — and
+    it is registered through `monkeypatch.setitem` so the table is restored
+    whatever the assertion does.
+    """
+
+    def test_a_guard_registered_on_a_dotted_key_fires(self, monkeypatch) -> None:
+        """Mutation drill (2026-08-19): restored the early `return []` in the
+        dotted branch. Failed with `Failed: DID NOT RAISE
+        GuardRefused`. Restored."""
+        program = _sample()
+        was = program.period.start
+
+        def refuse_a_start_after_the_end(program, entity, value) -> None:
+            if value >= entity.period.end:
+                raise edit.GuardRefused(
+                    f"a period starting {value} ends before it begins "
+                    f"({entity.period.end})"
+                )
+
+        monkeypatch.setitem(edit._GUARDS, ("program", "period.start"), refuse_a_start_after_the_end)
+
+        with pytest.raises(edit.GuardRefused) as caught:
+            edit.set_field(program, "program", "period.start", date(2028, 1, 1))
+        assert "ends before it begins" in str(caught.value)
+        assert program.period.start == was, "refused, and the write landed anyway"
+
+    def test_the_dotted_guard_key_is_the_CANONICAL_path(self, monkeypatch) -> None:
+        """`render.showTotals` and `render.show_totals` address one field, so
+        they must reach one guard key — otherwise a caller spelling it the
+        python way walks past the rule, which is the bug `_resolve` already
+        fixed for the undotted half.
+
+        Mutation drill (2026-08-19): keyed the lookup on the raw `field`
+        argument instead of the canonical join. Failed with `Failed: DID NOT
+        RAISE GuardRefused` on the python spelling.
+        """
+        seen: list[object] = []
+
+        def refuse(program, entity, value) -> None:
+            seen.append(value)
+            raise edit.GuardRefused("no")
+
+        monkeypatch.setitem(edit._GUARDS, ("program", "render.showTotals"), refuse)
+
+        for spelling in ("render.showTotals", "render.show_totals"):
+            program = _sample()
+            program.render = RenderSettings()
+            with pytest.raises(edit.GuardRefused):
+                edit.set_field(program, "program", spelling, False)
+        assert seen == [False, False], "one of the two spellings missed the guard"
+
+    def test_an_advisory_on_a_dotted_key_comes_back(self, monkeypatch) -> None:
+        """The other table the early return skipped. An advisory says what the
+        write did NOT do, and a dotted write returning `[]` unconditionally
+        would swallow it.
+
+        Mutation drill (2026-08-19): restored the early `return []`. Failed
+        with `assert [] == ['nested-advisory']`.
+        """
+
+        def advise(program, value) -> list:
+            return [Diagnostic(WARNING, "nested-advisory", "said something", ("program", None))]
+
+        monkeypatch.setitem(edit._ADVISORIES, ("program", "period.end"), advise)
+
+        program = _sample()
+        out = edit.set_field(program, "program", "period.end", date(2027, 6, 30))
+        assert [d.code for d in out] == ["nested-advisory"]
+        assert program.period.end == date(2027, 6, 30), "the write itself was lost"
+
+
+class TestSetContainer:
+    """Defect 7. The server materialised a missing `program.render` with a bare
+    `setattr` INSIDE the surface — and `program.render` is a denied field, so
+    the one object no caller may set wholesale was being constructed by the one
+    module the denylist is supposed to keep out of that business. The behaviour
+    was right; the location was not, and the TUI creates the same containers
+    without inheriting anything the server decided.
+
+    The semantics now have one definition, and it is checked here rather than
+    only through the tool that calls it.
+    """
+
+    def test_it_materialises_a_missing_container(self) -> None:
+        program = _sample()
+        assert program.render is None
+        edit.set_container(program, "program", "render.showTotals", RenderSettings())
+        assert program.render is not None
+        assert program.render.show_totals is True
+
+    def test_it_refuses_to_replace_a_container_that_is_already_there(self) -> None:
+        """Auto-creation replaces NOTHING. An existing render or period is the
+        caller's data, and overwriting it with a defaults object is exactly the
+        sibling-blanking write the container denylist exists to prevent — a
+        caller who set `cellPremiums` last week would find it back to false.
+
+        Mutation drill (2026-08-19): deleted the `is not None` check. Failed
+        with `Failed: DID NOT RAISE ValueError`. Restored.
+        """
+        program = _sample()
+        program.render = RenderSettings(cellPremiums=True)
+        with pytest.raises(ValueError, match="already set"):
+            edit.set_container(program, "program", "render.showTotals", RenderSettings())
+        assert program.render.cell_premiums is True, "a sibling was blanked"
+
+    def test_it_refuses_a_field_that_is_not_a_dotted_path(self) -> None:
+        """There is no "create an empty render": a container is materialised
+        only on the way to a scalar inside it, which is what makes the note the
+        caller gets back ("you changed showTotals") true.
+
+        Mutation drill (2026-08-19): dropped the `if not rest` branch. Failed
+        with `Failed: DID NOT RAISE ValueError`. Restored.
+        """
+        program = _sample()
+        with pytest.raises(ValueError, match="dotted path"):
+            edit.set_container(program, "program", "render", RenderSettings())
+
+    def test_it_addresses_a_layer_the_way_every_other_write_does(self) -> None:
+        """`layer.period` is the other container, and it hangs off a row —
+        so the helper takes the same address as `set_field` rather than
+        assuming the program.
+
+        Mutation drill (2026-08-19): made `set_container` resolve the program
+        instead of the addressed row. Failed with `ValueError: layer.period is
+        already set; it is denied to a wholesale write ...` — the program's own
+        period, which is required and therefore always there, standing in for
+        the layer's, which is optional and was not.
+        """
+        program = _sample()
+        layer = next(ly for ly in program.layers if ly.id == "umbrella")
+        assert layer.period is None
+        period = Period(start=date(2026, 1, 1), end=date(2027, 1, 1))
+        edit.set_container(program, "layer", "period.start", period, "umbrella")
+        assert layer.period is not None
+        assert layer.period.end == date(2027, 1, 1)

@@ -613,6 +613,10 @@ def _advise_currency(program: Program, value: object) -> list[Diagnostic]:
 
 
 # Keyed by (mcpsurface kind, field). Absent from both tables means "set it".
+# `field` is the CANONICAL name — the alias where there is one — and a nested
+# scalar is keyed by its dotted path exactly as the surface advertises it
+# (`("program", "period.start")`), so a cross-field rule can be added there
+# without touching `set_field`.
 _GUARDS: dict[tuple[str, str], Callable[[Program, Any, object], None]] = {
     ("layer", "attach"): _guard_attach,
     ("layer", "limit"): _guard_limit,
@@ -727,6 +731,7 @@ def set_field(
     entity = _entity(program, kind, target, index)
     head, _, rest = field.partition(".")
     attr, canonical = _resolve(entity, kind, head)
+    owner = entity
     if rest:
         # Scalars nested one level are addressed by dotted path; the
         # CONTAINING object is denied, so setting one member can never blank
@@ -737,15 +742,73 @@ def set_field(
                 f"{kind}.{canonical} is not set, so there is nothing for {field!r} "
                 f"to write into"
             )
-        sub_attr, _ = _resolve(container, canonical, rest)
-        setattr(container, sub_attr, value)
-        return []
+        sub_attr, sub_canonical = _resolve(container, canonical, rest)
+        # The nested write REJOINS the guard path rather than returning here.
+        # The contract of `_GUARDS` is that a key absent from it is set with no
+        # guard — which is what makes a new model field writable with no edit
+        # to this module. A dotted write that returned early made that contract
+        # silently false for every nested scalar: `period.start`,
+        # `period.end` and the render flags are exactly where the next
+        # cross-field rule (start before end) belongs, and it would have been
+        # dead on arrival with nothing failing.
+        owner, attr, canonical = container, sub_attr, f"{canonical}.{sub_canonical}"
+    # `entity` is what the guard sees, never `owner`: a rule about
+    # `program.period.start` reads the period's other half, and a rule about a
+    # layer's period reads the layer.
     guard = _GUARDS.get((kind, canonical))
     if guard is not None:
         guard(program, entity, value)
-    setattr(entity, attr, value)
+    setattr(owner, attr, value)
     advise = _ADVISORIES.get((kind, canonical))
     return advise(program, value) if advise is not None else []
+
+
+def set_container(
+    program: Program,
+    kind: str,
+    field: str,
+    container: Any,
+    target: str | int | None = None,
+    index: int | None = None,
+) -> Any:
+    """Materialise the MISSING parent of a dotted field — `program.render`
+    before `render.showTotals` can be written.
+
+    The write lives here rather than in the surface that noticed the gap.
+    `program.render` and `layer.period` are on the denylist: they are exactly
+    the objects no caller may set wholesale, because setting one blanks every
+    sibling. A surface that constructs one with a bare `setattr` is a second
+    definition of when that is allowed, in the one module the denylist is
+    supposed to keep out of the business — and the TUI, which creates the same
+    two containers, would not inherit it.
+
+    So the rule is stated once, here:
+
+    - the field must be dotted. A container is only ever materialised on the
+      way to a scalar inside it; there is no "create an empty render".
+    - the container must be ABSENT. Auto-creation replaces nothing — an
+      existing object is the caller's data and overwriting it is the
+      sibling-blanking write the denylist exists to prevent.
+
+    Deciding WHICH containers can be defaulted is the surface's question, not
+    this one's: it reads the model's required fields (`Period` needs both
+    dates and so is never defaulted) and hands the built object here.
+    """
+    entity = _entity(program, kind, target, index)
+    head, _, rest = field.partition(".")
+    if not rest:
+        raise ValueError(
+            f"{kind}.{field} is not a dotted path; a container is materialised only "
+            f"on the way to a scalar inside it"
+        )
+    attr, canonical = _resolve(entity, kind, head)
+    if getattr(entity, attr) is not None:
+        raise ValueError(
+            f"{kind}.{canonical} is already set; it is denied to a wholesale write "
+            f"because replacing it blanks every field of it the caller did not send"
+        )
+    setattr(entity, attr, container)
+    return container
 
 
 def set_statutory(program: Program, layer_id: str, statutory: bool) -> Layer:

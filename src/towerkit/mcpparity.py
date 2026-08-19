@@ -193,6 +193,17 @@ IMPLEMENTED: dict[Cell, Served] = {
         "Named limits come back with their layer, in file order — which is "
         "display order, and is why a wholesale set is denied.",
     ),
+    ("named_limit", "update"): Served(
+        ("program_edit_field",),
+        "name and amount through the generic setter, which routes them to "
+        "edit.edit_named_limit, addressed by the layer id AND the index — the "
+        "address program_read reports and mcpsurface.TARGET publishes. This cell "
+        "read DEFERRED until 2026-08-19, claiming set_field's single target could "
+        "not carry both halves of the address; it carries both and always did, "
+        "and the write was proved landing on a real file. The parity tests "
+        "compare TOOL NAMES only, so a cell whose REASON is false is invisible to "
+        "them — which is why the generic setter is now probed live, per kind.",
+    ),
 }
 
 
@@ -238,14 +249,12 @@ DEFERRED: dict[Cell, str] = {
         "display order, so an add appends and is never sorted — the verb exists "
         "to keep that true."
     ),
-    ("named_limit", "update"): (
-        "named_limit_edit, Phase 2. The generic setter refuses the kind by name: "
-        "a named limit is addressed by a layer id AND an index, which set_field's "
-        "single `target` cannot carry, and layer.namedLimits is denied wholesale "
-        "because a set would silently reorder what a broker arranged."
-    ),
     ("named_limit", "delete"): (
-        "named_limit_remove, Phase 2. Same addressing gap as the update cell."
+        "named_limit_remove, Phase 2. The generic setter cannot stand in for a "
+        "removal at all — it sets a field on a row that already exists — and "
+        "layer.namedLimits is denied wholesale because a set would silently "
+        "reorder what a broker arranged, so a pop cannot be spelled as a write "
+        "either. Same shape as the participant.delete row."
     ),
 }
 
@@ -378,6 +387,20 @@ MUTATIONS: dict[str, Served] = {
         "layer.premiumDetail through the generic setter, which reaches all three "
         "detail fields.",
     ),
+    "edit_named_limit": Served(
+        ("program_edit_field",),
+        "named_limit.name and .amount through the generic setter, which routes "
+        "the kind here (mcpsurface._SETTERS) so the row's own edit verb owns the "
+        "write. The ledger called it TUI-only until 2026-08-19 and it had been "
+        "reachable over MCP the whole time.",
+    ),
+    "set_container": Served(
+        ("program_edit_field",),
+        "Materialises the missing parent of a dotted field — program.render "
+        "before render.showTotals can be written. The server did this with a bare "
+        "setattr until 2026-08-19, which put a write to a DENIED container inside "
+        "a surface.",
+    ),
     "set_field": Served(
         ("program_edit_field",),
         "THE choke point. program_edit_field is a thin compare-and-set shell "
@@ -393,10 +416,6 @@ DEFERRED_MUTATIONS: dict[str, str] = {
     "add_named_limit": (
         "Reached by the TUI's named-limits grid and by nothing else. Closed by "
         "named_limit_add — see the ('named_limit', 'create') row."
-    ),
-    "edit_named_limit": (
-        "Reached by the TUI's named-limits grid and by nothing else. Closed by "
-        "named_limit_edit — see the ('named_limit', 'update') row."
     ),
     "remove_named_limit": (
         "Reached by the TUI's named-limits grid and by nothing else. Closed by "

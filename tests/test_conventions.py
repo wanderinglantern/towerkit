@@ -123,3 +123,32 @@ def test_validate_never_imports_edit() -> None:
         if "import edit" in text or "from .edit" in text
     ]
     assert not offenders, "validate.py must not import edit.py:\n  " + "\n  ".join(offenders)
+
+
+MCPSERVER = REPO / "src" / "towerkit" / "mcpserver.py"
+
+
+def test_the_mcp_server_writes_no_model_attribute_directly() -> None:
+    """Same rule as the TUI ban above, on the other surface.
+
+    The server materialised a missing `program.render` with a bare
+    `setattr(entity, entry.path[0], container)` — and `program.render` is on
+    the DENYLIST. So the one object no caller may set wholesale was being
+    constructed inside a surface, in a branch whose central rule is that writes
+    live in `edit.py`, and the TUI (which creates the same containers) did not
+    inherit the auto-creation semantics. It is `edit.set_container` now.
+
+    `setattr` is banned outright rather than pattern-matched against the
+    denylist: a surface has no business writing a model attribute at all, and
+    "which attribute" is a judgement a grep cannot make. `getattr` stays —
+    reading is what a read tool does.
+    """
+    offenders = [
+        f"mcpserver.py:{number}: {text.strip()}"
+        for number, text in enumerate(MCPSERVER.read_text("utf-8").splitlines(), start=1)
+        if "setattr(" in text and not text.strip().startswith("#")
+    ]
+    assert not offenders, (
+        "writes belong in towerkit.edit, where all three surfaces inherit the "
+        "guards — not in the MCP server:\n  " + "\n  ".join(offenders)
+    )

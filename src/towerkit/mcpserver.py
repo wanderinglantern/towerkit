@@ -351,7 +351,17 @@ def _write(
 
 
 def _period(program: Program) -> dict[str, str]:
-    return {"from": program.period.start.isoformat(), "to": program.period.end.isoformat()}
+    """Keyed the way the FILE keys a period, which is also the way the write
+    surface addresses its two dates.
+
+    This returned invented `from`/`to` keys until 2026-08-19, on every tool but
+    `program_read`. A caller that read a period off `program_list` got two keys
+    it could not send back — nothing anywhere accepts `from`. One naming
+    convention across every tool, or the read teaches a vocabulary the write
+    refuses. Ask describe() for the addresses; this docstring deliberately
+    names none of them.
+    """
+    return {"start": program.period.start.isoformat(), "end": program.period.end.isoformat()}
 
 
 def _diag(items: list[Diagnostic]) -> list[dict[str, Any]]:
@@ -931,7 +941,18 @@ def _program_edit_field(
             # `expecting` therefore compares against the DEFAULT, because an
             # absent container is exactly what its defaults mean.
             container, note = mcpsurface.create_container(entry)
-            setattr(entity, entry.path[0], container)
+            # Through `edit.py` like every other write. `program.render` is on
+            # the denylist, so a bare `setattr` here would be this surface
+            # constructing the one object no caller may set — and the TUI,
+            # which creates the same containers, would not inherit the rule.
+            edit.set_container(
+                program,
+                kind,
+                entry.field,
+                container,
+                mcpsurface.edit_address(entry, target, index),
+                index,
+            )
             notes.append(note)
         current = _current(entity, entry)
 

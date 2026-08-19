@@ -36,6 +36,7 @@ from towerkit.model import (
     Sublimit,
     _Model,
 )
+from towerkit.money import BPS_SCALE
 
 REPO = Path(__file__).parent.parent
 SRC = REPO / "src" / "towerkit"
@@ -271,7 +272,23 @@ def test_a_layer_period_cannot_be_defaulted_and_says_why() -> None:
 
 def test_money_is_derived_from_the_tag_not_from_a_second_list() -> None:
     """`attach` and `share_bps` are both `int` with `ge=0`; `limit` has no
-    constraint at all. Only the tag tells them apart."""
+    constraint at all. Only the tag tells them apart.
+
+    Asked about fields the surface has NEVER SEEN, on purpose. Until 2026-08-19
+    this test asked only about today's five money fields, and a hand-written
+    set of their NAMES — the second table `mcpsurface` exists to kill, and the
+    exact mutation this docstring named — reproduced every one of them and left
+    the test green. A name-keyed table can only be caught by a name it has no
+    row for, and by a name whose row is wrong for this kind.
+
+    Mutation drill (2026-08-19): replaced the tag check in `_classify` with
+    `if where.rsplit(".", 1)[1] in {"attach", "limit", "premium", "amount",
+    "aggregate"}`. Failed with `RuntimeError: layer.brokerFee is an int the
+    surface cannot name: tag it model.MONEY if it is dollars, bound it to 10000
+    if it is basis points` — the tag was ignored — and, with brokerFee removed
+    to reach the second half, with `assert 'money' == 'share_bps'` on
+    `layer.amount`. Restored.
+    """
     assert mcpsurface.SURFACE["layer"]["attach"].type == "money"
     assert mcpsurface.SURFACE["layer"]["limit"].type == "money"
     assert mcpsurface.SURFACE["layer"]["premium"].type == "money"  # Optional[Money]
@@ -279,6 +296,23 @@ def test_money_is_derived_from_the_tag_not_from_a_second_list() -> None:
     assert mcpsurface.SURFACE["participant"]["share_bps"].type == "share_bps"
     # The tag is the fact, and it is the model's, not the surface's.
     assert MONEY in Layer.model_fields["attach"].metadata
+
+    class LayerWithABrokerFee(Layer):
+        # Money under a name no money list has a row for.
+        broker_fee: Money | None = Field(alias="brokerFee", default=None)
+        # And the trap the other way round: `amount` IS the money field on
+        # `sublimit` and on `named_limit`, and here it is basis points. A table
+        # keyed by field name gets this one backwards while agreeing with the
+        # tag-derived surface everywhere else.
+        amount: int = Field(default=0, le=BPS_SCALE)
+
+    surface = mcpsurface.build_surface(
+        {**mcpsurface.KIND_MODELS, "layer": LayerWithABrokerFee}
+    )
+    assert surface["layer"]["brokerFee"].type == "money", "the MONEY tag was not read"
+    assert surface["layer"]["amount"].type == "share_bps", "the NAME was read, not the tag"
+    # And it is money all the way through the parser, not just in the label.
+    assert mcpsurface.parse_value(surface["layer"]["brokerFee"], "$5,000,000") == 5_000_000
 
 
 def test_every_advertised_type_is_derived_for_the_whole_surface() -> None:
@@ -378,8 +412,19 @@ def test_states_also_take_one_comma_separated_string() -> None:
 
 
 def test_states_order_is_verbatim() -> None:
+    """The fixture is deliberately NOT in alphabetical order.
+
+    It was `["NJ", "NY"]` until 2026-08-19 — already sorted — so the one way
+    this invariant actually breaks, a `sorted()` slipped into `_parse_list`,
+    left the test green. A verbatim-order assertion whose input is sorted
+    asserts nothing about order.
+
+    Mutation drill (2026-08-19): wrapped `_parse_list`'s return in `sorted()`.
+    Failed with `assert ['CT', 'NJ', 'NY'] == ['NY', 'CT', 'NJ']`. Restored.
+    """
     entry = mcpsurface.SURFACE["layer"]["states"]
-    assert mcpsurface.parse_value(entry, ["NJ", "NY"]) == ["NJ", "NY"]
+    assert mcpsurface.parse_value(entry, ["NY", "CT", "NJ"]) == ["NY", "CT", "NJ"]
+    assert mcpsurface.parse_value(entry, "NY, CT, NJ") == ["NY", "CT", "NJ"]
 
 
 def test_an_enum_takes_exactly_one_lowercase_string() -> None:

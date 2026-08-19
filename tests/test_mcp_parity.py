@@ -220,17 +220,20 @@ def test_every_edit_py_mutation_is_reachable_or_deferred() -> None:
 
 
 def test_the_deferred_mutations_are_the_phase_2_verbs() -> None:
-    """The count is the point: five, and every one of them named.
+    """The count is the point: four, and every one of them named.
 
     An assertion on the SET rather than a floor, because both directions are
     interesting. One appearing means a mutation quietly lost its tool; one
     disappearing without its cell moving means the ledger's two halves —
     verb-level and cell-level — have come apart.
+
+    `edit_named_limit` was on this list until 2026-08-19 and did not belong:
+    `mcpsurface._SETTERS` routes `named_limit.*` to it, so `program_edit_field`
+    had been reaching it since the day the generic setter shipped.
     """
     assert set(mcpparity.DEFERRED_MUTATIONS) == {
         "add_layer",
         "add_named_limit",
-        "edit_named_limit",
         "remove_named_limit",
         "set_statutory",
     }
@@ -241,8 +244,7 @@ def test_the_deferred_mutations_are_the_phase_2_verbs() -> None:
     # separately from the matrix instead of being derived from it.
     assert ("layer", "create") in mcpparity.DEFERRED
     assert all(
-        ("named_limit", verb) in mcpparity.DEFERRED
-        for verb in ("create", "update", "delete")
+        ("named_limit", verb) in mcpparity.DEFERRED for verb in ("create", "delete")
     )
     assert "layer_statutory" in mcpparity.DEFERRED_MUTATIONS["set_statutory"]
 
@@ -265,3 +267,131 @@ def test_public_functions_reads_the_source_not_the_module() -> None:
         "async def also_public(program): ...\n"
     )
     assert mcpparity.public_functions(source) == ("public", "also_public")
+
+
+# --- the reasons, not just the names -------------------------------------------
+#
+# Both tests above compare TOOL NAMES. A cell can therefore carry a reason that
+# is factually wrong and nothing in the suite notices, which is exactly what
+# happened: ('named_limit', 'update') sat in DEFERRED arguing "the generic
+# setter refuses the kind by name: a named limit is addressed by a layer id AND
+# an index, which set_field's single target cannot carry". It carried both, and
+# a named limit's amount had been settable over MCP since the day the generic
+# setter shipped. The ledger stated a falsehood about its own server for a
+# whole phase.
+#
+# So the claim is probed against the running code, in the one direction the
+# name checks cannot see: for every kind, does `program_edit_field` actually
+# reach it?
+
+# One real write per kind, in the vocabulary the `update` cells argue about.
+# Every value differs from what the sample holds, so a write that quietly did
+# nothing cannot be mistaken for one that landed.
+SETTER_PROBES: dict[str, dict[str, object]] = {
+    "program": {"field": "currency", "value": "GBP", "expecting": "USD"},
+    "line": {"field": "abbr", "target": "gl", "value": "GLI", "expecting": "GL"},
+    "layer": {
+        "field": "notes",
+        "target": "umbrella",
+        "value": "bound at expiring terms",
+        "expecting": None,
+    },
+    "participant": {
+        "field": "share_bps",
+        "target": "primary-gl",
+        "index": 0,
+        "expecting_row": "Zurich",
+        "value": 9_000,
+        "expecting": 10_000,
+    },
+    "retention": {
+        "field": "amount",
+        "index": 0,
+        "expecting_row": ["gl"],
+        "value": 300_000,
+        "expecting": 250_000,
+    },
+    "sublimit": {
+        "field": "amount",
+        "index": 0,
+        "expecting_row": "Flood",
+        "value": 30_000_000,
+        "expecting": 25_000_000,
+    },
+    "named_limit": {
+        "field": "amount",
+        "target": "primary-gl",
+        "index": 0,
+        "expecting_row": "Sexual Abuse",
+        "value": 2_000_000,
+        "expecting": 1_000_000,
+    },
+}
+
+
+@pytest.fixture()
+def roots_with_a_named_limit(roots):
+    """The sample carries no named limits, so the one kind whose cell was
+    wrong would be the one kind that could not be probed. Added through
+    `edit.add_named_limit` rather than by editing JSON, so the row is built the
+    way the TUI builds it."""
+    from towerkit.edit import add_named_limit
+    from towerkit.model import dumps_program, load_program
+
+    path = roots[0] / "atomic-2026.json"
+    program = load_program(path)
+    add_named_limit(program, "primary-gl", "Sexual Abuse", 1_000_000)
+    path.write_text(dumps_program(program), "utf-8")
+    return roots
+
+
+def _cell_claims_the_generic_setter(kind: str) -> bool:
+    served = mcpparity.IMPLEMENTED.get((kind, "update"))
+    return served is not None and "program_edit_field" in served.tools
+
+
+def test_every_kind_is_probed() -> None:
+    """A kind added to `mcpsurface.KIND_MODELS` with no probe would be a kind
+    whose ledger reason nobody checks — the gap this section closes, reopened
+    silently."""
+    assert set(SETTER_PROBES) == set(mcpparity.KINDS)
+
+
+def test_the_generic_setter_reaches_exactly_the_kinds_the_ledger_claims(
+    roots_with_a_named_limit,
+) -> None:
+    """The cell reasons, checked against the server rather than against prose.
+
+    Set equality, both directions and both of them live: a cell that says
+    DEFERRED about a kind the setter reaches fails here (the named_limit bug),
+    and so does a cell naming `program_edit_field` for a kind that refuses.
+
+    Mutation drill (2026-08-19), both ways. Putting the false
+    `('named_limit', 'update')` DEFERRED row back failed with
+    `program_edit_field reached [... 'named_limit' ...] but the ledger's update
+    cells claim [...]` and `Refusals seen: {}` — every probe wrote, so the
+    positive half is not passing vacuously either. Making
+    `mcpsurface.apply` raise on the `edit_named_limit` branch failed the
+    same assertion the other way round, with the refusal quoted. Restored.
+    """
+    from towerkit.mcpserver import Programs, _program_edit_field, _program_read
+
+    programs = Programs(roots_with_a_named_limit)
+    _program_read(programs, "atomic-2026")  # arms the session's baseline
+
+    reached: set[str] = set()
+    refused: dict[str, str] = {}
+    for kind, probe in SETTER_PROBES.items():
+        try:
+            _program_edit_field(programs, "atomic-2026", kind=kind, **probe)
+        except ValueError as exc:
+            refused[kind] = str(exc)
+        else:
+            reached.add(kind)
+
+    claimed = {kind for kind in mcpparity.KINDS if _cell_claims_the_generic_setter(kind)}
+    assert reached == claimed, (
+        f"program_edit_field reached {sorted(reached)} but the ledger's update "
+        f"cells claim {sorted(claimed)} — a cell is describing a capability the "
+        f"server does not have, or denying one it does. Refusals seen: {refused}"
+    )

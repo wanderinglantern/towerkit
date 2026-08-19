@@ -819,6 +819,19 @@ def mismatch_message(entry: Entry, who: str, current: object, expected: object) 
 # --- the write -----------------------------------------------------------------
 
 
+def edit_address(entry: Entry, target: str | None, index: int | None) -> str | int | None:
+    """What `edit._entity` calls `target` for this kind.
+
+    `target` and `index` both travel from the wire, because one argument
+    cannot say both: a retention is a position in a PROGRAM collection while a
+    participant is a position within a LAYER, so the retention's position is
+    its target and the participant's target is its layer. Stated once here
+    because two callers need it — the write and the container that has to be
+    materialised before the write.
+    """
+    return index if entry.kind in ("retention", "sublimit") else target
+
+
 def apply(
     program: Program,
     entry: Entry,
@@ -838,10 +851,7 @@ def apply(
     are statements about what the write did NOT do — not validator diagnostics,
     because re-reading the file will not reproduce them.
     """
-    # `target` and `index` both travel: a retention is a position in a program
-    # collection, a participant is a position WITHIN a layer, and one argument
-    # cannot say both. `edit._entity` takes the same address `TARGET` publishes.
-    address: str | int | None = index if entry.kind in ("retention", "sublimit") else target
+    address = edit_address(entry, target, index)
     if entry.setter is None:
         return edit.set_field(program, entry.kind, entry.field, value, address, index)
     if entry.setter == "rename_line":
