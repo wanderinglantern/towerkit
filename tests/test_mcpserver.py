@@ -34,6 +34,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from mcp.server.mcpserver import MCPServer
 
 from towerkit import edit, mcpparity, mcpsurface
 from towerkit.mcpserver import (
@@ -119,6 +120,49 @@ class TestSeeing:
         assert any("placed" in w["message"] for w in out["warnings"])
         assert out["warnings"][0]["ref"]
 
+    def test_check_runs_the_schema_pass_the_cli_runs(self, roots) -> None:
+        """`program_check` called `validate_program`, which does NOT run the
+        JSON Schema pass — only `validate_file` does. So a file carrying a key
+        `schema/program.schema.json` does not list came back from the MCP tool
+        as clean while `towerctl validate` on the same path exited 1, and a
+        client cannot act on a verdict the CLI contradicts.
+
+        This is the same divergence the schema-vs-model contract tests in
+        tests/test_conventions.py exist to prevent arising in the first place;
+        this one makes sure the tool REPORTS it if it ever does.
+
+        Mutation drills (2026-08-19), two, because the two halves fail
+        differently:
+
+        - `validate_file`'s `diags.items.extend(validate_against_schema(plain))`
+          replaced with `extend([])`, which isolates the schema pass exactly:
+          `AssertionError: program_check must run the schema pass towerctl
+          validate runs`.
+        - `_program_check` reverted to `validate_program(load_program(path))`,
+          the code this branch found: `pydantic_core._pydantic_core.
+          ValidationError: 1 validation error for Program / layers.0.brokerRef
+          / Extra inputs are not permitted`. It did not merely miss the schema
+          error — it raised an uncoded exception out of a tool whose whole job
+          is to REPORT what is wrong with a file, which the last assertion
+          below now pins.
+
+        Both restored.
+        """
+        path = roots[0] / "atomic-2026.json"
+        data = json.loads(path.read_text("utf-8"))
+        data["layers"][0]["brokerRef"] = "X-1"
+        path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+        out = _program_check(Programs(roots), "atomic-2026")
+        assert any(d["code"] == "schema" for d in out["errors"]), (
+            "program_check must run the schema pass towerctl validate runs"
+        )
+        assert any("brokerRef" in d["message"] for d in out["errors"])
+        # A file the model cannot load is REPORTED, never raised: the tool that
+        # answers "what is wrong with this file?" must not fall over on the
+        # files that have something wrong with them.
+        assert any(d["code"] == "model" for d in out["errors"])
+
 
 class TestWriteCycle:
     def test_a_write_needs_a_read_first(self, roots) -> None:
@@ -134,6 +178,79 @@ class TestWriteCycle:
         _program_list(programs)
         with pytest.raises(ValueError, match="read"):
             _program_restack(programs, "atomic-2026")
+
+    async def test_a_read_arms_the_write_guard_exactly_when_it_returns_the_sha(
+        self, roots
+    ) -> None:
+        """The rule above, applied to EVERY read tool and in both directions.
+
+        `program_check` armed the guard while returning nothing but
+        diagnostics, and `program_view` armed it while returning a picture, so
+        an agent that had only ever asked "is this file valid?" could overwrite
+        it — the exact thing the test above refuses for `program_list`, in the
+        two tools nobody checked. One rule now decides it, and it is decided
+        from the RESPONSE (does it carry the sha?) rather than from a
+        judgement about how much content counts as a read.
+
+        The tool set is derived from `_register_read_tools` rather than listed
+        here: a fifth read tool arrives with no entry in `CALLS` and this fails
+        before it can arrive un-ruled.
+
+        Mutation drill (2026-08-19): put `programs.note(path)` back into
+        `_program_check`. Failed with `AssertionError: program_check arms the
+        write guard but returns no sha — a caller that cannot name the bytes
+        it saw must not be licensed to overwrite them`. Restored. Second drill:
+        deleted the `programs.note(path)` line from `_program_read`. Failed
+        with `AssertionError: program_read returns a sha but does not arm the
+        write guard — the caller was handed a baseline the guard then ignores`.
+        Restored.
+        """
+        from mcp.client import Client
+
+        from towerkit.mcpserver import _register_read_tools
+
+        # `describe` is the exception that proves the rule: it never resolves a
+        # program at all, so it takes no `programs` and can arm nothing.
+        calls = {
+            "program_list": lambda programs: _program_list(programs),
+            "program_read": lambda programs: _program_read(programs, "atomic-2026"),
+            "program_view": lambda programs: _program_view(programs, "atomic-2026"),
+            "program_check": lambda programs: _program_check(programs, "atomic-2026"),
+        }
+        probe = MCPServer(name="probe")
+        _register_read_tools(probe, Programs(roots))
+        async with Client(probe) as client:
+            registered = {tool.name for tool in (await client.list_tools()).tools}
+        assert registered == set(calls) | {"describe"}, (
+            f"read tools changed: {sorted(registered)} — every read tool has to be "
+            f"held to the arming rule, so add it to `calls` and decide which side "
+            f"of the rule it is on"
+        )
+
+        for name, call in calls.items():
+            programs = Programs(roots)
+            out = call(programs)
+            returned_sha = "sha" in out
+            try:
+                _program_restack(programs, "atomic-2026")
+                armed = True
+            except ValueError as exc:
+                assert "read" in str(exc), f"{name}: unexpected refusal {exc}"
+                armed = False
+            if armed and not returned_sha:
+                raise AssertionError(
+                    f"{name} arms the write guard but returns no sha — a caller that "
+                    f"cannot name the bytes it saw must not be licensed to overwrite "
+                    f"them"
+                )
+            if returned_sha and not armed:
+                raise AssertionError(
+                    f"{name} returns a sha but does not arm the write guard — the "
+                    f"caller was handed a baseline the guard then ignores"
+                )
+        # Both directions were actually exercised: an all-refusing or
+        # all-arming set would satisfy the loop above trivially.
+        assert sum("sha" in call(Programs(roots)) for call in calls.values()) == 1
 
     def test_a_write_refuses_when_the_file_moved(self, roots) -> None:
         programs = Programs(roots)
@@ -1025,35 +1142,65 @@ class TestRefusalsNameCallableThings:
         opposite in the next file over, which is the two-descriptions drift the
         module was written to prevent.
 
-        What counts as naming a tool: an identifier with an underscore,
-        followed by `(`, whose first word is a prefix the server actually uses
-        (`layer_`, `program_`, …) or a kind on the write surface. That is wide
-        enough to catch `layer_statutory(` and `participant_add(`, and it
-        skips keyword arguments (`layer_id=`) and private helpers
-        (`_check_lines`), which are not calls a client makes.
+        What counts as naming a tool: an identifier with an underscore whose
+        first word is a prefix the server actually uses (`layer_`, `program_`,
+        …) or a kind on the write surface, minus the VOCABULARY — the
+        arguments the registered tools declare, the fields the write surface
+        advertises, the denied field names and the kind names. That is wide
+        enough to catch `layer_statutory` and `participant_add`, and the
+        subtraction is what keeps `layer_id`, `line_ids` and `named_limit` out
+        of it.
+
+        The parenthesis USED to be the discriminator — only `name(` counted —
+        and it left a hole the size of the denylist: every reason that names a
+        verb does it in prose ("Verb-owned: line_add, line_edit"), with no
+        call syntax anywhere, so none of them was ever checked. The vocabulary
+        is derived from the live tool schemas and the surface, so it cannot go
+        stale the way a hand-written exclusion list would.
 
         Mutation drill (2026-08-19): put `layer_statutory(layer_id=...,
         statutory=false)` back into `_guard_limit` — the exact text this branch
         shipped with. Failed with `AssertionError: ['layer_statutory'] — a
         refusal naming an unregistered tool refuses the retry too. Name a call
         that works, or say there is none.` Restored.
+
+        Mutation drill (2026-08-19), the DENIED half, which is what the
+        parenthesis rule could not see: changed `mcpsurface.DENIED
+        ["layer.participants"]` to say "edited with participant_edit" — bare,
+        no parentheses, exactly the shape of the other denylist reasons.
+        Failed with `AssertionError: ['participant_edit'] — a refusal naming
+        an unregistered tool refuses the retry too. Name a call that works, or
+        say there is none.` Under the old parenthesis-only regex the same
+        mutation passed. Restored.
         """
         from mcp.client import Client
 
         async with Client(build_server(roots)) as client:
-            registered = {tool.name for tool in (await client.list_tools()).tools}
+            tools = (await client.list_tools()).tools
+        registered = {tool.name for tool in tools}
         assert len(registered) > 20, "the tool list came back empty; this would pass blind"
         shapes = (
             {name.split("_")[0] for name in registered}
             | set(mcpsurface.KINDS)
             | {kind.split("_")[0] for kind in mcpsurface.KINDS}
         )
+        vocabulary = (
+            {arg for tool in tools for arg in (tool.input_schema.get("properties") or {})}
+            | set(mcpsurface.KINDS)
+            | {key.partition(".")[2] for key in mcpsurface.DENIED}
+            | {
+                word
+                for entries in mcpsurface.build_surface().values()
+                for field, entry in entries.items()
+                for word in (field, *entry.path)
+            }
+        )
 
         named = {
             word
             for text in _every_refusal()
-            for word in re.findall(r"\b([a-z][a-z0-9]*_[a-z0-9_]+)\s*\(", text)
-            if word.split("_")[0] in shapes
+            for word in re.findall(r"\b([a-z][a-z0-9]*_[a-z0-9_]+)\b", text)
+            if word.split("_")[0] in shapes and word not in vocabulary
         }
         assert named, "no refusal named any call at all; the corpus stopped working"
         assert named <= registered, (
@@ -1106,9 +1253,9 @@ def _every_refusal() -> list[str]:
     return refusals + list(mcpsurface.GUARDS.values()) + list(mcpsurface.DENIED.values())
 
 
-def _paste_back(message: str) -> object:
-    """The `expecting=` literal from a refusal, decoded the way a client
-    decodes it — `json.loads` and nothing else.
+def _paste_back(message: str, key: str = "expecting") -> object:
+    """The `expecting=` (or `expecting_row=`) literal from a refusal, decoded
+    the way a client decodes it — `json.loads` and nothing else.
 
     A refusal reaches the model as text, so the only way it can act on
     `pass expecting=X` is to send X as JSON. Extracting X and then EDITING it
@@ -1116,7 +1263,9 @@ def _paste_back(message: str) -> object:
     how `expecting='$2,000,000'` shipped: the tests removed the quotes the
     client had no way to know were not part of the value.
     """
-    found = re.search(r'expecting=("(?:[^"\\]|\\.)*"|\[[^\]]*\]|\S+?)(?: |$)', message)
+    found = re.search(
+        key + r'=("(?:[^"\\]|\\.)*"|\[[^\]]*\]|\S+?)(?: |$)', message
+    )
     assert found is not None, message
     return json.loads(found.group(1))
 
@@ -1272,6 +1421,89 @@ class TestEditField:
             )
         assert caught.value.code == "stale_value"
         assert "'Chubb'" in str(caught.value)
+
+    def test_a_row_guard_mismatch_offers_a_literal_that_round_trips(self, roots) -> None:
+        """The row guard held itself to a lower standard than every field-level
+        mismatch beside it.
+
+        `mismatch_message` ends "pass expecting=<literal> to overwrite it", and
+        the branch where `expecting_row` is merely MISSING already pasted one
+        back — but the branch where it MISMATCHED printed prose only. So the
+        one refusal a caller hits by having a stale index was the one refusal
+        they could not act on without a second round trip, in a surface whose
+        stated standard is that a refusal names a value that would be accepted.
+
+        The retry below uses NOTHING but what the refusal printed, decoded with
+        `json.loads` the way a model decodes it — see `_paste_back` for why
+        editing the literal first would prove nothing.
+
+        Mutation drill (2026-08-19): removed the `expecting_row=` clause from
+        `_row_guard`'s mismatch branch, leaving the prose it shipped with.
+        Failed with `AssertionError: [stale_value] participant 0 on layer
+        'xs-1' carrier is 'Chubb', not the 'Swiss Re' in expecting_row — the
+        list moved under the index; call program_read and retry against it` /
+        `assert None is not None` — the `_paste_back` assertion, printing the
+        whole message. Restored.
+        """
+        programs = Programs(roots)
+        _program_read(programs, "atomic-2026")
+        with pytest.raises(ValueError) as caught:
+            _program_edit_field(
+                programs, "atomic-2026", "participant", "share_bps", 4_000, 5_000,
+                target="xs-1", index=0, expecting_row="Swiss Re",
+            )
+        assert caught.value.code == "stale_value"
+
+        _program_edit_field(
+            programs, "atomic-2026", "participant", "share_bps", 4_000, 5_000,
+            target="xs-1", index=0,
+            expecting_row=_paste_back(str(caught.value), "expecting_row"),
+        )
+        after = _program_read(programs, "atomic-2026")
+        layer = next(ly for ly in after["layers"] if ly["id"] == "xs-1")
+        assert layer["participants"][0]["share_bps"] == 4_000
+
+    def test_an_unknown_line_refusal_is_readable_and_names_the_lines(self, roots) -> None:
+        """Two defects in one message, both of them in the last inch.
+
+        `_check_lines` raises `KeyError`, which is `edit.py`'s idiom for "no
+        such thing" — and `str(KeyError("unknown line(s): nope"))` is
+        `'"unknown line(s): nope"'`, because KeyError's `__str__` is
+        `repr(args[0])`. The client was handed
+        `refused — nothing written: "unknown line(s): nope"` and had no way to
+        know the quotes were the exception type's rather than part of the id.
+        Unwrapped at `_write`, so every KeyError refusal from `edit.py` is
+        fixed, not just this one.
+
+        And it named no lines. `_by_id` beside it already lists what IS there;
+        a caller that guessed an id has nothing to guess again from otherwise.
+
+        Mutation drills (2026-08-19), one per defect:
+
+        - `_reason` reverted to `str(exc)`: `AssertionError: KeyError's repr
+          leaked into the refusal; the caller cannot tell the quotes from the
+          value` / `assert 'nothing written: "' not in '[guard_refu...y\', \'pr\'"'`.
+        - the `— lines are …` half dropped from `_check_lines`: `AssertionError:
+          assert "lines are \'gl\'" in "[guard_refused] refused — nothing
+          written: unknown line(s): \'nope\'"`.
+
+        Both restored.
+        """
+        programs = Programs(roots)
+        _program_read(programs, "atomic-2026")
+        with pytest.raises(ValueError) as caught:
+            _program_edit_field(
+                programs, "atomic-2026", "retention", "appliesTo", ["nope"], ["gl"],
+                index=0, expecting_row=["gl"],
+            )
+        message = str(caught.value)
+        assert caught.value.code == "guard_refused"
+        assert 'nothing written: "' not in message, (
+            "KeyError's repr leaked into the refusal; the caller cannot tell the "
+            "quotes from the value"
+        )
+        assert "unknown line(s): 'nope'" in message
+        assert "lines are 'gl'" in message
 
     def test_an_over_signed_participant_edit_lands_and_says_so(self, roots) -> None:
         """A tower under construction is invalid by construction, so the sum is

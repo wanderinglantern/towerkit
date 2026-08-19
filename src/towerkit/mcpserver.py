@@ -41,7 +41,7 @@ from .dates import parse_flexible_date
 from .edit import Refusal
 from .model import Period, Placement, Program, dumps_program, load_program, loads_program
 from .money import parse_money
-from .validate import Diagnostic, validate_program
+from .validate import Diagnostic, validate_file, validate_program
 
 # Re-exported: a client that imports towerkit as a library (bookkit does)
 # catches the exception object and branches on `.code`, and this is the module
@@ -154,7 +154,26 @@ class Programs:
         return out
 
     def note(self, path: Path) -> str:
-        """Record the sha this session has now seen for a file, and return it."""
+        """Record the sha this session has now seen for a file, and return it.
+
+        THE ARMING RULE, one line so all four read tools can be held to it: a
+        read arms the write guard exactly when it HANDS THE SHA BACK.
+
+        The guard is a sha comparison, so a caller who was never given a sha
+        cannot reason about staleness, cannot pass `expect_sha`, and cannot
+        tell a refusal from a race. `program_list` was already held to this
+        (see tests) on the looser ground that a summary is not the structure a
+        write is reasoned from — but `program_check` called `note()` while
+        returning nothing but diagnostics, and `program_view` called it while
+        returning a picture, so an agent that had only ever asked "is this
+        file valid?" was licensed to overwrite it. Stating the rule as
+        "returns the sha" makes it checkable from the RESPONSE rather than
+        from a judgement about how much content is enough.
+
+        Cost: view-then-write now refuses with `not_read`, naming
+        `program_read`. That is one extra call, and it is the call whose
+        answer the write actually depends on.
+        """
         sha = file_sha256(path)
         self.seen[str(path)] = sha
         return sha
@@ -333,7 +352,7 @@ def _write(
         # "[guard_refused] refused — nothing written: [stale_value] …".
         raise
     except (ValidationError, ValueError, KeyError, IndexError, RuntimeError) as exc:
-        raise Refusal("guard_refused", f"refused — nothing written: {exc}") from exc
+        raise Refusal("guard_refused", f"refused — nothing written: {_reason(exc)}") from exc
 
     _atomic_write(path, text)
     ref = write_ref()
@@ -348,6 +367,23 @@ def _write(
         "errors": _diag(diags.errors),
         "warnings": _diag(diags.warnings),
     }
+
+
+def _reason(exc: Exception) -> str:
+    """The message inside an exception, without the exception type's decoration.
+
+    `KeyError` is `edit.py`'s idiom for "no such thing" — `_line`, `_layer`,
+    `_check_lines` and the field lookup all raise one — and `str(KeyError("no
+    line 'gl'"))` is `'"no line \'gl\'"'`: KeyError's own `__str__` is
+    `repr(args[0])`, so every one of those refusals reached the client wrapped
+    in stray quotes it then had to guess were not part of the id. Unwrapped
+    here, at the one boundary that turns an exception into a client-facing
+    string, rather than by retyping the exceptions — `KeyError` is what the
+    TUI and the tests catch, and it means the right thing inside `edit.py`.
+    """
+    if isinstance(exc, KeyError) and exc.args and isinstance(exc.args[0], str):
+        return exc.args[0]
+    return str(exc)
 
 
 def _period(program: Program) -> dict[str, str]:
@@ -437,7 +473,10 @@ def _program_read(programs: Programs, name: str) -> dict[str, Any]:
     """The full structure of one program. Read before you write.
 
     Rows with no id — retentions, sublimits, participants, named limits —
-    carry the `index` the edit tools address them by."""
+    carry the `index` the edit tools address them by.
+
+    The one read that arms the write guard, because it is the one read that
+    returns the sha. See `Programs.note`."""
     path = programs.resolve(name)
     program = load_program(path)
     sha = programs.note(path)
@@ -446,13 +485,17 @@ def _program_read(programs: Programs, name: str) -> dict[str, Any]:
 
 def _program_view(programs: Programs, name: str) -> dict[str, Any]:
     """Draw the tower as text. Gaps, overlaps, and column shape are
-    visible here in a way they are not in a layer list."""
+    visible here in a way they are not in a layer list.
+
+    It deliberately does NOT arm the write guard; see `Programs.note`."""
     from .render.ascii import render_ascii
     from .theme import load_theme
 
     path = programs.resolve(name)
     program = load_program(path)
-    programs.note(path)
+    # No `programs.note(path)`: this returns a picture, not the sha. See the
+    # arming rule on `Programs.note` — a caller that cannot name the bytes it
+    # saw cannot be given the right to overwrite them.
     diags = validate_program(program)
     return {
         "name": name,
@@ -469,11 +512,25 @@ def _program_view(programs: Programs, name: str) -> dict[str, Any]:
 
 
 def _program_check(programs: Programs, name: str) -> dict[str, Any]:
-    """towerkit's validator on one program: what is wrong and where."""
+    """towerkit's validator on one program: what is wrong and where.
+
+    `validate_file`, not `validate_program`, and that is the repair. The two
+    are not the same check: only `validate_file` runs the JSON Schema pass, so
+    a program whose file carries a key `schema/program.schema.json` does not
+    list came back from here as `errors: []` while `towerctl validate` on the
+    same path exited 1. A client cannot act on a verdict the CLI contradicts,
+    and the one thing this tool exists to say is whether the file is good.
+
+    Cost, stated: the file is read and parsed twice (once as plain JSON for
+    the schema, once with Decimal floats for the model), and this can now
+    report `schema:` and `json:` errors that no MCP tool can repair. That is
+    the honest answer — the alternative was shielding the caller from the only
+    problems they could not have caused.
+
+    It deliberately does NOT arm the write guard; see `_program_read`.
+    """
     path = programs.resolve(name)
-    program = load_program(path)
-    programs.note(path)
-    diags = validate_program(program)
+    _program, diags = validate_file(path)
     return {
         "name": name,
         "errors": _diag(diags.errors),
@@ -884,11 +941,18 @@ def _row_guard(kind: str, entity: Any, who: str, expecting_row: object) -> None:
     except mcpsurface.BadValue as exc:
         raise Refusal("bad_value", f"expecting_row: {exc}") from exc
     if not mcpsurface.compare_values(entry, expected, current):
+        # The literal, exactly as `mismatch_message` hands one back for a
+        # FIELD mismatch. This branch printed prose only, which made the row
+        # guard the one refusal in the surface a caller could not act on
+        # without a second round trip — and the branch right above, where
+        # `expecting_row` is merely missing, was already pasting one.
         raise Refusal(
             "stale_value",
             f"{who} {field} is {mcpsurface.render_value(entry, current)}, not the "
             f"{mcpsurface.render_value(entry, expected)} in expecting_row — the list "
-            f"moved under the index; call program_read and retry against it",
+            f"moved under the index; call program_read and retry against it, or pass "
+            f"expecting_row={mcpsurface.expecting_literal(entry, current)} if this row "
+            f"is the one you meant",
         )
 
 
@@ -1138,12 +1202,19 @@ def _register_read_tools(server: MCPServer, programs: Programs) -> None:
     @server.tool()
     async def program_view(name: str) -> dict[str, Any]:
         """Draw the tower as text. Gaps, overlaps, and column shape are
-        visible here in a way they are not in a layer list."""
+        visible here in a way they are not in a layer list.
+
+        A picture, not a baseline: it returns no sha, so it does not license a
+        write. Call program_read before writing."""
         return _program_view(programs, name)
 
     @server.tool()
     async def program_check(name: str) -> dict[str, Any]:
-        """towerkit's validator on one program: what is wrong and where."""
+        """towerkit's validator on one program: what is wrong and where —
+        the same schema and semantic checks `towerctl validate` runs.
+
+        Diagnostics, not a baseline: it returns no sha, so it does not
+        license a write. Call program_read before writing."""
         return _program_check(programs, name)
 
     @server.tool()

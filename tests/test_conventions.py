@@ -152,3 +152,143 @@ def test_the_mcp_server_writes_no_model_attribute_directly() -> None:
         "writes belong in towerkit.edit, where all three surfaces inherit the "
         "guards — not in the MCP server:\n  " + "\n  ".join(offenders)
     )
+
+
+# --- the schema is the model's, not a fourth table ---------------------------
+#
+# `schema/program.schema.json` enumerates every JSON key by hand and forbids
+# additional properties at nine sites, so a field added to `model.py` and
+# forgotten there makes the file towerkit's OWN writer just produced fail
+# `towerctl validate` — while the MCP write that produced it answers
+# `errors: []`, because `validate_program` does not run the schema check.
+#
+# Reproduced 2026-08-19 by putting `broker_ref: str | None = Field(
+# alias="brokerRef", default=None)` on `Layer`: the MCP write reported no
+# errors, `towerctl validate` exited 1 with "Additional properties are not
+# allowed ('brokerRef' was unexpected)", and the whole suite stayed green.
+# `test_schema_copies_are_identical` above cannot see it — it compares the two
+# COPIES to each other, and they go wrong together.
+
+
+def _schema_document() -> dict:
+    import json
+
+    return json.loads((REPO / "schema" / "program.schema.json").read_text("utf-8"))
+
+
+def _model_and_schema_keys() -> list[tuple[str, set[str], set[str]]]:
+    """(where, model keys, schema keys) for every object the schema describes.
+
+    The model side is DERIVED — `model.disk_fields` walks `model_fields` and
+    asks `_disk_key` what the file calls each one, so an alias (`policyNumber`,
+    `appliesTo`, `$schema`) and the one renamed field (`share`) come out right
+    without anything here knowing about them.
+    """
+    from towerkit.model import disk_fields
+    from towerkit.schemagen import SCHEMA_MODELS, properties_at
+
+    doc = _schema_document()
+    return [
+        (
+            pointer or "$",
+            {key for key, _, _ in disk_fields(model)},
+            set(properties_at(doc, pointer)),
+        )
+        for pointer, model in SCHEMA_MODELS.items()
+    ]
+
+
+def test_every_model_field_has_a_schema_property() -> None:
+    """A field on a model and not in the schema. THE defect: the file
+    towerkit writes stops validating and only the CLI ever says so.
+
+    Mutation drill (2026-08-19): added `broker_ref: str | None = Field(
+    alias="brokerRef", default=None)` to `Layer`. Failed with
+    `AssertionError: model fields with no schema property: $defs/layer:
+    brokerRef — add them with tools/sync_schema.py, or the file towerkit
+    writes stops validating`. Restored.
+    """
+    missing = [
+        f"{where}: {key}"
+        for where, model_keys, schema_keys in _model_and_schema_keys()
+        for key in sorted(model_keys - schema_keys)
+    ]
+    assert not missing, (
+        "model fields with no schema property: "
+        + ", ".join(missing)
+        + " — add them with tools/sync_schema.py, or the file towerkit writes "
+        "stops validating"
+    )
+
+
+def test_every_schema_property_has_a_model_field() -> None:
+    """The other direction. A property the model dropped is a key the schema
+    still accepts and nothing can write — and, if it is in a `required` list,
+    a key every file is refused for lacking.
+
+    Mutation drill (2026-08-19): added `"brokerRef": {"type": "string"}` to
+    the `layer` $def in schema/program.schema.json. Failed with
+    `AssertionError: schema properties with no model field: $defs/layer:
+    brokerRef — remove them with tools/sync_schema.py; the schema may not
+    accept a key model.py has no home for`. Restored.
+    """
+    orphans = [
+        f"{where}: {key}"
+        for where, model_keys, schema_keys in _model_and_schema_keys()
+        for key in sorted(schema_keys - model_keys)
+    ]
+    assert not orphans, (
+        "schema properties with no model field: "
+        + ", ".join(orphans)
+        + " — remove them with tools/sync_schema.py; the schema may not accept a "
+        "key model.py has no home for"
+    )
+
+
+def test_the_checked_in_schema_is_what_the_generator_produces() -> None:
+    """A no-op regeneration, on BOTH copies.
+
+    Stronger than the two tests above together: it also pins property ORDER to
+    model declaration order (which is the order the canonical serialiser writes
+    the file in), and it proves the repair is mechanical — a failure here has a
+    one-command fix rather than a hand edit that may go wrong in the same way
+    a second time.
+
+    Mutation drill (2026-08-19): moved the `"currency"` property above
+    `"placement"` in schema/program.schema.json. Failed with
+    `AssertionError: schema/program.schema.json is not what tools/sync_schema.py
+    produces — run it`. Restored.
+    """
+    import json
+
+    from towerkit.schemagen import dumps_schema, sync_document
+
+    wanted = dumps_schema(sync_document(_schema_document()))
+    for path in (
+        REPO / "schema" / "program.schema.json",
+        REPO / "src" / "towerkit" / "schema" / "program.schema.json",
+    ):
+        assert path.read_text("utf-8") == wanted, (
+            f"{path.relative_to(REPO)} is not what tools/sync_schema.py produces — run it"
+        )
+    # The generator reads the root copy, so a root copy that is its own fixed
+    # point proves nothing on its own: assert the document it produced still
+    # parses as the schema jsonschema will load.
+    assert json.loads(wanted)["$id"] == "https://towerkit.dev/schema/program.schema.json"
+
+
+def test_every_schema_def_is_mapped_to_a_model_or_declared_a_scalar() -> None:
+    """`SCHEMA_MODELS` is the one declared thing in `schemagen`, so an
+    unmapped `$def` is an object nothing above ever compares against a model.
+
+    Mutation drill (2026-08-19): added a `"broker"` $def to
+    schema/program.schema.json. Failed with `SchemaDerivationError: $defs
+    ['broker'] map to no model and are not declared scalars — add them to
+    SCHEMA_MODELS or SCALAR_DEFS, or nothing ever checks them`. Restored.
+    """
+    from towerkit.schemagen import SCALAR_DEFS, SCHEMA_MODELS, sync_document
+
+    doc = _schema_document()
+    sync_document(doc)  # raises on an unmapped $def
+    mapped = {p.removeprefix("$defs/") for p in SCHEMA_MODELS if p.startswith("$defs/")}
+    assert set(doc["$defs"]) == mapped | set(SCALAR_DEFS)

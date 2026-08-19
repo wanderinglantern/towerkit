@@ -385,3 +385,74 @@ hand-written `_LAYER_KEYS` named here was deleted on 2026-08-19 — see
   half of the derivation's safety: a field typed a Decimal or a set fails at
   the boundary instead of being guessed at or rounded, and money is integer
   whole dollars.
+
+## The schema is the models' fourth table (2026-08-19)
+
+- **`schema/program.schema.json` is now checked against `model.py`, and the
+  repair is a script.** It was the FOURTH hand-written field table, after the
+  MCP write surface, `program_read` and the canonical serialiser — every JSON
+  key typed out by hand, with `additionalProperties: false` at nine sites.
+  Reproduced by putting a `brokerRef` on `Layer`: the MCP write answered
+  `errors: []` and `towerctl validate` on the file that write produced exited
+  1 with "Additional properties are not allowed". The whole suite stayed
+  green, because `test_schema_copies_are_identical` compares the two COPIES to
+  each other and they go wrong together.
+- **Two contract tests, both directions, failing by name.** A model field with
+  no schema property and a schema property with no model field. The model side
+  is derived (`model.disk_fields`, alongside `money_disk_keys`), so aliases and
+  the one renamed field come out right with nothing here knowing about them.
+- **`towerkit.schemagen` reconciles the property SET, never the document.**
+  `model_json_schema()` would regenerate everything and throw away the
+  `minLength`s, the `format: date`, the money `$def`, the `required` lists,
+  the descriptions and the `$id` — hand-authored semantics that a pydantic
+  model cannot express. So: existing properties are copied byte for byte,
+  missing ones are added with a type and no prose, gone ones are dropped
+  (and dropped from `required`, which would otherwise demand a forbidden key),
+  and the order is model declaration order — already the file's key order.
+  Anything it cannot derive raises; a new nested model needs a `$def` a human
+  authored, because guessing one is how a schema starts accepting files it
+  should refuse.
+- **`tools/sync_schema.py`, not a `towerctl` subcommand.** `towerctl` operates
+  on the broker's own program files; regenerating this checkout's schema is
+  repo maintenance, in the same class as `check_wheelhouse.py`. The derivation
+  itself lives in `src/` so it is type-checked and linted; the script is only
+  the half that knows where the repo keeps its two copies.
+- **`program_check` runs the schema pass now** — `validate_file`, not
+  `validate_program`. A client told a file is clean that `towerctl validate`
+  rejects has been told the wrong thing, and the one thing that tool exists to
+  say is whether the file is good. Cost, stated: the file is parsed twice, and
+  the tool can now report `schema:` and `json:` errors no MCP tool can repair.
+  It also no longer raises `ValidationError` out of a tool whose job is to
+  report what is wrong with a file. The write response still reports only
+  semantic diagnostics; the contract tests are what protect that path.
+
+## A read arms the write guard when it returns the sha (2026-08-19)
+
+- **One rule for all four read tools, decided from the RESPONSE.**
+  `program_check` called `programs.note()` while returning nothing but
+  diagnostics, and `program_view` called it while returning a picture — so an
+  agent that had only asked "is this file valid?" was licensed to overwrite it,
+  which is exactly what `test_list_does_not_arm_the_write_guard` refuses for
+  `program_list`. The guard is a sha comparison, so a caller who was never
+  handed a sha cannot reason about staleness, cannot pass `expect_sha`, and
+  cannot tell a refusal from a race.
+- **Cost: view-then-write now refuses with `not_read`,** naming
+  `program_read`. One extra call, and it is the call whose answer the write
+  depends on. Writes still arm on success, as before — the rule is about reads.
+- **The test derives its tool set from `_register_read_tools`,** so a fifth
+  read tool fails before it can arrive un-ruled.
+
+## Refusals name registered verbs, and say so plainly when there is none (2026-08-19)
+
+- **The denylist reasons name their verbs.** `program.lines` said "verb-owned"
+  and named nothing, while `GUARDS["layer.attach"]` named `layer_follows` —
+  the same inconsistency, one file apart, that the spine was built to end.
+  Where Phase 2 owns the verb (`layer_add`, participants, named-limit rows)
+  the reason says there is no tool yet and what to do instead, rather than
+  naming a call that refuses the retry.
+- **The unregistered-tool guard no longer needs a parenthesis.** It matched
+  only `name(`, which left the entire denylist unchecked — every reason names
+  its verbs in prose. It now matches bare identifiers and subtracts a
+  VOCABULARY derived from the live tool schemas' argument names, the write
+  surface's fields and the kind names, so `layer_id`, `line_ids` and
+  `named_limit` stay out of it without a hand-written exclusion list.

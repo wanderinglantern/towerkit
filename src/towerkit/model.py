@@ -405,6 +405,40 @@ def money_disk_keys() -> set[str]:
     return keys
 
 
+def disk_fields(model: type[BaseModel]) -> list[tuple[str, str, FieldInfo]]:
+    """(disk key, python name, FieldInfo) for every field `model` writes, in
+    DECLARATION order — which is the order the canonical file uses.
+
+    The same question `money_disk_keys` asks, asked for a whole model instead
+    of one tag, and for the same reason: `schema/program.schema.json` is a
+    hand-typed enumeration of every JSON key with `additionalProperties:
+    false` at nine sites, so a field added to a model here and nowhere there
+    makes the file towerkit itself just wrote stop validating. Nothing had
+    ever compared the two — `test_schema_copies_are_identical` compares the
+    two COPIES of the schema to each other, which both stay wrong together.
+
+    A field is included whether or not a given instance writes it: OMIT_EMPTY
+    decides what one FILE contains, and the schema has to describe the key
+    whenever it does appear.
+    """
+    return [
+        (_disk_key(model, name, info), name, info)
+        for name, info in model.model_fields.items()
+    ]
+
+
+def disk_form_is_derived(model: type[BaseModel], name: str) -> bool:
+    """Does this field's disk form follow from its annotation alone?
+
+    False for the one field it does not. `Participant.share_bps` is basis
+    points in memory and a decimal FRACTION on disk (`_DISK_FORM`), so
+    anything reading the annotation would call it an integer where the file
+    holds `0.35`. Asked rather than hard-coded, so a second conversion added
+    to `_DISK_FORM` is covered the moment it exists.
+    """
+    return (model, name) not in _DISK_FORM
+
+
 def _disk_key(model: type[BaseModel], name: str, info: FieldInfo) -> str:
     """The key the FILE uses: the `_DISK_FORM` rename, else the alias, else the
     python name. Aliases are the on-disk names — `policyNumber`, `appliesTo`,

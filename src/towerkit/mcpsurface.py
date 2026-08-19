@@ -146,24 +146,28 @@ DENIED: dict[str, str] = {
         "and the rest — so setting one can never blank its siblings."
     ),
     "program.lines": (
-        "Verb-owned. Removing a line cascades to every layer, retention and "
-        "sublimit left with an empty appliesTo."
+        "Verb-owned: line_add, line_edit, line_move, line_remove. Removing a line "
+        "cascades to every layer, retention and sublimit left with an empty "
+        "appliesTo."
     ),
     "program.layers": (
-        "Verb-owned. A wholesale set would rewrite every attachment, participant "
-        "and named limit in the tower in one unguarded step."
+        "Verb-owned: layer_remove, layer_lines, layer_follows, program_restack, and "
+        "program_edit_field for one layer field at a time. A wholesale set would "
+        "rewrite every attachment, participant and named limit in the tower in one "
+        "unguarded step. There is no tool that ADDS a layer yet — that is Phase 2, "
+        "and until it ships a new layer comes from program_clone_renewal."
     ),
     "program.retentions": (
-        "Verb-owned, so every appliesTo is checked against the line ids before "
-        "the write."
+        "Verb-owned: retention_add, retention_edit, retention_remove — so every "
+        "appliesTo is checked against the line ids before the write."
     ),
     "program.sublimits": (
-        "Verb-owned, so every appliesTo is checked against the line ids before "
-        "the write."
+        "Verb-owned: sublimit_add, sublimit_edit, sublimit_remove — so every "
+        "appliesTo is checked against the line ids before the write."
     ),
     "line.id": (
         "Ids slug from the name on first naming and are stable afterwards. Rename "
-        "through name; the id cascade is part of that verb."
+        "through line_edit; the id cascade is part of that verb."
     ),
     "layer.id": (
         "Ids are assigned on add and are stable afterwards. Nothing a caller "
@@ -174,16 +178,18 @@ DENIED: dict[str, str] = {
         "period.end — so setting one can never blank the other."
     ),
     "layer.followsUnderlying": (
-        "Already a verb, which heals the attachment as it sets the flag. Two ways "
-        "to set one thing is how two definitions drift."
+        "Already a verb — layer_follows — which heals the attachment as it sets the "
+        "flag. Two ways to set one thing is how two definitions drift."
     ),
     "layer.appliesTo": (
-        "Verb-owned; it validates every line id before the write, and an unknown "
-        "id would strand the layer in no column at all."
+        "Verb-owned: layer_lines. It validates every line id before the write, and "
+        "an unknown id would strand the layer in no column at all."
     ),
     "layer.namedLimits": (
         "Order is the file's order and is display order, never sorted. A wholesale "
-        "set silently reorders what a broker arranged."
+        "set silently reorders what a broker arranged. Named limits are edited row "
+        "by row with program_edit_field (kind named_limit); no tool adds or removes "
+        "a row yet — that is Phase 2."
     ),
     "layer.statutory": (
         "Carries the invariant statutory implies limit == 0. A bare set writes a "
@@ -191,7 +197,10 @@ DENIED: dict[str, str] = {
     ),
     "layer.participants": (
         "Verb-owned, plus the over-signing veto: the shares on a layer have to add "
-        "up before the write, not after it."
+        "up before the write, not after it. One existing row is edited with "
+        "program_edit_field (kind participant); no tool adds or removes a "
+        "participant yet — that is Phase 2, so a layer with no participants stays "
+        "pending until it ships."
     ),
 }
 

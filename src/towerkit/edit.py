@@ -233,13 +233,11 @@ def remove_layer(program: Program, layer_id: str) -> None:
 
 def set_applies_to(program: Program, layer_id: str, line_ids: list[str]) -> Layer:
     layer = _layer(program, layer_id)
-    if not line_ids:
-        raise ValueError("a layer must apply to at least one line")
-    known = set(program.line_ids())
-    unknown = [lid for lid in line_ids if lid not in known]
-    if unknown:
-        raise KeyError(f"unknown line(s): {', '.join(sorted(unknown))}")
-    layer.applies_to = list(dict.fromkeys(line_ids))
+    # `_check_lines`, not a second copy of it. This function carried its own
+    # identical unknown-line check, and only one of the two was ever fixed at
+    # a time: the message that named nothing the caller could use was this
+    # one, four lines from the one that did.
+    layer.applies_to = _check_lines(program, line_ids)
     return layer
 
 
@@ -263,12 +261,22 @@ def restack(program: Program) -> None:
 
 
 def _check_lines(program: Program, line_ids: list[str]) -> list[str]:
+    """Every line id, checked against the program, duplicates dropped, order kept.
+
+    The refusal NAMES THE IDS THAT EXIST. It used to say only `unknown
+    line(s): nope`, which leaves a caller that guessed an id with nothing to
+    guess again from — the same standard `_line` and the MCP server's `_by_id`
+    already meet, and the reason a refusal is worth sending at all.
+    """
     if not line_ids:
         raise ValueError("appliesTo must name at least one line")
-    known = set(program.line_ids())
+    known = program.line_ids()
     unknown = [lid for lid in line_ids if lid not in known]
     if unknown:
-        raise KeyError(f"unknown line(s): {', '.join(sorted(unknown))}")
+        raise KeyError(
+            f"unknown line(s): {', '.join(repr(lid) for lid in sorted(unknown))} — "
+            f"lines are {', '.join(repr(lid) for lid in known) or '(none)'}"
+        )
     return list(dict.fromkeys(line_ids))
 
 
