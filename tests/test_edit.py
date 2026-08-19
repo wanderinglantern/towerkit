@@ -262,3 +262,88 @@ class TestDurableWrites:
 
         assert load_program(target).insured == "Changed Co"
         assert backup_path(target).read_bytes() == original
+
+
+class TestLayerDetailFields:
+    """`states`, `namedLimits`, `premiumDetail` — the setters the editor calls
+    and the MCP server will. None of them enforces a validator rule: every
+    refusal (monopolistic states, duplicates, prose-versus-structure) belongs
+    to validate.py, and a setter that quietly repaired the input would delete
+    the refusal instead of delivering it."""
+
+    def test_parse_states_splits_trims_and_drops_the_typing_artefacts(self) -> None:
+        assert edit.parse_states("NY, NJ") == ["NY", "NJ"]
+        assert edit.parse_states(" NY ,NJ , ") == ["NY", "NJ"]
+        assert edit.parse_states("") == []
+        assert edit.parse_states("  ,  ") == []
+
+    def test_parse_states_keeps_the_code_verbatim(self) -> None:
+        """Upper-casing here would rewrite files nobody edited; the validator
+        compares upper-cased and stores what it was given."""
+        assert edit.parse_states("ny, Ontario") == ["ny", "Ontario"]
+
+    def test_parse_states_keeps_duplicates_for_the_validator_to_refuse(self) -> None:
+        assert edit.parse_states("NY, NY") == ["NY", "NY"]
+
+    def test_set_states_replaces_wholesale_and_keeps_order(self) -> None:
+        program = _sample()
+        edit.set_states(program, "umbrella", ["NY", "CT", "NJ"])
+        layer = next(ly for ly in program.layers if ly.id == "umbrella")
+        assert layer.states == ["NY", "CT", "NJ"]
+        edit.set_states(program, "umbrella", [])
+        assert layer.states == []
+
+    def test_set_states_refuses_an_unknown_layer(self) -> None:
+        with pytest.raises(KeyError):
+            edit.set_states(_sample(), "no-such-layer", ["NY"])
+
+    def test_set_premium_detail_empties_to_none(self) -> None:
+        """Empty is None, never `""` — an empty string is a key in the file,
+        and the canonical dump only drops None. A caller that hands over raw
+        input (the MCP server will) must get the same answer the form does."""
+        program = _sample()
+        layer = next(ly for ly in program.layers if ly.id == "umbrella")
+        edit.set_premium_detail(program, "umbrella", "Included with Part A")
+        assert layer.premium_detail == "Included with Part A"
+        for empty in ("", "   ", None):
+            edit.set_premium_detail(program, "umbrella", empty)
+            assert layer.premium_detail is None, empty
+
+    def test_named_limits_append_in_order_and_are_never_sorted(self) -> None:
+        program = _sample()
+        edit.add_named_limit(program, "umbrella", "Each Accident", 1_000_000)
+        edit.add_named_limit(program, "umbrella", "Disease Each Employee", 500_000)
+        layer = next(ly for ly in program.layers if ly.id == "umbrella")
+        assert [(nl.name, nl.amount) for nl in layer.named_limits] == [
+            ("Each Accident", 1_000_000),
+            ("Disease Each Employee", 500_000),
+        ]
+
+    def test_edit_named_limit_leaves_alone_what_it_is_not_given(self) -> None:
+        program = _sample()
+        edit.add_named_limit(program, "umbrella", "Each Accident", 1_000_000)
+        edit.edit_named_limit(program, "umbrella", 0, amount=2_000_000)
+        edit.edit_named_limit(program, "umbrella", 0, name="Each Occurrence")
+        layer = next(ly for ly in program.layers if ly.id == "umbrella")
+        assert (layer.named_limits[0].name, layer.named_limits[0].amount) == (
+            "Each Occurrence",
+            2_000_000,
+        )
+
+    def test_remove_named_limit_takes_the_one_it_is_pointed_at(self) -> None:
+        program = _sample()
+        for name in ("A", "B", "C"):
+            edit.add_named_limit(program, "umbrella", name, 1)
+        edit.remove_named_limit(program, "umbrella", 1)
+        layer = next(ly for ly in program.layers if ly.id == "umbrella")
+        assert [nl.name for nl in layer.named_limits] == ["A", "C"]
+
+    def test_an_out_of_range_index_is_refused_not_silently_ignored(self) -> None:
+        program = _sample()
+        edit.add_named_limit(program, "umbrella", "Each Accident", 1_000_000)
+        with pytest.raises(IndexError):
+            edit.edit_named_limit(program, "umbrella", 1, name="x")
+        with pytest.raises(IndexError):
+            edit.remove_named_limit(program, "umbrella", 1)
+        layer = next(ly for ly in program.layers if ly.id == "umbrella")
+        assert len(layer.named_limits) == 1

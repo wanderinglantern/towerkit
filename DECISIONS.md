@@ -298,4 +298,55 @@ One canonical-format change carrying three findings, because each touches
 - **Not built: TUI editors.** All three are file- and API-settable only;
   the layer form has no widgets for them, and `namedLimits` needs a
   repeating-row editor on the participants-sheet pattern. Deliberate scope
-  line, not an oversight.
+  line, not an oversight. *(Closed the next day — see below.)*
+
+## Setting the layer detail fields from the editor (2026-08-18, later)
+
+- **`premiumDetail` copies `limitsDetail` exactly**: a plain `Input` in the
+  layer form, committed on enter/blur, empty meaning None so clearing it
+  drops the key. There was a shape to follow and no reason to invent one.
+- **`states` is ONE comma-separated field**, not a repeating row: the values
+  are two characters long and are typed as a phrase ("NY, NJ"), so a grid
+  would cost a row of chrome each. `edit.parse_states` owns the syntax —
+  whitespace trimmed, empty pieces dropped, and NOTHING else: codes stay
+  verbatim and duplicates are NOT collapsed, because the validator refuses
+  them by name and swallowing one would delete the refusal.
+- **The states field is shown on every layer, not hidden on the ones that
+  refuse it.** A field that vanishes teaches nothing; a field that answers
+  says why. Same reasoning as the `p` refusal: a silent no-op reads as a
+  broken app.
+- **Refusals are spoken, not just filed.** `validate.py` reports these rules
+  as diagnostics, which is correct and is also a bar at the bottom of the
+  screen that nobody is looking at while they type. `_notify_layer_refusals`
+  re-says the layer's detail diagnostics as a notification on every edit that
+  could earn one — including from the OTHER side (a premium edit that
+  invalidates a standing `premiumDetail`, a `limitsDetail` typed over
+  existing named limits, statutory switched off under a states list).
+  Nothing blocks: a draft that breaks a semantic rule stays editable, exactly
+  as a zero limit does.
+- **`namedLimits` is the participants sheet's `SheetTable`, second instance.**
+  The previous implementer named that pattern and it fits: repeating rows of
+  two fields, in-place editing, `a`/`del` for the rows, one `CellEdited` per
+  undo step. A second grid pattern would be a second set of the hard-won
+  details (row identity captured at open, the TCSS underscore trap, blur =
+  cancel) to get wrong.
+- **`n` jumps to it, mirroring `p`** — one shared `_jump_to_layer_grid`
+  rather than a copy, so the picker fallback that keeps the key from refusing
+  in silence has one implementation. The three fields are laid out as a
+  cluster around the grid: states two shift+tabs behind it, premium detail
+  two tabs ahead, so one key reaches all three.
+- **The row-adding writes go through `towerkit.edit`** (`add_named_limit` /
+  `edit_named_limit` / `remove_named_limit`), and `test_conventions.py` now
+  bans `.named_limits.append(` in the TUI the way it bans the program-level
+  collections. The scalar setters (`set_states`, `set_premium_detail`) live
+  there too, so the MCP server inherits one definition of what setting each
+  means.
+- **The layers-sheet hint line lost words to fit.** Adding `n` to it pushed
+  it to 146 columns against a 138-column content box at a 140-column
+  terminal, and `#key-hint` is one row of a height-1 `Static` — the overflow
+  is not scrolled, it is gone, starting with the `? all keys` escape hatch at
+  the end. "enter open layer form" → "enter open form", "v/esc back to form"
+  → "v/esc back". `test_dead_keys.py` now measures every hint line, and
+  discovers them by name (`*_HINT`) rather than listing them, since a hint
+  constant the arbiter does not know about is the exact drift it exists to
+  catch.

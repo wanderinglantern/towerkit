@@ -57,7 +57,7 @@ from ...money import (
     premium_share,
 )
 from ...theme import load_theme
-from ...validate import Diagnostic
+from ...validate import ERROR, Diagnostic
 from ..session import EditSession, StaleFileError, slugify
 from ..theme import (
     AMBER,
@@ -119,6 +119,12 @@ Data sheets
              form fields in between. With no layer selected it
              opens the layers sheet — pick a row and press p
              again.
+  n          named limits: the same jump onto the selected
+             layer's named-limits grid — several coordinate
+             limits where `limit` states one. It sits between
+             the states field (shift+tab) and the premium
+             detail (tab), so one key reaches all three of the
+             layer's detail fields.
   i          edit the cell under the cursor, spreadsheet style
              (layers sheet, and the participants grid in a
              layer form)
@@ -155,7 +161,7 @@ NodeRef = tuple[str, Any]
 NODE_HINTS: dict[str, str] = {
     "program": (
         "[b]t[/b] render options · [b]x[/b] SOI export · [b]=[/b] restack · "
-        "[b]v[/b] layers sheet · [b]p[/b] participants"
+        "[b]v[/b] layers sheet · [b]p[/b] participants · [b]n[/b] named limits"
     ),
     "lines-group": "[b]a[/b] add line",
     "line": (
@@ -164,11 +170,11 @@ NODE_HINTS: dict[str, str] = {
     ),
     "layers-group": (
         "[b]a[/b] add layer · [b]=[/b] restack · [b]v[/b] layers sheet · "
-        "[b]p[/b] participants"
+        "[b]p[/b] participants · [b]n[/b] named limits"
     ),
     "layer": (
         "[b]a[/b] add layer · [b]del[/b] remove · [b]=[/b] restack · "
-        "[b]v[/b] layers sheet · [b]p[/b] participants"
+        "[b]v[/b] layers sheet · [b]p[/b] participants · [b]n[/b] named limits"
     ),
     "retentions-group": "[b]a[/b] add retention",
     "retention": "[b]a[/b] add retention · [b]del[/b] remove",
@@ -176,16 +182,40 @@ NODE_HINTS: dict[str, str] = {
     "sublimit": "[b]a[/b] add sublimit · [b]del[/b] remove",
 }
 
-# The two sheet hint lines, hoisted out of the widgets that print them so
+# The sheet hint lines, hoisted out of the widgets that print them so
 # tests/test_dead_keys.py can read them: a hint naming an unbound key is the
 # failure mode these constants exist to make checkable.
+# Kept SHORT deliberately: this is one row of a height-1 Static, so anything
+# past the width is not scrolled, it is GONE — and `? all keys` is the last
+# thing on it, which makes the escape hatch the first casualty. Adding `n`
+# pushed the old wording to 146 columns against a 138-column content box at a
+# 140-column terminal; the words lost here are the ones the reader can infer.
 LAYERS_SHEET_HINT = (
-    "[b]p[/b] participants · [b]i[/b] edit cell · [b]tab[/b] next cell · "
-    "[b]enter[/b] open layer form · [b]a[/b] add layer · [b]del[/b] remove · "
-    "[b]v[/b]/[b]esc[/b] back to form · [b]?[/b] all keys"
+    "[b]p[/b] participants · [b]n[/b] named limits · [b]i[/b] edit cell · "
+    "[b]tab[/b] next cell · [b]enter[/b] open form · [b]a[/b] add · "
+    "[b]del[/b] remove · [b]v[/b]/[b]esc[/b] back · [b]?[/b] all keys"
 )
 PARTICIPANTS_SHEET_HINT = (
     "[b]i[/b] edit cell · [b]a[/b] add · [b]del[/b] remove · [b]tab[/b] next cell"
+)
+NAMED_LIMITS_SHEET_HINT = (
+    "[b]i[/b] edit cell · [b]a[/b] add · [b]del[/b] remove · [b]tab[/b] next cell"
+)
+
+# The layer-detail rules validate.py owns. They produce diagnostics, which is
+# the right home for them and the wrong place for the USER to find them at the
+# moment they type: their eyes are on the field, not on the bar at the bottom.
+# `_notify_layer_refusals` says them out loud, and this is the set it says.
+LAYER_DETAIL_CODES = frozenset(
+    {
+        "states-non-statutory",
+        "states-duplicate",
+        "states-monopolistic",
+        "states-unrecognized",
+        "named-limit-duplicate",
+        "limits-detail-conflict",
+        "premium-detail-conflict",
+    }
 )
 
 
@@ -223,6 +253,9 @@ class EditorScreen(Screen):
         Binding("greater_than_sign", "send_line", "send", show=False),
         Binding("v", "layers_sheet", "Layers sheet", show=False),
         Binding("p", "participants", "Participants", show=False),
+        # demoted like p: the footer is full, and both keys keep their two
+        # homes (the per-node hint line and ? help)
+        Binding("n", "named_limits", "Named limits", show=False),
     ]
 
     DEFAULT_CSS = """
@@ -248,6 +281,7 @@ class EditorScreen(Screen):
        the visible UI is the participants SheetTable */
     .compat-row { display: none; }
     #participants-sheet { height: auto; max-height: 14; }
+    #named-limits-sheet { height: auto; max-height: 10; }
     #layers-sheet { height: 1fr; }
     .sheet-hint { height: auto; color: $text-muted; margin-top: 1; }
     """
@@ -704,14 +738,36 @@ class EditorScreen(Screen):
                 value=layer.statutory,
                 id="f-layer-statutory",
             ),
+            # The field sits under the checkbox it depends on, and is shown on
+            # every layer rather than hidden on the ones that refuse it: a
+            # field that vanishes teaches nothing, where a field that answers
+            # says WHY (validate.states-non-statutory, notified on commit).
+            Label("States (statutory filings, comma-separated)", classes="field-label"),
+            Input(
+                value=", ".join(layer.states),
+                placeholder="NY, NJ, CT",
+                id="f-layer-states",
+            ),
             Label("Limit", classes="field-label"),
             MoneyInput(
                 layer.limit if layer.limit > 0 else None,
                 placeholder="5m · 25m · 1.5bn",
                 id="f-layer-limit",
             ),
+            Label("— Named limits (several where limit states one) —", classes="field-label"),
+            self._named_limits_sheet(layer),
+            Static(
+                f"[{DIM}]{NAMED_LIMITS_SHEET_HINT}[/]",
+                classes="sheet-hint",
+            ),
             Label("Premium", classes="field-label"),
             MoneyInput(layer.premium, placeholder="125k · $1.2m", id="f-layer-premium"),
+            Label("Premium detail (what a $0 premium says)", classes="field-label"),
+            Input(
+                value=layer.premium_detail or "",
+                placeholder="e.g. Included with Part A",
+                id="f-layer-premium-detail",
+            ),
             Label("— Participants —", classes="field-label"),
             self._participants_sheet(layer),
             Static(
@@ -723,6 +779,112 @@ class EditorScreen(Screen):
         widgets += self._participant_rows(layer)
         widgets.append(Button("Add participant", id="add-participant"))
         return widgets
+
+    # -- named limits sheet ----------------------------------------------------
+
+    def _named_limits_sheet(self, layer) -> SheetTable:
+        """The editable named-limits grid: name · amount.
+
+        The participants sheet's shape, deliberately — repeating rows of a
+        couple of fields is a solved problem here, and a second grid pattern
+        would be a second set of hard-won details to get wrong. The amounts
+        are STATED: nothing here sums them, compares them to `limit`, or
+        sorts them (file order is display order).
+        """
+        sheet = SheetTable(id="named-limits-sheet")
+        sheet.cursor_type = "cell"
+        sheet.can_insert = True
+        sheet.can_delete = True
+        sheet.add_column("named limit", key="name")
+        sheet.add_column(right("amount"), key="amount")
+        sheet.fields = {
+            0: SheetField("name", "name", required=True),
+            1: SheetField("amount", "amount", "money", required=True),
+        }
+        sheet.initial_text = self._named_limit_cell_text
+        for idx, named in enumerate(layer.named_limits):
+            sheet.add_row(*self._named_limit_cells(named), key=str(idx))
+        return sheet
+
+    def _named_limit_cells(self, named) -> tuple:
+        return (named.name, money_text(named.amount))
+
+    def _named_limit_cell_text(self, row_key: str, field_key: str) -> str:
+        """Editor prefill for a named-limits cell."""
+        kind, key = self._commit_ref
+        layer = self._layer(key) if kind == "layer" else None
+        if layer is None:
+            return ""
+        idx = int(row_key)
+        if idx >= len(layer.named_limits):
+            return ""
+        named = layer.named_limits[idx]
+        return str(named.name) if field_key == "name" else format_money(named.amount)
+
+    @on(SheetTable.CellEdited, "#named-limits-sheet")
+    async def _named_limit_cell_edited(self, event: SheetTable.CellEdited) -> None:
+        kind, key = self._commit_ref
+        layer = self._layer(key) if kind == "layer" else None
+        if layer is None:
+            return
+        idx = int(event.row_key)
+        if idx >= len(layer.named_limits):
+            return
+        layer_id = str(key)
+        if event.field.key == "name":
+            name = str(event.value)
+            self._mutate_and_refresh(
+                lambda p: edit.edit_named_limit(p, layer_id, idx, name=name)
+            )
+        elif event.field.key == "amount" and event.value is not None:
+            amount = int(event.value)
+            self._mutate_and_refresh(
+                lambda p: edit.edit_named_limit(p, layer_id, idx, amount=amount)
+            )
+        self._notify_layer_refusals(layer_id)
+        if event.table.editing:
+            # tab is walking the row — rebuild when the editor closes
+            self._sheet_refresh_pending = True
+            try:
+                for column_key, cell in zip(
+                    ("name", "amount"),
+                    self._named_limit_cells(layer.named_limits[idx]),
+                    strict=True,
+                ):
+                    event.table.update_cell(event.row_key, column_key, cell)
+            except Exception:
+                pass
+        else:
+            await self._flush_sheet_rebuild("named-limits-sheet")
+
+    @on(SheetTable.InsertRequested, "#named-limits-sheet")
+    async def _named_limit_insert(self, event: SheetTable.InsertRequested) -> None:
+        kind, key = self._commit_ref
+        layer = self._layer(key) if kind == "layer" else None
+        if layer is None:
+            return
+        layer_id = str(key)
+        self._mutate_and_refresh(
+            lambda p: edit.add_named_limit(p, layer_id, "New Limit", 0)
+        )
+        self._notify_layer_refusals(layer_id)
+        await self._flush_sheet_rebuild(
+            "named-limits-sheet",
+            cursor=Coordinate(len(layer.named_limits) - 1, 0),
+        )
+
+    @on(SheetTable.DeleteRequested, "#named-limits-sheet")
+    async def _named_limit_delete(self, event: SheetTable.DeleteRequested) -> None:
+        kind, key = self._commit_ref
+        layer = self._layer(key) if kind == "layer" else None
+        if layer is None:
+            return
+        idx = int(event.row_key)
+        if idx >= len(layer.named_limits):
+            return
+        layer_id = str(key)
+        self._mutate_and_refresh(lambda p: edit.remove_named_limit(p, layer_id, idx))
+        await self._flush_sheet_rebuild("named-limits-sheet")
 
     # -- participants sheet ----------------------------------------------------
 
@@ -958,12 +1120,25 @@ class EditorScreen(Screen):
         which measured 50 keystrokes through the outline and 37 through `v`
         for one share change. `p` deletes that second leg.
         """
+        await self._jump_to_layer_grid("participants-sheet", "p", "participants")
+
+    async def action_named_limits(self) -> None:
+        """`n`: the same jump, onto the named-limits grid.
+
+        One definition of the jump rather than two: the grid it lands on is
+        the only difference, and a second copy is a second place for the
+        picker fallback (the part that keeps the key from refusing in
+        silence) to be got wrong.
+        """
+        await self._jump_to_layer_grid("named-limits-sheet", "n", "named limits")
+
+    async def _jump_to_layer_grid(self, sheet_id: str, key: str, what: str) -> None:
         self._drain_focused_input()
         layer_id = self._layer_in_context()
         if layer_id is None:
             # A refusal says something. Returning in silence here would read
             # as a broken key on the one node (the program root) the editor
-            # opens on, so `p` opens the picker and names the next step —
+            # opens on, so the key opens the picker and names the next step —
             # and the SAME key finishes the job from there.
             if not self.session.program.layers:
                 self.notify(
@@ -973,16 +1148,16 @@ class EditorScreen(Screen):
                 return
             if not self._layers_sheet_open:
                 await self.action_layers_sheet()
-            self.notify("pick a layer with up/down, then p for its participants")
+            self.notify(f"pick a layer with up/down, then {key} for its {what}")
             return
         self._layers_sheet_open = False
         self.selected = ("layer", layer_id)
         await self._rebuild_detail()
         self._select_tree_node(self.selected, rebuild=False)
         try:
-            self.query_one("#participants-sheet", SheetTable).focus()
+            self.query_one(f"#{sheet_id}", SheetTable).focus()
         except Exception:
-            # every layer form mounts the grid; if that ever stops being
+            # every layer form mounts both grids; if that ever stops being
             # true, land somewhere navigable rather than nowhere
             self.query_one("#structure", Tree).focus()
 
@@ -1247,6 +1422,19 @@ class EditorScreen(Screen):
         self.session.mutate(fn)
         self.refresh_all()
 
+    def _notify_layer_refusals(self, layer_id: str) -> None:
+        """Say the layer's detail refusals out loud, at the moment they are
+        earned. A REFUSAL SAYS SOMETHING: these rules never block the write —
+        a draft that breaks one stays editable, exactly as a zero limit does —
+        so without this the field simply appears to accept a value the SOI
+        will not print, and the reason sits in a bar nobody is looking at."""
+        for diag in self.session.diagnostics().for_ref(("layer", layer_id)):
+            if diag.code in LAYER_DETAIL_CODES:
+                self.notify(
+                    diag.message,
+                    severity="error" if diag.severity == ERROR else "warning",
+                )
+
     def _commit_program_field(self, widget: Input) -> None:
         wid = widget.id
         value = widget.value.strip()
@@ -1329,6 +1517,24 @@ class EditorScreen(Screen):
         if wid == "f-layer-limits-detail":
             limits_detail = widget.value.strip() or None
             self._mutate_and_refresh(lambda p: setattr(layer, "limits_detail", limits_detail))
+            # prose wins over namedLimits AND carrying both is refused: the
+            # conflict can arrive from either side, so both sides say so
+            self._notify_layer_refusals(layer.id)
+            return
+        if wid == "f-layer-states":
+            states = edit.parse_states(widget.value)
+            widget.value = ", ".join(states)  # echo back the canonical entry form
+            layer_id = layer.id
+            self._mutate_and_refresh(lambda p: edit.set_states(p, layer_id, states))
+            self._notify_layer_refusals(layer_id)
+            return
+        if wid == "f-layer-premium-detail":
+            detail = widget.value.strip() or None
+            layer_id = layer.id
+            self._mutate_and_refresh(
+                lambda p: edit.set_premium_detail(p, layer_id, detail)
+            )
+            self._notify_layer_refusals(layer_id)
             return
         if wid == "f-layer-retention-detail":
             retention_detail = widget.value.strip() or None
@@ -1354,6 +1560,9 @@ class EditorScreen(Screen):
         elif wid == "f-layer-premium":
             self._mutate_and_refresh(lambda p: setattr(layer, "premium", amount))
             self._refresh_participant_premiums(layer)
+            # a premiumDetail that was fine against $0 is not fine against a
+            # number — the refusal belongs on the edit that caused it
+            self._notify_layer_refusals(layer.id)
 
     def _commit_layer_period(self, layer) -> None:
         from ...dates import parse_flexible_date
@@ -1531,6 +1740,7 @@ class EditorScreen(Screen):
                 self.query_one("#f-layer-follows", Checkbox).value = layer.follows_underlying
             except Exception:
                 pass
+            self._notify_layer_refusals(layer.id)
             return
         if wid == "f-layer-follows":
             kind, key = self._commit_ref
@@ -2128,6 +2338,8 @@ _FIELD_HANDLERS = {
     "f-layer-notes": EditorScreen._commit_layer_field,
     "f-layer-limits-detail": EditorScreen._commit_layer_field,
     "f-layer-retention-detail": EditorScreen._commit_layer_field,
+    "f-layer-states": EditorScreen._commit_layer_field,
+    "f-layer-premium-detail": EditorScreen._commit_layer_field,
     "f-layer-period-start": EditorScreen._commit_layer_field,
     "f-layer-period-end": EditorScreen._commit_layer_field,
     "f-layer-attach": EditorScreen._commit_layer_field,
