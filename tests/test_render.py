@@ -347,33 +347,37 @@ class TestLayerDetailFieldsAreSoiOnly:
     none of them touch — assert that rather than assume it, because a stray
     read in a renderer would move every stored program's SVG."""
 
+    @staticmethod
+    def _decorated():
+        """EVERY layer carries all three, not just the first.
+
+        Decorating one layer was not good enough and the mutation run proved
+        it: the sample's first layer is a short primary whose name the ASCII
+        preview does not print at all, so a renderer that appended the states
+        to a block name changed nothing and the test passed on a mutation it
+        was written to catch. `premium` itself is left alone throughout — it
+        IS drawn, so moving it would fail this test for a reason that has
+        nothing to do with the new fields."""
+        program = load_program(SAMPLE)
+        for layer in program.layers:
+            layer.named_limits = [
+                {"name": "Each Accident", "amount": 1_000_000},
+                {"name": "Disease - Policy Limit", "amount": 1_000_000},
+            ]
+            layer.premium_detail = "Included with Part A"
+            layer.states = ["NY", "NJ"]
+        return program
+
     def test_the_tower_svg_is_byte_identical_with_and_without_them(
         self, theme, tmp_path
     ) -> None:
-        plain = load_program(SAMPLE)
-        decorated = load_program(SAMPLE)
-        layer = decorated.layers[0]
-        layer.named_limits = [
-            {"name": "Each Accident", "amount": 1_000_000},
-            {"name": "Disease - Policy Limit", "amount": 1_000_000},
-        ]
-        # premium itself is left ALONE: it is drawn on the chart, so moving it
-        # would make this test pass for the wrong reason (or fail for one).
-        # The claim under test is that the new FIELDS are invisible to it.
-        layer.premium_detail = "Included with Part A"
-        layer.states = ["NY", "NJ"]
-
-        a = render_program(plain, theme, tmp_path / "a", "tower", ["svg"])[0]
-        b = render_program(decorated, theme, tmp_path / "b", "tower", ["svg"])[0]
+        a = render_program(load_program(SAMPLE), theme, tmp_path / "a", "tower", ["svg"])[0]
+        b = render_program(self._decorated(), theme, tmp_path / "b", "tower", ["svg"])[0]
         assert a.read_bytes() == b.read_bytes()
 
     def test_the_ascii_preview_is_identical_too(self, theme) -> None:
         from towerkit.render.ascii import render_ascii
 
-        plain = load_program(SAMPLE)
-        decorated = load_program(SAMPLE)
-        decorated.layers[0].named_limits = [
-            {"name": "Each Accident", "amount": 1_000_000}
-        ]
-        decorated.layers[0].states = ["NY"]
-        assert render_ascii(decorated, theme) == render_ascii(plain, theme)
+        assert render_ascii(self._decorated(), theme) == render_ascii(
+            load_program(SAMPLE), theme
+        )
