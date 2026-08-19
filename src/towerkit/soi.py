@@ -77,17 +77,44 @@ def _covered_lines(layer: Layer, program: Program) -> list[Line]:
 # Grant's phrase, verbatim (2026-08-18, answering C10). "Statutory" alone
 # invites the reader to ask "statutory where?"; naming state limits says the
 # cover follows the states' own schedules without towerkit inventing a
-# sentence about any particular one. `limits_detail` still wins over it —
-# a broker who wants the states listed types them, and the escape hatch is
-# ahead of this line on purpose.
+# sentence about any particular one. `limits_detail` still wins over it — the
+# escape hatch is ahead of this line on purpose.
+#
+# The question it raises now has a modelled answer: `Layer.states` (C15), which
+# Grant chose over free text because cover in a state the policy is not filed
+# in is worth nothing — a coverage fact, and the thing the monopolistic-fund
+# check in `validate` is checking. When it is recorded, the codes follow the
+# phrase in parentheses; when it is not, the cell is exactly what it was.
 _STATUTORY_TEXT = "Statutory - State Limits"
 
 
 def limits_text(layer: Layer, program: Program) -> str:
+    """The Limits cell for one row.
+
+    PROSE WINS, and it is first on purpose — `limits_detail` is documented as
+    exported verbatim and every composed form below is a fallback for its
+    absence. Nothing structured overtakes it; `validate` refuses a layer
+    carrying both prose and named limits, so the precedence can never discard
+    data that a valid program was relying on.
+
+    STATUTORY IS AHEAD OF NAMED LIMITS, and this function stays total on draft
+    data the validator would refuse: a statutory layer must never print a
+    dollar figure, whatever else it is carrying, because "no dollar limit" is
+    the invariant the whole statutory design rests on."""
     if layer.limits_detail:
         return layer.limits_detail
     if layer.statutory:
         base = _STATUTORY_TEXT
+        if layer.states:
+            # The recorded answer to the question the phrase itself asks —
+            # "state limits WHERE?". Codes as filed, in file order (the
+            # broker's order is data); towerkit still writes no sentence about
+            # any state's law.
+            base = f"{base} ({', '.join(layer.states)})"
+    elif layer.named_limits:
+        base = "; ".join(
+            f"{named.name} {format_money(named.amount)}" for named in layer.named_limits
+        )
     elif layer.follows_underlying:
         base = f"{format_money(layer.limit)} xs underlying"
     elif layer.attach == 0:
@@ -180,6 +207,10 @@ class SoiRow:
     # renders blank and is NOT counted as bound: a schedule may decline to say
     # whether cover exists, but it must never assert cover it cannot vouch for.
     status: SoiStatus | None = None
+    # What the premium cell says instead of "Included" when `premium` is zero.
+    # Optional and last for the same reason as `status`, and it touches no
+    # total: `premium` is still the only number on this row.
+    premium_detail: str | None = None
 
     @property
     def is_bound(self) -> bool:
@@ -232,15 +263,20 @@ def premium_value(row: SoiRow) -> int | str | None:
 
     $0.00 reads as free cover (C10). A zero premium never means free — it
     means the layer is priced with another one, the way Employers Liability is
-    priced with the Workers Compensation policy it sits beside. Which layer is
-    a fact the model cannot express, so towerkit states what it knows and
-    stops there; a broker who wants "Included with Part A" needs a premium
-    detail field, which is a canonical-format change and is queued, not
-    invented here. Totalling is unaffected — a zero adds zero either way."""
+    priced with the Workers Compensation policy it sits beside. WHICH layer is
+    `premium_detail`, printed VERBATIM in place of the bare word: composing
+    "Included with " + a referent would be towerkit inventing the sentence,
+    and "Part A" is a line-of-business concept it must never learn.
+
+    The detail qualifies a WORD, never a number. A stated premium is money the
+    subtotals add up, and an absent one prints a blank cell — prose in either
+    place would drop the row out of a total or assert something the sheet
+    cannot vouch for, so it is refused by the validator and ignored here.
+    Totalling is unaffected — a zero adds zero either way."""
     if row.premium is None:
         return None
     if row.premium == 0:
-        return "Included"
+        return row.premium_detail or "Included"
     return row.premium
 
 
@@ -266,7 +302,11 @@ def premium_subtotal(section: SoiSection, *, bound: bool) -> int | str:
       another layer, never that it is free.
     - Otherwise the sum, which is the only case a reader may add up.
 
-    A genuine zero is a real assertion and is kept distinct from silence."""
+    A genuine zero is a real assertion and is kept distinct from silence.
+
+    A row's `premium_detail` never reaches here. It names what ONE layer is
+    priced with; a subtotal spans rows, and there is no referent that is true
+    of all of them."""
     stated = [
         row.premium
         for row in section.rows
@@ -291,6 +331,7 @@ def _row(layer: Layer, program: Program, claimed: set[int] | None = None) -> Soi
         retention=retention_text(layer, program, claimed),
         premium=layer.premium,
         status=row_status(layer, program),
+        premium_detail=layer.premium_detail,
     )
 
 

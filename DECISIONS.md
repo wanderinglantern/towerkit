@@ -256,3 +256,46 @@ relitigated here.
   keyed-in user data, and the repo's data-safety rule (CLAUDE.md — never
   run an irreversible data operation without surfacing the risk first)
   applies to the TUI even where the CLI doesn't enforce it.
+
+## Layer detail fields: states / namedLimits / premiumDetail (2026-08-18)
+
+One canonical-format change carrying three findings, because each touches
+`_LAYER_KEYS` and the zero-diff round trip.
+
+- **`states` is on the layer, statutory only** (Grant's C15 call: modelling
+  over free text). Cover in a state we are not filed in is worth nothing, so
+  it is a coverage fact — and it buys the monopolistic-fund refusal
+  (ND/OH/WA/WY), which is the only reason to model it rather than type it.
+  A states list on a dollar-limited layer is refused: an unrefused
+  meaningless field becomes a general-purpose note by accident.
+- **An unrecognised state code WARNS, it does not error.** towerkit knows
+  50 states + DC and nothing else; "Ohio" or a non-US jurisdiction is not
+  invalid, it is UNCHECKED, and saying so is the point — silence would
+  leave the one check the field exists for quietly unapplied. Codes are
+  compared upper-cased and stored verbatim (normalising on load would
+  rewrite files nobody edited).
+- **`namedLimits` is generic — optional named amounts on a layer.**
+  Employers Liability's three coordinate limits are one caller. Not
+  `Sublimit`, which is a cap WITHIN a limit rather than a peer of one.
+  Amounts are stated, never summed or compared against `limit`: which of
+  them is the layer's height is a line-of-business question.
+- **`premiumDetail` is exported verbatim**, like the two detail fields
+  before it — "Included with Part A" is the broker's sentence, never one
+  towerkit composes, so it never learns "Part A".
+- **Prose versus structured, ruled once.** `limitsDetail` still wins over
+  `namedLimits`, AND carrying both is refused — that refusal is what makes
+  "prose wins" safe, because otherwise the structured data would be
+  discarded in silence and look broken to whoever set it. `retentionDetail`
+  is unchanged: its competitor is program-level and its precedence is
+  deliberate. `premiumDetail` competes with nothing — it replaces the WORD a
+  zero prints, never a number the subtotals add up, and is refused wherever
+  the cell would not render it.
+- **The states follow Grant's shipped phrase in parentheses** on the SOI —
+  `Statutory - State Limits (NY, NJ)` — answering the question that phrase's
+  own comment says it raises. `limitsDetail` still wins over the whole
+  thing. Judgement call, open to veto: the alternative is to model the
+  states for the validator alone and print nothing.
+- **Not built: TUI editors.** All three are file- and API-settable only;
+  the layer form has no widgets for them, and `namedLimits` needs a
+  repeating-row editor on the participants-sheet pattern. Deliberate scope
+  line, not an oversight.

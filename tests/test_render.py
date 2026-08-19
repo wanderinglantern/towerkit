@@ -339,3 +339,45 @@ def test_available_themes_cwd_overrides_packaged(tmp_path, monkeypatch) -> None:
     marsh = next(path for path in available_themes() if path.stem == "marsh")
     # relative on purpose — stored render.theme paths stay portable
     assert marsh == Path("themes") / "marsh.json"
+
+
+class TestLayerDetailFieldsAreSoiOnly:
+    """states / namedLimits / premiumDetail are SCHEDULE data. The chart quotes
+    a layer by `attach` and `limit` through render.labels.layer_terms, which
+    none of them touch — assert that rather than assume it, because a stray
+    read in a renderer would move every stored program's SVG."""
+
+    @staticmethod
+    def _decorated():
+        """EVERY layer carries all three, not just the first.
+
+        Decorating one layer was not good enough and the mutation run proved
+        it: the sample's first layer is a short primary whose name the ASCII
+        preview does not print at all, so a renderer that appended the states
+        to a block name changed nothing and the test passed on a mutation it
+        was written to catch. `premium` itself is left alone throughout — it
+        IS drawn, so moving it would fail this test for a reason that has
+        nothing to do with the new fields."""
+        program = load_program(SAMPLE)
+        for layer in program.layers:
+            layer.named_limits = [
+                {"name": "Each Accident", "amount": 1_000_000},
+                {"name": "Disease - Policy Limit", "amount": 1_000_000},
+            ]
+            layer.premium_detail = "Included with Part A"
+            layer.states = ["NY", "NJ"]
+        return program
+
+    def test_the_tower_svg_is_byte_identical_with_and_without_them(
+        self, theme, tmp_path
+    ) -> None:
+        a = render_program(load_program(SAMPLE), theme, tmp_path / "a", "tower", ["svg"])[0]
+        b = render_program(self._decorated(), theme, tmp_path / "b", "tower", ["svg"])[0]
+        assert a.read_bytes() == b.read_bytes()
+
+    def test_the_ascii_preview_is_identical_too(self, theme) -> None:
+        from towerkit.render.ascii import render_ascii
+
+        assert render_ascii(self._decorated(), theme) == render_ascii(
+            load_program(SAMPLE), theme
+        )

@@ -408,3 +408,176 @@ class TestLayerPolicyData:
         assert umbrella.policy_number is not None
         prop = next(ly for ly in program.layers if ly.id == "primary-pr")
         assert prop.period is not None and prop.period.start.month == 4
+
+
+# --- layer detail fields (2026-08-18) ----------------------------------------
+
+
+def _el_layer(**kw) -> Layer:
+    """A dollar-limited layer on the `wc` line — the shape Employers Liability
+    takes. Deliberately NOT statutory: it is the counterexample every
+    statutory-only rule below has to refuse."""
+    base = dict(
+        id="el", name="Employers Liability", applies_to=["wc"],
+        attach=0, limit=1_000_000,
+        participants=[Participant(carrier="Travelers", share_bps=10_000)],
+    )
+    return Layer(**{**base, **kw})
+
+
+class TestStatesRules:
+    def test_states_on_a_statutory_layer_are_clean(self) -> None:
+        program = _wc_program(_stat(states=["NY", "NJ", "CT"]))
+        assert error_codes(program) == set()
+
+    def test_a_monopolistic_state_is_refused(self) -> None:
+        """ND, OH, WA and WY have monopolistic state funds: a private policy
+        cannot cover them, so naming one is a coverage error, not a note."""
+        for code in ("ND", "OH", "WA", "WY"):
+            program = _wc_program(_stat(states=["NY", code]))
+            assert "states-monopolistic" in error_codes(program), code
+
+    def test_the_monopolistic_state_is_named_in_the_message(self) -> None:
+        program = _wc_program(_stat(states=["NY", "OH"]))
+        message = next(
+            d.message for d in validate_program(program).errors
+            if d.code == "states-monopolistic"
+        )
+        assert "OH" in message and "NY" not in message
+
+    def test_a_non_monopolistic_state_is_not_refused(self) -> None:
+        program = _wc_program(_stat(states=["NY", "WV", "CA"]))
+        assert "states-monopolistic" not in error_codes(program)
+
+    def test_states_on_a_non_statutory_layer_are_refused(self) -> None:
+        """Cover in a state we are not filed in is worth nothing — which makes
+        this a coverage fact about STATUTORY cover. On a dollar-limited layer
+        it means nothing at all, and an unrefused meaningless field becomes a
+        general-purpose note by accident."""
+        program = _wc_program(_el_layer(states=["NY"]))
+        assert "states-non-statutory" in error_codes(program)
+
+    def test_a_dollar_layer_with_no_states_is_clean(self) -> None:
+        assert "states-non-statutory" not in codes(_wc_program(_el_layer()))
+
+    def test_a_repeated_state_is_refused(self) -> None:
+        assert "states-duplicate" in error_codes(_wc_program(_stat(states=["NY", "NY"])))
+
+    def test_case_does_not_smuggle_a_monopolistic_state_past_the_check(self) -> None:
+        """A lowercase code that slipped past an exact-match set would leave the
+        one check this field exists for silently unapplied."""
+        assert "states-monopolistic" in error_codes(_wc_program(_stat(states=["oh"])))
+
+    def test_an_unrecognised_code_warns_that_the_check_did_not_run(self) -> None:
+        """towerkit knows US two-letter codes and nothing else. "Ohio" is not
+        one, so the monopolistic check cannot vouch for it — silence there
+        would be the failure the check exists to prevent. A warning, not an
+        error: a non-US programme is not invalid, it is unchecked."""
+        program = _wc_program(_stat(states=["Ohio"]))
+        assert "states-unrecognized" in warning_codes(program)
+        assert "states-unrecognized" not in error_codes(program)
+
+    def test_a_recognised_code_does_not_warn(self) -> None:
+        assert "states-unrecognized" not in codes(_wc_program(_stat(states=["NY", "DC"])))
+
+
+class TestNamedLimitRules:
+    def test_named_limits_on_a_dollar_layer_are_clean(self) -> None:
+        program = _wc_program(
+            _el_layer(named_limits=[
+                {"name": "Each Accident", "amount": 1_000_000},
+                {"name": "Disease - Each Employee", "amount": 1_000_000},
+                {"name": "Disease - Policy Limit", "amount": 1_000_000},
+            ])
+        )
+        assert error_codes(program) == set()
+
+    def test_named_limits_on_a_statutory_layer_are_refused(self) -> None:
+        """`statutory ⇒ no dollar limit` is the invariant the whole design
+        rests on. Named dollar amounts on a statutory layer are dollar limits
+        by another name."""
+        program = _wc_program(
+            _stat(named_limits=[{"name": "Each Accident", "amount": 1_000_000}])
+        )
+        assert "statutory-named-limits" in error_codes(program)
+
+    def test_two_named_limits_sharing_a_name_are_refused(self) -> None:
+        program = _wc_program(
+            _el_layer(named_limits=[
+                {"name": "Each Accident", "amount": 1_000_000},
+                {"name": "Each Accident", "amount": 2_000_000},
+            ])
+        )
+        assert "named-limit-duplicate" in error_codes(program)
+
+    def test_limits_prose_and_named_limits_together_are_refused(self) -> None:
+        """limits_detail is exported verbatim and wins over everything
+        composed. Carrying both would discard the structured data in silence,
+        which is exactly how a field comes to look broken to whoever set it."""
+        program = _wc_program(
+            _el_layer(
+                limits_detail="Each Accident $1,000,000",
+                named_limits=[{"name": "Each Accident", "amount": 1_000_000}],
+            )
+        )
+        assert "limits-detail-conflict" in error_codes(program)
+
+    def test_either_one_alone_is_clean(self) -> None:
+        prose = _wc_program(_el_layer(limits_detail="Each Accident $1,000,000"))
+        structured = _wc_program(
+            _el_layer(named_limits=[{"name": "Each Accident", "amount": 1_000_000}])
+        )
+        assert "limits-detail-conflict" not in codes(prose)
+        assert "limits-detail-conflict" not in codes(structured)
+
+
+class TestPremiumDetailRules:
+    def test_premium_detail_on_a_zero_premium_is_clean(self) -> None:
+        program = _wc_program(
+            _el_layer(premium=0, premium_detail="Included with Part A")
+        )
+        assert error_codes(program) == set()
+
+    def test_premium_detail_beside_a_real_premium_is_refused(self) -> None:
+        """The premium cell holds a NUMBER that the sheet's subtotals add up.
+        premiumDetail replaces only the word a ZERO prints; on a priced layer
+        it would never render, and a field that silently does nothing is the
+        general-purpose note this rule exists to prevent."""
+        program = _wc_program(
+            _el_layer(premium=50_000, premium_detail="Included with Part A")
+        )
+        assert "premium-detail-conflict" in error_codes(program)
+
+    def test_premium_detail_with_no_premium_at_all_is_refused(self) -> None:
+        """An absent premium prints a BLANK cell, not "Included" — there is no
+        word for the detail to qualify, so it would not render either."""
+        program = _wc_program(_el_layer(premium=None, premium_detail="Included with Part A"))
+        assert "premium-detail-conflict" in error_codes(program)
+
+    def test_a_zero_premium_without_detail_is_clean(self) -> None:
+        assert "premium-detail-conflict" not in codes(_wc_program(_el_layer(premium=0)))
+
+
+class TestNewFieldsAgainstTheSchema:
+    def test_the_schema_accepts_all_three(self, tmp_path) -> None:
+        """validate_file goes through jsonschema, which the canonical round
+        trip never touches — a key added to model.py alone passes every other
+        test in this repo and fails at runtime on a real file."""
+        program = _wc_program(
+            _stat(states=["NY", "NJ"]),
+        )
+        program.layers.append(
+            _el_layer(
+                premium=0,
+                premium_detail="Included with Part A",
+                named_limits=[{"name": "Each Accident", "amount": 1_000_000}],
+            )
+        )
+        target = tmp_path / "wc.json"
+        from towerkit.model import dump_program
+
+        dump_program(program, target)
+        text = target.read_text()
+        assert '"states"' in text and '"namedLimits"' in text and '"premiumDetail"' in text
+        _, diags = validate_file(target)
+        assert [d.message for d in diags.items if d.code == "schema"] == []
