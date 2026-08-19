@@ -16,7 +16,7 @@ from openpyxl.worksheet.worksheet import Worksheet
 
 from ..model import Program
 from ..scale import DEFAULT_GAMMA
-from ..soi import SoiSection, build_soi, sheet_title
+from ..soi import SoiSection, build_soi, premium_subtotal, premium_value, sheet_title
 from ..theme import Theme
 from .schematic_xlsx import add_schematic_sheet
 from .table_xlsx import (
@@ -27,11 +27,18 @@ from .table_xlsx import (
     sanitize_sheet_title,
 )
 
+# STATUS SITS BESIDE THE COVERAGE IT QUALIFIES, ahead of the carrier: a
+# schedule of insurance is read as an assertion that the cover exists, and the
+# row has to say so before it names anyone (C1, 2026-08-18). Premium stays
+# LAST — the subtotal lines are written into the final column.
 _HEADERS = (
-    "Insured", "Line of Coverage", "Carrier", "Policy Number", "Effective Date",
-    "Expiration Date", "Limits", "Deductible / SIR / Retention", "Premium",
+    "Insured", "Line of Coverage", "Status", "Carrier", "Policy Number",
+    "Effective Date", "Expiration Date", "Limits",
+    "Deductible / SIR / Retention", "Premium",
 )
-_WIDTHS = (23.33, 37.83, 39.83, 15.0, 11.83, 13.0, 100.0, 34.83, 12.16)
+_WIDTHS = (23.33, 37.83, 15.0, 39.83, 15.0, 11.83, 13.0, 100.0, 34.83, 12.16)
+_DATE_COLS = (6, 7)   # effective / expiration (1-based)
+_LIMITS_IX, _RETENTION_IX = 7, 8  # 0-based, into a rendered row tuple
 _CURRENCY = '"$"#,##0.00'
 _DATE_FMT = "mm/dd/yyyy"
 
@@ -41,14 +48,14 @@ def _table_parts(
 ) -> tuple[list[TableColumn], list[TableSection]]:
     """The SOI sheet as table-writer inputs — one mapping for every caller,
     so every SOI sheet body is IDENTICAL (the golden guard's premise)."""
-    ncols = 9 if show_premiums else 8
+    ncols = len(_HEADERS) if show_premiums else len(_HEADERS) - 1
     columns: list[TableColumn] = []
     for i, (header, width) in enumerate(
         zip(_HEADERS[:ncols], _WIDTHS[:ncols], strict=True), start=1
     ):
-        if i in (5, 6):  # effective / expiration
+        if i in _DATE_COLS:
             columns.append(TableColumn(header, width, number_format=_DATE_FMT, wrap=False))
-        elif i == 9:     # premium
+        elif header == "Premium":
             columns.append(TableColumn(header, width, number_format=_CURRENCY, align="right"))
         else:
             columns.append(TableColumn(header, width))
@@ -58,18 +65,31 @@ def _table_parts(
         rows = []
         for row in section.rows:
             values: list[object] = [
-                row.insured, row.coverage, row.carrier, row.policy_number,
+                row.insured, row.coverage, row.status or "", row.carrier,
+                row.policy_number,
                 datetime.combine(row.effective, datetime.min.time()),
                 datetime.combine(row.expiration, datetime.min.time()),
                 row.limits, row.retention,
             ]
             if show_premiums:
-                values.append(row.premium)
+                values.append(premium_value(row))
             rows.append(tuple(values))
+        # TWO SUBTOTALS, NEVER ONE MINGLED FIGURE (Grant, 2026-08-18): bound
+        # cover on its own line, unbound stated separately beneath it. BOTH
+        # lines print always — a section that sometimes has one line and
+        # sometimes two teaches the reader to skim past them — but what the
+        # cell HOLDS is premium_subtotal's decision, not a bare sum: a section
+        # whose unbound rows state no premium prints an em dash there, because
+        # "$0.00" under a visible "To be placed" row asserts free cover
+        # (fix round 1; see soi.premium_subtotal).
         table_sections.append(TableSection(
             section.label, tuple(rows),
-            total=section.premium_total
-            if (section.label is not None and show_premiums) else None,
+            totals=(
+                ("Bound cover — premium subtotal",
+                 premium_subtotal(section, bound=True)),
+                ("Unbound cover — premium subtotal",
+                 premium_subtotal(section, bound=False)),
+            ) if show_premiums else (),
         ))
 
     return columns, table_sections
@@ -86,7 +106,7 @@ def _row_height(limits: str, retention: str) -> float:
 
 
 def _soi_row_height(values: tuple[object, ...]) -> float:
-    return _row_height(str(values[6]), str(values[7]))
+    return _row_height(str(values[_LIMITS_IX]), str(values[_RETENTION_IX]))
 
 
 def render_soi_sheet(

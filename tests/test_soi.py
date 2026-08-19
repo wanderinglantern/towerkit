@@ -2,14 +2,20 @@
 
 import datetime
 
-from towerkit.model import Layer, Program
+from towerkit.model import Layer, Placement, Program
 from towerkit.soi import (
+    NOT_STATED,
     PROGRAM_WIDE,
+    SoiRow,
+    SoiSection,
+    SoiStatus,
     build_soi,
     carrier_text,
     coverage_text,
     default_filename,
     limits_text,
+    premium_subtotal,
+    premium_value,
     retention_text,
     sheet_title,
 )
@@ -87,17 +93,6 @@ def _statutory_layer(**kw) -> Layer:
         attach=0, limit=0, statutory=True,
     )
     return Layer(**{**base, **kw})
-
-
-def test_limits_text_statutory() -> None:
-    assert limits_text(_statutory_layer(), make_program()) == "Statutory"
-
-
-def test_limits_detail_still_wins_over_statutory() -> None:
-    """towerkit does not invent a sentence about state law. If the broker
-    wants the long form on the SOI they type it, and it wins."""
-    layer = _statutory_layer(limits_detail="Benefits as required by NY state law")
-    assert limits_text(layer, make_program()) == "Benefits as required by NY state law"
 
 
 class TestSoiStyle:
@@ -260,3 +255,224 @@ class TestNaming:
         p = make_program()
         p.insured = "A/B: C"
         assert "/" not in default_filename(p) and ":" not in default_filename(p)
+
+
+# --- C1/C2: every row says whether the cover is bound -------------------------
+
+
+def unbound_with_premium() -> Program:
+    """The fixture, with a premium on the layer that has NO participants —
+    the exact shape the CFO review flagged: money on a row whose cover does
+    not exist yet."""
+    p = make_program()
+    next(layer for layer in p.layers if layer.id == "al-primary").premium = 25_000
+    return p
+
+
+class TestRowStatus:
+    def test_placed_layer_in_a_bound_program_reads_bound(self) -> None:
+        rows = build_soi(make_program())[0].rows
+        assert rows[0].status is SoiStatus.BOUND
+
+    def test_layer_without_participants_reads_to_be_placed(self) -> None:
+        rows = build_soi(make_program())[0].rows
+        assert rows[3].coverage == "Auto Liability — Primary"
+        assert rows[3].status is SoiStatus.TO_BE_PLACED
+
+    def test_proposed_program_never_says_bound(self) -> None:
+        p = make_program()
+        p.placement = Placement.PROPOSED
+        assert build_soi(p)[0].rows[0].status is SoiStatus.PROPOSED
+
+    def test_shares_that_do_not_close_read_partially_bound(self) -> None:
+        p = make_program()
+        gl_x1 = next(layer for layer in p.layers if layer.id == "gl-x1")
+        gl_x1.participants = gl_x1.participants[:1]  # 60% signed, 40% open
+        assert build_soi(p)[0].rows[1].status is SoiStatus.PARTIALLY_BOUND
+
+    def test_status_is_carried_on_the_row_not_the_section_label(self) -> None:
+        """C2: the marker belongs to the row. Sections keep their own labels."""
+        sections = build_soi(make_program())
+        assert sections[0].label == "Casualty"
+        assert all(row.status is not None for s in sections for row in s.rows)
+
+    def test_a_plain_string_status_is_read_as_bound(self) -> None:
+        """SoiStatus is a StrEnum and bookkit's PlacementStatus values are
+        PLAIN STRINGS, so a caller composing its own rows sets status="Bound".
+        `is` would read that row as unbound: the Status cell would print Bound
+        while the row's premium landed in the unbound subtotal, and the sheet
+        would contradict itself in silence (fix round 1)."""
+        row = _row_with_premium(50_000, status="Bound")
+        assert row.is_bound is True
+
+    def test_a_plain_string_that_is_not_bound_stays_unbound(self) -> None:
+        """The other direction: `==` must not promote anything. A partially
+        bound layer's premium belongs wholly to the unbound subtotal."""
+        assert _row_with_premium(1, status="Partially bound").is_bound is False
+        assert _row_with_premium(1, status="To be placed").is_bound is False
+        assert _row_with_premium(1, status="").is_bound is False
+
+    def test_a_plain_string_bound_row_reaches_the_bound_subtotal(self) -> None:
+        """End to end, because is_bound is only interesting through a total."""
+        section = SoiSection(
+            label="L", rows=(_row_with_premium(50_000, status="Bound"),)
+        )
+        assert section.bound_premium_total == 50_000
+        assert section.unbound_premium_total == 0
+        assert premium_subtotal(section, bound=True) == 50_000
+
+    def test_an_unstated_status_is_not_bound(self) -> None:
+        """The contract for callers that build SoiRow themselves (bookkit):
+        status defaults to None and None never counts as cover in force."""
+        row = SoiRow(
+            insured="X", coverage="Y", carrier="Z", policy_number="",
+            effective=datetime.date(2026, 1, 1), expiration=datetime.date(2027, 1, 1),
+            limits="", retention="", premium=10_000,
+        )
+        assert row.status is None
+        assert row.is_bound is False
+
+
+class TestBoundAndUnboundSubtotals:
+    def test_bound_subtotal_excludes_an_unbound_rows_premium(self) -> None:
+        casualty = build_soi(unbound_with_premium())[0]
+        assert casualty.bound_premium_total == 100_000
+
+    def test_unbound_subtotal_holds_exactly_that_premium(self) -> None:
+        casualty = build_soi(unbound_with_premium())[0]
+        assert casualty.unbound_premium_total == 25_000
+
+    def test_the_two_subtotals_account_for_every_row(self) -> None:
+        casualty = build_soi(unbound_with_premium())[0]
+        assert casualty.premium_total == 125_000
+        assert casualty.bound_premium_total + casualty.unbound_premium_total == 125_000
+
+    def test_a_subtotal_of_wholly_unstated_premiums_states_nothing(self) -> None:
+        """C: the fixture's only unbound Casualty row has NO premium, so the
+        old code printed "Unbound cover — premium subtotal $0.00" underneath a
+        visible "To be placed" row — the exact rendering premium_value refuses
+        one row higher up, and it reads as free cover."""
+        casualty = build_soi(make_program())[0]
+        assert [r.premium for r in casualty.rows if not r.is_bound] == [None]
+        assert premium_subtotal(casualty, bound=False) == NOT_STATED
+        assert casualty.unbound_premium_total == 0   # the raw sum is unchanged
+
+    def test_a_subtotal_with_no_contributing_rows_states_nothing(self) -> None:
+        """Nothing unbound at all is still nothing to state."""
+        ungrouped = build_soi(make_program())[1]
+        assert all(r.is_bound for r in ungrouped.rows)
+        assert premium_subtotal(ungrouped, bound=False) == NOT_STATED
+
+    def test_a_stated_zero_subtotal_reads_included_not_free(self) -> None:
+        """A GENUINE zero is a real assertion and must stay distinguishable
+        from silence — but it is the same assertion the body cell makes with
+        "Included", never $0.00."""
+        section = SoiSection(label="L", rows=(_row_with_premium(0, status="Bound"),))
+        assert premium_subtotal(section, bound=True) == "Included"
+
+    def test_one_stated_premium_beside_an_unstated_one_still_totals(self) -> None:
+        casualty = build_soi(unbound_with_premium())[0]
+        assert premium_subtotal(casualty, bound=True) == 100_000
+        assert premium_subtotal(casualty, bound=False) == 25_000
+
+    def test_rows_of_unknown_status_land_in_the_unbound_subtotal(self) -> None:
+        row = SoiRow(
+            insured="X", coverage="Y", carrier="Z", policy_number="",
+            effective=datetime.date(2026, 1, 1), expiration=datetime.date(2027, 1, 1),
+            limits="", retention="", premium=7_000,
+        )
+        section = SoiSection(label="L", rows=(row,))
+        assert section.bound_premium_total == 0
+        assert section.unbound_premium_total == 7_000
+
+
+# --- C10: the statutory package ----------------------------------------------
+
+
+class TestStatutoryPackage:
+    def test_statutory_reads_state_limits(self) -> None:
+        assert limits_text(_statutory_layer(), make_program()) == "Statutory - State Limits"
+
+    def test_limits_detail_still_wins_over_the_phrase(self) -> None:
+        layer = _statutory_layer(limits_detail="Benefits as required by NY state law")
+        assert limits_text(layer, make_program()) == "Benefits as required by NY state law"
+
+    def test_a_shared_retention_is_stated_once(self) -> None:
+        """The SIR spans GL and AL, and both are primaries. It belongs to the
+        first row that carries it; a second statement invites the reader to
+        conclude there are two retentions.
+
+        Both rows are named, not just indexed: an excess row's retention is ""
+        too, so an index that drifted onto one would assert nothing."""
+        rows = build_soi(make_program())[0].rows
+        assert rows[0].coverage == "General Liability — Primary"
+        assert rows[0].retention == "SIR $250,000; Aggregate $1,000,000"
+        assert rows[3].coverage == "Auto Liability — Primary"
+        assert rows[3].retention == ""
+
+    def test_a_retention_spanning_two_SECTIONS_is_stated_in_each(self) -> None:
+        """ACROSS a section boundary the dedup is a false statement by
+        omission. Within a section the reader's eye carries the retention
+        column down from the row that states it; across a band it carries
+        nothing, so a captive shared by a Casualty primary and a Property
+        primary would leave the whole Property section stating NO retention
+        (fix round 1). A captive spanning two sections is exactly the case
+        retention_text's own docstring cites."""
+        p = make_program()
+        p.retentions[0].applies_to = ["gl", "prop"]
+        casualty, ungrouped = build_soi(p)[0], build_soi(p)[1]
+        assert casualty.rows[0].coverage == "General Liability — Primary"
+        assert casualty.rows[0].retention == "SIR $250,000; Aggregate $1,000,000"
+        assert ungrouped.rows[0].coverage == "Property — Primary"
+        assert ungrouped.rows[0].retention == (
+            "SIR $250,000; Aggregate $1,000,000; Deductible $100,000"
+        )
+
+    def test_an_unshared_retention_still_prints(self) -> None:
+        rows = build_soi(make_program())[1].rows
+        assert rows[0].coverage == "Property — Primary"
+        assert rows[0].retention == "Deductible $100,000"
+
+    def test_prose_on_the_first_primary_claims_the_shared_retention(self) -> None:
+        p = make_program()
+        p.layers[0].retention_detail = "Captive retention $500,000 per occurrence"
+        rows = build_soi(p)[0].rows
+        assert rows[0].coverage == "General Liability — Primary"
+        assert rows[0].retention == "Captive retention $500,000 per occurrence"
+        assert rows[3].coverage == "Auto Liability — Primary"
+        assert rows[3].retention == ""
+
+    def test_prose_on_an_excess_layer_does_not_claim_it(self) -> None:
+        """Only a primary states a retention, so prose on an excess layer must
+        not silence the primary that actually carries it.
+
+        The excess has to sort AHEAD of that primary for this to be capable of
+        failing: the SIR is moved onto AL alone, and the Casualty umbrella
+        (excess, spanning GL and AL) is row 2 while the AL primary is row 3."""
+        p = make_program()
+        p.retentions[0].applies_to = ["al"]
+        p.layers[4].retention_detail = "See policy."
+        rows = build_soi(p)[0].rows
+        assert rows[2].coverage == "Umbrella (GL, AL)"
+        assert rows[2].retention == "See policy."
+        assert rows[3].coverage == "Auto Liability — Primary"
+        assert rows[3].retention == "SIR $250,000; Aggregate $1,000,000"
+
+    def test_zero_premium_reads_included_not_free(self) -> None:
+        """$0.00 reads as free cover; a zero premium means it is priced with
+        another layer (WC Part B with Part A)."""
+        assert premium_value(_row_with_premium(0)) == "Included"
+
+    def test_a_real_premium_stays_a_number(self) -> None:
+        assert premium_value(_row_with_premium(50_000)) == 50_000
+
+    def test_an_absent_premium_stays_blank(self) -> None:
+        assert premium_value(_row_with_premium(None)) is None
+
+
+def _row_with_premium(premium: int | None, status=None) -> SoiRow:
+    return SoiRow(
+        insured="X", coverage="Y", carrier="Z", policy_number="",
+        effective=datetime.date(2026, 1, 1), expiration=datetime.date(2027, 1, 1),
+        limits="", retention="", premium=premium, status=status,
+    )

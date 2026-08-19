@@ -106,6 +106,11 @@ class TableSection:
     label: str | None
     rows: tuple[tuple[Any, ...], ...]
     total: Any = None  # rendered in the last column of the label row
+    # Labelled lines rendered BENEATH the rows, in the band style: (label,
+    # value), value in the last column. Two subtotals that must not be
+    # confused with each other belong next to each other at the foot of the
+    # section, not one on the header band and one below it (SOI C1).
+    totals: tuple[tuple[str, Any], ...] = ()
 
 
 def render_table_sheet(
@@ -138,26 +143,38 @@ def render_table_sheet(
     ws.row_dimensions[1].height = 36.0
     ws.freeze_panes = "A2"
 
+    def band_row(row_ix: int, label_text: Any, value: Any, *, has_value: bool) -> None:
+        """ONE full-width band row: a label spanning the sheet, optionally with
+        a right-aligned figure in the last column.
+
+        Both band shapes are this — the section label row above the rows and
+        each subtotal line beneath them — so they live in one function. They
+        were written twice, near-verbatim, and two copies of a style is two
+        places to drift (fix round 1, 2026-08-18)."""
+        merge_end = ncols - 1 if has_value else ncols
+        if ncols > 1:   # nothing to span on a single-column table
+            ws.merge_cells(start_row=row_ix, start_column=1,
+                           end_row=row_ix, end_column=merge_end)
+        label = ws.cell(row=row_ix, column=1, value=label_text)
+        label.font, label.fill = header_font, header_fill
+        label.alignment = Alignment(vertical="center")
+        if has_value:
+            figure = ws.cell(row=row_ix, column=ncols, value=value)
+            figure.font, figure.fill = header_font, header_fill
+            if columns[-1].number_format:
+                figure.number_format = columns[-1].number_format
+            figure.alignment = Alignment(horizontal="right", vertical="center")
+        for c in range(1, ncols + 1):
+            cell = ws.cell(row=row_ix, column=c)
+            cell.fill = header_fill
+            cell.border = border
+        ws.row_dimensions[row_ix].height = 22.0
+
     row_ix = 2
     for section in sections:
         if section.label is not None:
-            merge_end = ncols - 1 if section.total is not None else ncols
-            ws.merge_cells(start_row=row_ix, start_column=1,
-                           end_row=row_ix, end_column=merge_end)
-            label = ws.cell(row=row_ix, column=1, value=section.label)
-            label.font, label.fill = header_font, header_fill
-            label.alignment = Alignment(vertical="center")
-            if section.total is not None:
-                total = ws.cell(row=row_ix, column=ncols, value=section.total)
-                total.font, total.fill = header_font, header_fill
-                if columns[-1].number_format:
-                    total.number_format = columns[-1].number_format
-                total.alignment = Alignment(horizontal="right", vertical="center")
-            for c in range(1, ncols + 1):
-                cell = ws.cell(row=row_ix, column=c)
-                cell.fill = header_fill
-                cell.border = border
-            ws.row_dimensions[row_ix].height = 22.0
+            band_row(row_ix, section.label, section.total,
+                     has_value=section.total is not None)
             row_ix += 1
         for band, values in enumerate(section.rows):
             for c, (col, value) in enumerate(zip(columns, values, strict=True), start=1):
@@ -180,6 +197,9 @@ def render_table_sheet(
                     cell.alignment = Alignment(horizontal=col.align, vertical="top")
             if row_height is not None:
                 ws.row_dimensions[row_ix].height = row_height(values)
+            row_ix += 1
+        for label_text, value in section.totals:
+            band_row(row_ix, label_text, value, has_value=True)
             row_ix += 1
 
 
