@@ -363,11 +363,19 @@ class TestStatutoryPackage:
 
     def test_prose_on_an_excess_layer_does_not_claim_it(self) -> None:
         """Only a primary states a retention, so prose on an excess layer must
-        not silence the primary that actually carries it."""
+        not silence the primary that actually carries it.
+
+        The excess has to sort AHEAD of that primary for this to be capable of
+        failing: the SIR is moved onto AL alone, and the Casualty umbrella
+        (excess, spanning GL and AL) is row 2 while the AL primary is row 3."""
         p = make_program()
-        p.layers[1].retention_detail = "See policy."
+        p.retentions[0].applies_to = ["al"]
+        p.layers[4].retention_detail = "See policy."
         rows = build_soi(p)[0].rows
-        assert rows[0].retention == "SIR $250,000; Aggregate $1,000,000"
+        assert rows[2].coverage == "Umbrella (GL, AL)"
+        assert rows[2].retention == "See policy."
+        assert rows[3].coverage == "Auto Liability — Primary"
+        assert rows[3].retention == "SIR $250,000; Aggregate $1,000,000"
 
     def test_zero_premium_reads_included_not_free(self) -> None:
         """$0.00 reads as free cover; a zero premium means it is priced with
