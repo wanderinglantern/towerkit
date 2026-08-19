@@ -9,6 +9,7 @@ from towerkit.model import (
     dumps_program,
     load_program,
     loads_program,
+    money_disk_keys,
 )
 
 SAMPLE = Path(__file__).parent.parent / "programs" / "atomic-2026.json"
@@ -34,10 +35,21 @@ def test_shares_survive_round_trip_including_thirds() -> None:
 
 
 def test_money_is_never_float_in_output() -> None:
+    """Money is whole dollars, written as an integer.
+
+    The key set is DERIVED from the MONEY tag, not listed here. It used to be
+    listed, and a hand-written money table in the suite is the same defect as a
+    hand-written field table in the serialiser — blind to the next money field
+    by construction, which is how `brokerFee` reached the file as `25000.0`
+    with this test green.
+    """
+    keys = money_disk_keys()
+    assert "attach" in keys and "premium" in keys, "the derivation found no money at all"
+
     text = dumps_program(load_program(SAMPLE))
     for line in text.splitlines():
-        for key in ('"attach"', '"limit"', '"premium"', '"amount"', '"aggregate"'):
-            if key in line:
+        for key in keys:
+            if f'"{key}"' in line:
                 value = line.split(":", 1)[1].strip().rstrip(",")
                 assert "." not in value, f"money serialised as float: {line.strip()}"
 

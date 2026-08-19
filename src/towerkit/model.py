@@ -362,6 +362,49 @@ def _has_tag(info: FieldInfo, tag: object) -> bool:
     return False
 
 
+def _model_types(annotation: Any) -> list[type[BaseModel]]:
+    """Every model class reachable from one annotation — `Period | None`,
+    `list[NamedLimit]`, `Annotated[...]` all flatten to the classes inside."""
+    found: list[type[BaseModel]] = []
+    if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+        found.append(annotation)
+    for arg in get_args(annotation):
+        # Recurse into the ARGS only. Including `annotation` itself in this
+        # loop makes `list[NamedLimit]` ask about `list[NamedLimit]` forever.
+        found.extend(_model_types(arg))
+    return found
+
+
+def money_disk_keys() -> set[str]:
+    """Every on-disk key that holds money, derived from the `MONEY` tag.
+
+    The canonical format writes money as whole-dollar INTEGERS, and the test
+    guarding that carried a hand-written list of five keys — `"attach"`,
+    `"limit"`, `"premium"`, `"amount"`, `"aggregate"`. That is the same second
+    table this module just deleted from the serialiser, still standing in the
+    suite, and structurally blind to every money field added after it was
+    written: the next one rots exactly the way `program_to_jsonable` did.
+
+    Asking the models instead means a money field is covered the moment it
+    exists, with nothing to remember.
+    """
+    keys: set[str] = set()
+    seen: set[type[BaseModel]] = set()
+
+    def walk(cls: type[BaseModel]) -> None:
+        if cls in seen:
+            return
+        seen.add(cls)
+        for name, info in cls.model_fields.items():
+            if _has_tag(info, MONEY):
+                keys.add(_disk_key(cls, name, info))
+            for nested in _model_types(info.annotation):
+                walk(nested)
+
+    walk(Program)
+    return keys
+
+
 def _disk_key(model: type[BaseModel], name: str, info: FieldInfo) -> str:
     """The key the FILE uses: the `_DISK_FORM` rename, else the alias, else the
     python name. Aliases are the on-disk names — `policyNumber`, `appliesTo`,
