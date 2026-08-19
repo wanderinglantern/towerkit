@@ -1,5 +1,6 @@
 """SOI mapping and theming: pure logic, no Excel here."""
 
+import dataclasses
 import datetime
 
 from towerkit.model import Layer, Placement, Program
@@ -476,3 +477,165 @@ def _row_with_premium(premium: int | None, status=None) -> SoiRow:
         effective=datetime.date(2026, 1, 1), expiration=datetime.date(2027, 1, 1),
         limits="", retention="", premium=premium, status=status,
     )
+
+
+# --- C15 / CFO review: states, coordinate limits, the premium referent -------
+
+
+def _el_layer(**kw) -> Layer:
+    """Employers Liability's shape: a dollar-limited layer whose one limit is
+    three coordinate limits on a real schedule. towerkit never learns the
+    line of business — it learns "optional named amounts on a layer"."""
+    base = dict(
+        id="el", name="Employers Liability", applies_to=["gl"],
+        attach=0, limit=1_000_000,
+    )
+    return Layer(**{**base, **kw})
+
+
+class TestStatutoryStates:
+    def test_states_answer_the_question_the_phrase_asks(self) -> None:
+        """"Statutory - State Limits" invites "state limits WHERE?". When the
+        layer records the answer, the cell states it; towerkit still writes no
+        sentence about any state's law."""
+        layer = _statutory_layer(states=["NY", "NJ", "CT"])
+        assert limits_text(layer, make_program()) == "Statutory - State Limits (NY, NJ, CT)"
+
+    def test_no_states_leaves_the_shipped_phrase_exactly_as_it_was(self) -> None:
+        assert limits_text(_statutory_layer(), make_program()) == "Statutory - State Limits"
+
+    def test_states_print_in_file_order_never_sorted(self) -> None:
+        layer = _statutory_layer(states=["NY", "CT", "NJ"])
+        assert limits_text(layer, make_program()).endswith("(NY, CT, NJ)")
+
+    def test_limits_prose_still_wins_over_the_states(self) -> None:
+        """The escape hatch stays ahead of everything composed. A broker who
+        types the states in their own words gets their words."""
+        layer = _statutory_layer(
+            states=["NY"], limits_detail="Benefits as required by NY state law"
+        )
+        assert limits_text(layer, make_program()) == "Benefits as required by NY state law"
+
+
+class TestNamedLimits:
+    def test_three_coordinate_limits_replace_the_one_unqualified_figure(self) -> None:
+        """The finding: a schedule printing a bare "$1,000,000" against
+        Employers Liability states one limit where the market states three."""
+        layer = _el_layer(named_limits=[
+            {"name": "Each Accident", "amount": 1_000_000},
+            {"name": "Disease - Each Employee", "amount": 1_000_000},
+            {"name": "Disease - Policy Limit", "amount": 1_000_000},
+        ])
+        assert limits_text(layer, make_program()) == (
+            "Each Accident $1,000,000; "
+            "Disease - Each Employee $1,000,000; "
+            "Disease - Policy Limit $1,000,000"
+        )
+
+    def test_without_named_limits_the_layer_reads_exactly_as_before(self) -> None:
+        assert limits_text(_el_layer(), make_program()) == "$1,000,000"
+
+    def test_named_limits_print_in_file_order(self) -> None:
+        layer = _el_layer(named_limits=[
+            {"name": "Disease - Policy Limit", "amount": 3_000_000},
+            {"name": "Each Accident", "amount": 1_000_000},
+        ])
+        assert limits_text(layer, make_program()) == (
+            "Disease - Policy Limit $3,000,000; Each Accident $1,000,000"
+        )
+
+    def test_limits_prose_still_wins_over_named_limits(self) -> None:
+        layer = _el_layer(
+            limits_detail="See endorsement 3",
+            named_limits=[{"name": "Each Accident", "amount": 1_000_000}],
+        )
+        assert limits_text(layer, make_program()) == "See endorsement 3"
+
+    def test_a_sublimit_still_appends_after_named_limits(self) -> None:
+        p = make_program()
+        layer = _el_layer(
+            applies_to=["prop"],
+            named_limits=[{"name": "Each Accident", "amount": 1_000_000}],
+        )
+        assert limits_text(layer, p) == (
+            "Each Accident $1,000,000; Sublimit: Flood $5,000,000"
+        )
+
+    def test_statutory_wins_over_named_limits_on_invalid_draft_data(self) -> None:
+        """The validator refuses this combination, but limits_text has to be
+        total: a statutory layer must NEVER print a dollar limit, whatever
+        else the draft is carrying."""
+        layer = _statutory_layer(
+            named_limits=[{"name": "Each Accident", "amount": 1_000_000}]
+        )
+        assert limits_text(layer, make_program()) == "Statutory - State Limits"
+
+
+class TestPremiumReferent:
+    def test_a_zero_premium_names_what_it_is_included_with(self) -> None:
+        row = dataclasses.replace(
+            _row_with_premium(0), premium_detail="Included with Part A"
+        )
+        assert premium_value(row) == "Included with Part A"
+
+    def test_the_detail_is_printed_verbatim_not_composed(self) -> None:
+        """The limitsDetail/retentionDetail precedent: towerkit exports the
+        broker's words. Composing "Included with " + X would be towerkit
+        inventing the sentence, and "Part A" is a Workers Comp concept it must
+        never learn."""
+        row = dataclasses.replace(
+            _row_with_premium(0), premium_detail="Priced within the package policy"
+        )
+        assert premium_value(row) == "Priced within the package policy"
+
+    def test_a_zero_with_no_detail_still_reads_included(self) -> None:
+        assert premium_value(_row_with_premium(0)) == "Included"
+
+    def test_a_real_premium_is_never_replaced_by_prose(self) -> None:
+        """The premium column is a NUMBER the subtotals add up. Prose there
+        would silently drop the layer out of the totals."""
+        row = dataclasses.replace(
+            _row_with_premium(50_000), premium_detail="Included with Part A"
+        )
+        assert premium_value(row) == 50_000
+
+    def test_an_absent_premium_stays_blank_even_with_a_detail(self) -> None:
+        row = dataclasses.replace(
+            _row_with_premium(None), premium_detail="Included with Part A"
+        )
+        assert premium_value(row) is None
+
+    def test_build_soi_carries_the_detail_onto_the_row(self) -> None:
+        p = make_program()
+        p.layers[0].premium = 0
+        p.layers[0].premium_detail = "Included with Part A"
+        row = build_soi(p)[0].rows[0]
+        assert row.premium_detail == "Included with Part A"
+        assert premium_value(row) == "Included with Part A"
+
+    def test_the_subtotal_is_unmoved_by_the_detail(self) -> None:
+        """A zero adds zero either way; the detail qualifies one cell, never
+        a roll-up."""
+        plain = make_program()
+        plain.layers[0].premium = 0
+        detailed = make_program()
+        detailed.layers[0].premium = 0
+        detailed.layers[0].premium_detail = "Included with Part A"
+        without = premium_subtotal(build_soi(plain)[0], bound=True)
+        assert without == 50_000  # 0 + 30,000 + 20,000; the AL primary is unplaced
+        assert premium_subtotal(build_soi(detailed)[0], bound=True) == without
+
+
+class TestNewFieldsChangeNothingElse:
+    def test_a_layer_carrying_all_three_leaves_every_other_cell_alone(self) -> None:
+        p = make_program()
+        before = build_soi(p)[0].rows[0]
+        p.layers[0].premium = 0
+        p.layers[0].premium_detail = "Included with Part A"
+        p.layers[0].named_limits = [{"name": "Each Accident", "amount": 1_000_000}]
+        after = build_soi(p)[0].rows[0]
+        assert after.carrier == before.carrier
+        assert after.coverage == before.coverage
+        assert after.policy_number == before.policy_number
+        assert after.retention == before.retention
+        assert after.status == before.status

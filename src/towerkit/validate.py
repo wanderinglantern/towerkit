@@ -29,6 +29,22 @@ from .money import BPS_SCALE, format_money
 ERROR = "error"
 WARNING = "warning"
 
+# Four states run monopolistic workers-compensation funds: cover there is
+# bought from the state, and a private policy CANNOT write it. A statutory
+# layer naming one is therefore an error about the world, in the same class as
+# `statutory-line-shared` — not a preference.
+MONOPOLISTIC_STATES = frozenset({"ND", "OH", "WA", "WY"})
+
+# The codes the monopolistic check above is able to recognise. Anything else
+# gets a WARNING rather than an error: a non-US programme is not invalid, it is
+# UNCHECKED, and saying so is the whole point — silence would leave the one
+# check this field exists for quietly unapplied on "Ohio" or "Ontario".
+US_JURISDICTIONS = frozenset(
+    """AL AK AZ AR CA CO CT DE DC FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN
+    MS MO MT NE NV NH NJ NM NY NC ND OH OK OR PA RI SC SD TN TX UT VT VA WA WV
+    WI WY""".split()
+)
+
 
 @dataclass(frozen=True)
 class Diagnostic:
@@ -191,8 +207,19 @@ def _check_layer(layer: Layer, line_ids: list[str], diags: Diagnostics) -> None:
                 f"nothing sits beneath it",
                 ref,
             )
+        if layer.named_limits:
+            # `statutory ⇒ no dollar limit` is what keeps the layer out of every
+            # dollar total by construction. Named dollar amounts on it are
+            # dollar limits by another name.
+            diags.error(
+                "statutory-named-limits",
+                f"{layer.name}: statutory cover has no dollar limit, so it "
+                f"cannot state named limits",
+                ref,
+            )
     elif layer.limit <= 0:
         diags.error("layer-limit", f"{layer.name}: non-positive limit {layer.limit}", ref)
+    _check_layer_detail(layer, diags, ref)
     seen: set[str] = set()
     for lid in layer.applies_to:
         if lid not in line_ids:
@@ -238,6 +265,83 @@ def _check_layer(layer: Layer, line_ids: list[str], diags: Diagnostics) -> None:
             f"{layer.name}: {signed / 100:g}% placed — {format_money(unplaced)} unplaced",
             ref,
         )
+
+
+def _check_layer_detail(layer: Layer, diags: Diagnostics, ref: tuple[str, Any]) -> None:
+    """The three optional detail fields. Every rule here answers one question:
+    would this value ever reach the reader? A field that silently does nothing
+    is how a modelled fact decays into a general-purpose note."""
+    _check_states(layer, diags, ref)
+
+    seen: set[str] = set()
+    for named in layer.named_limits:
+        if named.name in seen:
+            diags.error(
+                "named-limit-duplicate",
+                f"{layer.name}: two named limits are both called {named.name!r}",
+                ref,
+            )
+        seen.add(named.name)
+
+    # PROSE WINS, and carrying both would discard the structured data in
+    # silence — the field would look broken to whoever set it. Refusing the
+    # combination is what makes "prose wins" safe to state.
+    if layer.limits_detail and layer.named_limits:
+        diags.error(
+            "limits-detail-conflict",
+            f"{layer.name}: limitsDetail is exported verbatim and would hide "
+            f"the named limits — state the cover once, in one of the two",
+            ref,
+        )
+
+    # premiumDetail replaces the word a ZERO premium prints. Anywhere else the
+    # premium cell holds a number the subtotals add up, or nothing at all, and
+    # the detail would never render.
+    if layer.premium_detail is not None and layer.premium != 0:
+        stated = "no premium" if layer.premium is None else format_money(layer.premium)
+        diags.error(
+            "premium-detail-conflict",
+            f"{layer.name}: premiumDetail says what a ZERO premium is included "
+            f"with, but this layer states {stated}",
+            ref,
+        )
+
+
+def _check_states(layer: Layer, diags: Diagnostics, ref: tuple[str, Any]) -> None:
+    if layer.states and not layer.statutory:
+        diags.error(
+            "states-non-statutory",
+            f"{layer.name}: states describe where STATUTORY cover is filed; "
+            f"a dollar-limited layer cannot carry them",
+            ref,
+        )
+    seen: set[str] = set()
+    for state in layer.states:
+        # Compared UPPER-CASED, stored verbatim: a lowercase "oh" that slipped
+        # past an exact-match set would leave the monopolistic check unapplied,
+        # which is the one thing this field exists for.
+        code = state.strip().upper()
+        if code in seen:
+            diags.error(
+                "states-duplicate",
+                f"{layer.name}: state {state!r} is listed twice",
+                ref,
+            )
+        seen.add(code)
+        if code in MONOPOLISTIC_STATES:
+            diags.error(
+                "states-monopolistic",
+                f"{layer.name}: {code} runs a monopolistic state fund — cover "
+                f"there cannot be written by a private policy",
+                ref,
+            )
+        elif code not in US_JURISDICTIONS:
+            diags.warn(
+                "states-unrecognized",
+                f"{layer.name}: {state!r} is not a two-letter US code, so the "
+                f"monopolistic-fund check could not be applied to it",
+                ref,
+            )
 
 
 def _check_follows(program: Program, layer: Layer, diags: Diagnostics) -> None:

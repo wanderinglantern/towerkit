@@ -339,3 +339,41 @@ def test_available_themes_cwd_overrides_packaged(tmp_path, monkeypatch) -> None:
     marsh = next(path for path in available_themes() if path.stem == "marsh")
     # relative on purpose — stored render.theme paths stay portable
     assert marsh == Path("themes") / "marsh.json"
+
+
+class TestLayerDetailFieldsAreSoiOnly:
+    """states / namedLimits / premiumDetail are SCHEDULE data. The chart quotes
+    a layer by `attach` and `limit` through render.labels.layer_terms, which
+    none of them touch — assert that rather than assume it, because a stray
+    read in a renderer would move every stored program's SVG."""
+
+    def test_the_tower_svg_is_byte_identical_with_and_without_them(
+        self, theme, tmp_path
+    ) -> None:
+        plain = load_program(SAMPLE)
+        decorated = load_program(SAMPLE)
+        layer = decorated.layers[0]
+        layer.named_limits = [
+            {"name": "Each Accident", "amount": 1_000_000},
+            {"name": "Disease - Policy Limit", "amount": 1_000_000},
+        ]
+        # premium itself is left ALONE: it is drawn on the chart, so moving it
+        # would make this test pass for the wrong reason (or fail for one).
+        # The claim under test is that the new FIELDS are invisible to it.
+        layer.premium_detail = "Included with Part A"
+        layer.states = ["NY", "NJ"]
+
+        a = render_program(plain, theme, tmp_path / "a", "tower", ["svg"])[0]
+        b = render_program(decorated, theme, tmp_path / "b", "tower", ["svg"])[0]
+        assert a.read_bytes() == b.read_bytes()
+
+    def test_the_ascii_preview_is_identical_too(self, theme) -> None:
+        from towerkit.render.ascii import render_ascii
+
+        plain = load_program(SAMPLE)
+        decorated = load_program(SAMPLE)
+        decorated.layers[0].named_limits = [
+            {"name": "Each Accident", "amount": 1_000_000}
+        ]
+        decorated.layers[0].states = ["NY"]
+        assert render_ascii(decorated, theme) == render_ascii(plain, theme)

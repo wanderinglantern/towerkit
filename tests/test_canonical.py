@@ -191,3 +191,131 @@ def test_statutory_key_sits_after_limit() -> None:
     text = _program_json('      "statutory": true,\n')
     out = dumps_program(loads_program(text))
     assert out.index('"limit"') < out.index('"statutory"') < out.index('"participants"')
+
+
+# --- layer detail fields: states / namedLimits / premiumDetail ---------------
+#
+# All three are ADDITIVE and OPTIONAL. The rules they must obey are the
+# followsUnderlying/statutory precedent: absent means the key is not written
+# at all, so every existing file re-saves byte-identically and an older wheel
+# only rejects a file that actually USES the feature.
+
+
+def test_old_file_round_trips_byte_identical_through_the_new_fields() -> None:
+    """The load-bearing one. A file written before any of these fields existed
+    must come back out of the new code byte for byte — if `_ordered` gained a
+    key that is emitted as an empty list rather than dropped, EVERY stored
+    program's canonical form changes and every one of them looks dirty."""
+    original = SAMPLE.read_text(encoding="utf-8")
+    assert dumps_program(loads_program(original)) == original
+    for key in ("states", "namedLimits", "premiumDetail"):
+        assert key not in original
+
+
+def test_states_round_trip_zero_diff() -> None:
+    text = _program_json('      "statutory": true,\n      "states": [\n        "NY",\n'
+                         '        "NJ"\n      ],\n')
+    assert dumps_program(loads_program(text)) == text
+
+
+def test_states_preserve_file_order_never_sorted() -> None:
+    """The broker's order is data. Sorting it is a silent rewrite of a file
+    nobody edited, and it would show up as a diff on every save."""
+    text = _program_json('      "statutory": true,\n      "states": [\n        "NY",\n'
+                         '        "CT",\n        "NJ"\n      ],\n')
+    reloaded = loads_program(text)
+    assert reloaded.layers[0].states == ["NY", "CT", "NJ"]
+    assert dumps_program(reloaded) == text
+
+
+def test_states_omitted_when_empty() -> None:
+    text = _program_json("")
+    assert dumps_program(loads_program(text)) == text
+    assert "states" not in text
+
+
+def test_named_limits_round_trip_zero_diff() -> None:
+    text = _program_json(
+        '      "namedLimits": [\n'
+        '        {\n'
+        '          "name": "Each Accident",\n'
+        '          "amount": 1000000\n'
+        '        },\n'
+        '        {\n'
+        '          "name": "Disease - Each Employee",\n'
+        '          "amount": 1000000\n'
+        '        }\n'
+        '      ],\n'
+    )
+    assert dumps_program(loads_program(text)) == text
+
+
+def test_named_limit_amounts_are_never_floats() -> None:
+    text = _program_json(
+        '      "namedLimits": [\n'
+        '        {\n'
+        '          "name": "Each Accident",\n'
+        '          "amount": 1000000\n'
+        '        }\n'
+        '      ],\n'
+    )
+    out = dumps_program(loads_program(text))
+    amount = next(ln for ln in out.splitlines() if '"amount"' in ln)
+    assert "." not in amount.split(":", 1)[1]
+
+
+def test_named_limits_omitted_when_empty() -> None:
+    text = _program_json("")
+    assert dumps_program(loads_program(text)) == text
+    assert "namedLimits" not in text
+
+
+def test_premium_detail_round_trips_zero_diff() -> None:
+    text = _program_json(
+        '      "premium": 0,\n      "premiumDetail": "Included with Part A",\n'
+    )
+    assert dumps_program(loads_program(text)) == text
+
+
+def test_premium_detail_omitted_when_absent() -> None:
+    text = _program_json("")
+    assert dumps_program(loads_program(text)) == text
+    assert "premiumDetail" not in text
+
+
+def test_new_layer_keys_sit_in_the_canonical_order() -> None:
+    """_ordered's hand-written order is the thing that breaks silently. Pin
+    every new key's neighbours, not just its presence."""
+    text = _program_json(
+        '      "namedLimits": [\n'
+        '        {\n'
+        '          "name": "Each Accident",\n'
+        '          "amount": 1000000\n'
+        '        }\n'
+        '      ],\n'
+        '      "statutory": true,\n'
+        '      "states": [\n        "NY"\n      ],\n'
+        '      "premium": 0,\n'
+        '      "limitsDetail": "L",\n'
+        '      "retentionDetail": "R",\n'
+        '      "premiumDetail": "Included with Part A",\n'
+    )
+    out = dumps_program(loads_program(text))
+    order = [
+        '"limit"', '"namedLimits"', '"statutory"', '"states"', '"premium"',
+        '"limitsDetail"', '"retentionDetail"', '"premiumDetail"', '"participants"',
+    ]
+    found = [out.index(key) for key in order]
+    assert found == sorted(found), dict(zip(order, found, strict=True))
+
+
+def test_canonical_order_refuses_a_field_it_has_not_learned() -> None:
+    """The guard behind all of the above: _ordered raises rather than dropping
+    a key it does not know, so a future field added to the model without a
+    place in the order fails loudly instead of vanishing from the file."""
+    import pytest
+
+    from towerkit.model import _LAYER_KEYS, _ordered
+
+    with pytest.raises(RuntimeError, match="canonical key order is missing"):
+        _ordered({"id": "x", "notAField": 1}, _LAYER_KEYS)

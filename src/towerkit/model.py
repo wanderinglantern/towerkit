@@ -79,6 +79,23 @@ class Period(_Model):
     end: date
 
 
+class NamedLimit(_Model):
+    """One of several COORDINATE limits stated on a single layer.
+
+    Not a `Sublimit`: a sublimit is a cap WITHIN a limit, carved out of it and
+    scoped to lines. These are peers — a layer whose cover is quoted as three
+    figures side by side rather than one. Employers Liability is one caller of
+    this shape (each accident / disease each employee / disease policy limit);
+    towerkit does not know that, and must not.
+
+    The amounts are stated, never summed and never compared: which of them —
+    if any — is the layer's height is a question about a line of business, and
+    `limit` already answers it for the chart."""
+
+    name: str = Field(min_length=1)
+    amount: Money
+
+
 class Layer(_Model):
     """A slab of cover: `limit` xs `attach`, spanning the `applies_to` lines.
 
@@ -95,10 +112,26 @@ class Layer(_Model):
     applies_to: list[str] = Field(alias="appliesTo", min_length=1)
     attach: Money
     limit: int
+    # Several coordinate limits where `limit` states one. Order is the file's
+    # order and is display order — never sorted.
+    named_limits: list[NamedLimit] = Field(alias="namedLimits", default_factory=list)
     statutory: bool = False  # no dollar limit (WC Part A); limit MUST be 0
+    # Jurisdictions a STATUTORY layer covers. A coverage fact, not a display
+    # string: cover in a state the policy is not filed in is worth nothing, and
+    # four states (ND/OH/WA/WY) cannot be covered by a private policy at all —
+    # `validate` owns both rules. Meaningless on a dollar-limited layer, and
+    # refused there, or it becomes a general-purpose note by accident.
+    # Stored VERBATIM: normalising case here would rewrite files nobody edited.
+    states: list[str] = Field(default_factory=list)
     premium: Money | None = None
     limits_detail: str | None = Field(alias="limitsDetail", default=None)
     retention_detail: str | None = Field(alias="retentionDetail", default=None)
+    # What the premium cell says INSTEAD of "Included" when the premium is a
+    # stated zero — "Included with Part A". Exported verbatim, exactly like the
+    # two above: towerkit composes no sentence, so it never learns "Part A".
+    # It qualifies a word, never a number; the validator refuses it anywhere
+    # the cell would not print it.
+    premium_detail: str | None = Field(alias="premiumDetail", default=None)
     participants: list[Participant] = Field(default_factory=list)
     notes: str | None = None
 
@@ -231,9 +264,10 @@ _PROGRAM_KEYS = (
 _LINE_KEYS = ("id", "name", "abbr", "group")
 _LAYER_KEYS = (
     "id", "name", "policyNumber", "period", "followsUnderlying", "appliesTo",
-    "attach", "limit", "statutory", "premium", "limitsDetail", "retentionDetail",
-    "participants", "notes",
+    "attach", "limit", "namedLimits", "statutory", "states", "premium",
+    "limitsDetail", "retentionDetail", "premiumDetail", "participants", "notes",
 )
+_NAMED_LIMIT_KEYS = ("name", "amount")
 _PARTICIPANT_KEYS = ("carrier", "share")
 _RETENTION_KEYS = ("appliesTo", "type", "amount", "aggregate", "vehicle", "notes")
 _SUBLIMIT_KEYS = ("name", "amount", "appliesTo", "notes")
@@ -308,13 +342,26 @@ def program_to_jsonable(program: Program) -> dict[str, Any]:
                     "appliesTo": list(layer.applies_to),
                     "attach": layer.attach,
                     "limit": layer.limit,
+                    # `or None` on the LISTS too, not just the bools: _ordered
+                    # drops None and nothing else, so an empty list would emit
+                    # `[]` into every existing file and make every stored
+                    # program look dirty on its next save
+                    "namedLimits": [
+                        _ordered(
+                            {"name": nl.name, "amount": nl.amount}, _NAMED_LIMIT_KEYS
+                        )
+                        for nl in layer.named_limits
+                    ]
+                    or None,
                     # emitted only when true (the followsUnderlying pattern):
                     # untouched programs re-save byte-identically, and older
                     # towerkit wheels only reject files that USE the feature
                     "statutory": layer.statutory or None,
+                    "states": list(layer.states) or None,
                     "premium": layer.premium,
                     "limitsDetail": layer.limits_detail,
                     "retentionDetail": layer.retention_detail,
+                    "premiumDetail": layer.premium_detail,
                     "participants": [
                         _ordered(
                             {"carrier": p.carrier, "share": bps_to_json_number(p.share_bps)},
