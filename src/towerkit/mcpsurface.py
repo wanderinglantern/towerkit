@@ -52,6 +52,7 @@ is defaultable → `parse_expecting` → `parse_value` → `compare_values` →
 from __future__ import annotations
 
 import builtins
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date
@@ -201,23 +202,30 @@ DENIED: dict[str, str] = {
 # anything later inherit them. These strings are what `describe` shows, and they
 # name a fix the caller can carry out TODAY: a refusal that points at a verb
 # Phase 1 has not shipped refuses the retry too.
+#
+# Anything either side could word differently is QUOTED from `edit.py`, never
+# restated. `edit.STATUTORY_FLAG_FIX` is the whole of what a caller can do about
+# the statutory flag, and it is interpolated below rather than paraphrased —
+# because these strings and the live refusals had already drifted into saying
+# opposite things (the guards named a `layer_statutory` tool; this table said
+# there was no verb for it), which is the two-descriptions bug in miniature.
 
 GUARDS: dict[str, str] = {
     "layer.attach": (
         "Refused on a follows-underlying layer, where the attachment is derived "
         "from the layers beneath it and reseats itself on every write — change the "
-        "underlying layer's limit, or clear followsUnderlying first. Refused on a "
-        "statutory layer, which owns its column from $0."
+        "underlying layer's limit, or clear followsUnderlying with layer_follows "
+        "first. Refused on a statutory layer, which owns its column from $0. "
+        f"{edit.STATUTORY_FLAG_FIX}"
     ),
     "layer.limit": (
         "Refused on a statutory layer: statutory cover has no dollar limit, and "
-        "the invariant is statutory implies limit == 0. Clear the statutory flag "
-        "first — Phase 1 has no verb for it, so that is the towerkit editor."
+        f"the invariant is statutory implies limit == 0. {edit.STATUTORY_FLAG_FIX}"
     ),
     "layer.states": (
         "Refused on a dollar-limited layer. States say where STATUTORY cover is "
         "filed; on a priced layer the field would become a general-purpose note. "
-        "Clearing to [] is always allowed."
+        f"Clearing to [] is always allowed. {edit.STATUTORY_FLAG_FIX}"
     ),
     "layer.limitsDetail": (
         "Written, and nothing blocks. The layer's own detail diagnostics come back "
@@ -246,6 +254,14 @@ GUARDS: dict[str, str] = {
     "program.currency": (
         "Written, and the response warns that NO figure was converted: every "
         "amount is the same integer it was and only the label moved."
+    ),
+    "participant.share_bps": (
+        "Written, and nothing blocks. One row's share is set in place; the shares "
+        "on the layer are NOT re-proportioned and the sum is not vetoed here, so "
+        "an edit that takes the layer past 100% comes back as the layer-oversigned "
+        "diagnostic in `errors` and the write still lands — a tower under "
+        "construction is invalid by construction. The veto belongs to the add and "
+        "remove verbs, which write a share the caller never read; those are Phase 2."
     ),
 }
 
@@ -754,16 +770,39 @@ def render_value(entry: Entry, value: object) -> str:
 
 
 def expecting_literal(entry: Entry, value: object) -> str:
-    """What to paste into `expecting`. Not always what a refusal PRINTS: a
-    share reads '35% (3500 bps)' and takes 3500, and money reads $5,000,000
-    and takes the quoted string."""
+    """What to paste into `expecting` — a JSON literal, always.
+
+    Not the same thing as what a refusal PRINTS. `render_value` writes prose
+    for a human reading the sentence ($5,000,000, 35% (3500 bps), 'bound');
+    this writes the value the way the caller has to SEND it, because the
+    message says "pass expecting=<this>" and the client copies it.
+
+    JSON is not decoration. A refusal that offered `expecting='$2,000,000'`
+    came back as `cannot parse money value: "'$2,000,000'"` when the caller
+    did as it was told, and for text it looped forever — `pass expecting='USD'`
+    refused `'USD'` with the identical message. Lists and booleans were already
+    emitting JSON; every type does now, and `json.dumps` does the escaping so a
+    carrier called O'Neill or a name with a quote in it round-trips too.
+    """
     if value is None:
         return "null"
     if entry.type == "share_bps":
+        # An integer of basis points, which is what the field takes. The prose
+        # form ("35% (3500 bps)") is `render_value`'s and is not sendable.
         return str(value)
-    if entry.type in ("money", "date"):
-        return f"'{render_value(entry, value)}'"
-    return render_value(entry, value)
+    if entry.type == "bool":
+        return "true" if value else "false"
+    if entry.type == "list_of_strings":
+        return json.dumps(list(value) if isinstance(value, list) else [])
+    if entry.type == "money":
+        # The money STRING, never the bare integer: the spec's standard, and a
+        # model handed a raw number has no way to tell dollars from cents.
+        return json.dumps(format_money(int(value)) if isinstance(value, int) else str(value))
+    if entry.type == "date":
+        return json.dumps(value.isoformat() if isinstance(value, date) else str(value))
+    if entry.type == "enum":
+        return json.dumps(_enum_value(value))
+    return json.dumps(str(value))
 
 
 def mismatch_message(entry: Entry, who: str, current: object, expected: object) -> str:
@@ -799,9 +838,12 @@ def apply(
     are statements about what the write did NOT do — not validator diagnostics,
     because re-reading the file will not reproduce them.
     """
+    # `target` and `index` both travel: a retention is a position in a program
+    # collection, a participant is a position WITHIN a layer, and one argument
+    # cannot say both. `edit._entity` takes the same address `TARGET` publishes.
     address: str | int | None = index if entry.kind in ("retention", "sublimit") else target
     if entry.setter is None:
-        return edit.set_field(program, entry.kind, entry.field, value, address)
+        return edit.set_field(program, entry.kind, entry.field, value, address, index)
     if entry.setter == "rename_line":
         edit.rename_line(program, str(target), str(value))
         return []
@@ -814,7 +856,7 @@ def apply(
         # edit_sublimit, so a CLEAR cannot be expressed through them. The only
         # check they add is `_check_lines` on appliesTo, which is not
         # clearable, so the choke point is the right path for a clear.
-        return edit.set_field(program, entry.kind, entry.field, value, address)
+        return edit.set_field(program, entry.kind, entry.field, value, address, index)
     if entry.setter == "edit_retention":
         edit.edit_retention(program, int(index or 0), **kwargs)
     else:

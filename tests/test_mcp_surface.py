@@ -12,6 +12,8 @@ in the docstrings of the tests that needed them — the absent-by-default ones.
 
 from __future__ import annotations
 
+import json
+import re
 from datetime import date
 from pathlib import Path
 
@@ -27,6 +29,7 @@ from towerkit.model import (
     NamedLimit,
     Participant,
     Period,
+    Placement,
     Program,
     RenderSettings,
     Retention,
@@ -459,13 +462,85 @@ def test_no_enum_repr_leaks_into_a_refusal() -> None:
 
 
 def test_the_mismatch_message_can_be_pasted_straight_back() -> None:
+    """The literal is JSON, and the value it decodes to is the one the field
+    takes. It used to be `expecting='$5,000,000'` — single quotes, which are
+    not JSON — so a client that did as it was told sent the seven characters
+    `'$5,00...'` and got `cannot parse money value: "'$5,000,000'"` back. This
+    test proved nothing about that, because it re-typed the value by hand
+    instead of decoding the literal the message actually offers.
+
+    Mutation drill (2026-08-19): restored the old `f"'{render_value(...)}'"`
+    branch in `expecting_literal`. Failed on the message equality with
+    `- expecting="$5,000,000"` / `+ expecting='$5,000,000'`. Restored. (The
+    two tests below take the same mutation the other way round, through
+    `json.loads`, so the quoting is checked as syntax and not just as text.)
+    """
     entry = mcpsurface.SURFACE["layer"]["attach"]
     message = mcpsurface.mismatch_message(entry, "layer 'xs-1'", 5_000_000, 2_000_000)
     assert message == (
         "layer 'xs-1' attach is $5,000,000, not the $2,000,000 you expected — "
-        "pass expecting='$5,000,000' to overwrite it, or call program_read."
+        'pass expecting="$5,000,000" to overwrite it, or call program_read.'
     )
-    assert mcpsurface.parse_expecting(entry, "$5,000,000") == 5_000_000
+    assert mcpsurface.parse_expecting(entry, json.loads(_offered(message))) == 5_000_000
+
+
+def _offered(message: str) -> str:
+    """The `expecting=` literal EXACTLY as the message prints it, quotes and
+    all. Nothing is stripped: the whole point is that what the client is shown
+    is what the client can send, and a test that tidied the literal up first
+    would be testing a string no refusal ever emitted."""
+    found = re.search(r'expecting=("(?:[^"\\]|\\.)*"|\[[^\]]*\]|\S+?)(?: |$)', message)
+    assert found is not None, message
+    return found.group(1)
+
+
+def test_every_offered_literal_is_json_the_field_takes_back() -> None:
+    """One case per type, because `expecting_literal` branches on type and the
+    three that were wrong — money, date, text — were wrong in the same way.
+    Lists and booleans were already JSON, which is what made the bug look like
+    a rendering choice rather than a defect.
+
+    `text` is the one that could not terminate: the refusal read `currency is
+    'USD', not the 'ZZZ' you expected — pass expecting='USD'`, and sending
+    'USD' produced the identical sentence, forever.
+
+    Mutation drill (2026-08-19): restored the old `expecting_literal` body.
+    Failed on the first case with `json.decoder.JSONDecodeError: Expecting
+    value: line 1 column 1 (char 0)` — the literal the refusal offers is not
+    JSON, so there is nothing a client could send. Restored.
+    """
+    cases: list[tuple[str, object, object]] = [
+        ("layer.attach", 5_000_000, 5_000_000),
+        ("program.period.start", date(2026, 6, 1), date(2026, 6, 1)),
+        ("program.currency", "USD", "USD"),
+        ("layer.name", "O'Neill \"1st\" Excess", "O'Neill \"1st\" Excess"),
+        ("layer.states", ["NY", "NJ"], ["NY", "NJ"]),
+        ("program.render.showTotals", True, True),
+        ("participant.share_bps", 3500, 3500),
+        ("program.placement", Placement.BOUND, "bound"),
+        ("layer.premium", None, None),
+    ]
+    for key, current, expected in cases:
+        kind, _, field = key.partition(".")
+        entry = mcpsurface.SURFACE[kind][field]
+        literal = mcpsurface.expecting_literal(entry, current)
+        sent = json.loads(literal)
+        assert mcpsurface.parse_expecting(entry, sent) == expected, key
+
+
+def test_a_refused_literal_pasted_back_ends_the_loop() -> None:
+    """The text case end to end, in the shape the client experiences it:
+    refusal in, literal out, literal back in, no refusal.
+
+    Mutation drill (2026-08-19): restored the single-quote branch. Failed with
+    `json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)`
+    — and with the decode taken out, the second `mismatch_message` came back
+    byte-identical to the first, which is the loop itself. Restored.
+    """
+    entry = mcpsurface.SURFACE["program"]["currency"]
+    first = mcpsurface.mismatch_message(entry, "program", "USD", "ZZZ")
+    retried = json.loads(_offered(first))
+    assert mcpsurface.compare_values(entry, mcpsurface.parse_expecting(entry, retried), "USD")
 
 
 def test_expecting_is_compared_on_the_normalised_value() -> None:
@@ -547,6 +622,25 @@ def test_describe_carries_the_guard_text_where_there_is_a_guard() -> None:
     assert "statutory" in fields["limit"]["guard"]
     assert "statutory" in fields["states"]["guard"].lower()
     assert "guard" not in fields["notes"]
+
+
+def test_a_participant_is_published_writable_and_says_what_it_does_not_check() -> None:
+    """Both fields were published with no denial reason from the day the
+    surface shipped, and every write failed inside `edit.set_field` — an
+    advertised capability that always refused. They are writable now, and the
+    one thing a caller could reasonably expect and not get — a veto on the sum
+    — is stated rather than left to be discovered.
+
+    Mutation drill (2026-08-19): renamed the `participant.share_bps` key in
+    `GUARDS` so no entry picked it up. Failed with `KeyError: 'guard'` on the
+    share_bps payload. Restored.
+    """
+    fields = mcpsurface.describe("participant")["kinds"]["participant"]["fields"]
+    assert set(fields) == {"carrier", "share_bps"}
+    assert mcpsurface.denied_reason("participant", "carrier") is None
+    assert mcpsurface.denied_reason("participant", "share_bps") is None
+    assert "not vetoed" in fields["share_bps"]["guard"]
+    assert "layer-oversigned" in fields["share_bps"]["guard"]
 
 
 def test_describe_names_no_tool_the_client_cannot_call() -> None:

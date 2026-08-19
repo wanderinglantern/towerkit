@@ -26,6 +26,7 @@ without a marker.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -34,7 +35,7 @@ from pathlib import Path
 
 import pytest
 
-from towerkit import mcpsurface
+from towerkit import edit, mcpparity, mcpsurface
 from towerkit.mcpserver import (
     Programs,
     _layer_follows,
@@ -953,6 +954,121 @@ class TestNoSecondFieldTable:
 # --- compare-and-set ----------------------------------------------------------
 
 
+class TestRefusalsNameCallableThings:
+    """A refusal is only worth the retry it makes possible.
+
+    Both tests here derive the registered set FROM THE BUILT SERVER. A
+    hand-listed set is the same second table this whole pass exists to delete:
+    it would have said `layer_statutory` was fine, because whoever wrote the
+    refusal believed it.
+    """
+
+    async def test_no_refusal_names_a_tool_the_server_does_not_register(
+        self, roots
+    ) -> None:
+        """`edit.py` told callers to `layer_statutory(layer_id=..., statutory=
+        false)`. The server registers 23 tools and that is not one of them —
+        it is Phase 2 — so a client that followed the instruction got "unknown
+        tool" and was exactly where it started. `mcpsurface.GUARDS` said the
+        opposite in the next file over, which is the two-descriptions drift the
+        module was written to prevent.
+
+        What counts as naming a tool: an identifier with an underscore,
+        followed by `(`, whose first word is a prefix the server actually uses
+        (`layer_`, `program_`, …) or a kind on the write surface. That is wide
+        enough to catch `layer_statutory(` and `participant_add(`, and it
+        skips keyword arguments (`layer_id=`) and private helpers
+        (`_check_lines`), which are not calls a client makes.
+
+        Mutation drill (2026-08-19): put `layer_statutory(layer_id=...,
+        statutory=false)` back into `_guard_limit` — the exact text this branch
+        shipped with. Failed with `AssertionError: ['layer_statutory'] — a
+        refusal naming an unregistered tool refuses the retry too. Name a call
+        that works, or say there is none.` Restored.
+        """
+        from mcp.client import Client
+
+        async with Client(build_server(roots)) as client:
+            registered = {tool.name for tool in (await client.list_tools()).tools}
+        assert len(registered) > 20, "the tool list came back empty; this would pass blind"
+        shapes = (
+            {name.split("_")[0] for name in registered}
+            | set(mcpsurface.KINDS)
+            | {kind.split("_")[0] for kind in mcpsurface.KINDS}
+        )
+
+        named = {
+            word
+            for text in _every_refusal()
+            for word in re.findall(r"\b([a-z][a-z0-9]*_[a-z0-9_]+)\s*\(", text)
+            if word.split("_")[0] in shapes
+        }
+        assert named, "no refusal named any call at all; the corpus stopped working"
+        assert named <= registered, (
+            f"{sorted(named - registered)} — a refusal naming an unregistered tool "
+            f"refuses the retry too. Name a call that works, or say there is none."
+        )
+
+    async def test_the_tool_a_statutory_refusal_used_to_name_is_still_unbuilt(
+        self, roots
+    ) -> None:
+        """The guard above is only meaningful while `layer_statutory` really is
+        absent. When Phase 2 registers it, this fails and the refusal text can
+        go back to naming it — which is the sequence, not an accident.
+
+        Mutation drill (2026-08-19): registered a stub `layer_statutory` tool.
+        Failed with `assert 'layer_statutory' not in {'describe',
+        'layer_follows', ...}`. Restored.
+        """
+        from mcp.client import Client
+
+        async with Client(build_server(roots)) as client:
+            registered = {tool.name for tool in (await client.list_tools()).tools}
+        assert "layer_statutory" not in registered
+        assert "layer_statutory" in mcpparity.DEFERRED_MUTATIONS["set_statutory"]
+
+
+def _every_refusal() -> list[str]:
+    """Every guard refusal a client can be handed, live, plus the same rules in
+    the form `describe()` publishes them.
+
+    The live half is raised rather than read out of the source: a message is an
+    f-string and only the raised text is the text a client sees.
+    """
+    program = load_program(SAMPLE)
+    edit.set_follows_underlying(program, "xs-1", True)
+    edit.heal_follows(program)
+    edit.set_statutory(program, "primary-el", True)
+
+    refusals: list[str] = []
+    for kind, field, value, target in (
+        ("layer", "attach", 1_000_000, "xs-1"),
+        ("layer", "attach", 1_000_000, "primary-el"),
+        ("layer", "limit", 1_000_000, "primary-el"),
+        ("layer", "states", ["NY"], "umbrella"),
+    ):
+        with pytest.raises(edit.GuardRefused) as caught:
+            edit.set_field(program, kind, field, value, target)
+        refusals.append(str(caught.value))
+    assert len(refusals) == 4
+    return refusals + list(mcpsurface.GUARDS.values()) + list(mcpsurface.DENIED.values())
+
+
+def _paste_back(message: str) -> object:
+    """The `expecting=` literal from a refusal, decoded the way a client
+    decodes it — `json.loads` and nothing else.
+
+    A refusal reaches the model as text, so the only way it can act on
+    `pass expecting=X` is to send X as JSON. Extracting X and then EDITING it
+    (stripping quotes, say) tests a string no refusal ever printed, and that is
+    how `expecting='$2,000,000'` shipped: the tests removed the quotes the
+    client had no way to know were not part of the value.
+    """
+    found = re.search(r'expecting=("(?:[^"\\]|\\.)*"|\[[^\]]*\]|\S+?)(?: |$)', message)
+    assert found is not None, message
+    return json.loads(found.group(1))
+
+
 class TestEditField:
     def test_a_field_is_set_when_expecting_matches(self, roots) -> None:
         programs = Programs(roots)
@@ -969,8 +1085,28 @@ class TestEditField:
         refusal that prints raw cents gets a model to write 100x the amount on
         the retry. The literal this refusal offers is fed straight back in.
 
-        Mutation drill (2026-08-19): changed `mismatch_message` to print the
-        bare int. This failed on the `$` assertion. Restored.
+        `_paste_back` is what makes that claim honest. This test used to
+        `.strip("'")` the offered literal before retrying, which is the one
+        edit a real client cannot make — it does not know the quotes are
+        towerkit's rather than part of the value. Stripped, it proved the
+        stripped form works; unstripped, `expecting='$27,000,000'` came back
+        as `cannot parse money value: "'$27,000,000'"`.
+
+        Mutation drills (2026-08-19), three of them because the message has
+        two independent halves and both are load-bearing:
+
+        - `mismatch_message` printing the bare int: `assert 'attach is
+          $27,000,000, ...' in '... attach is 27000000, ...'`.
+        - `render_value` multiplying money by 100 (the cents regression this
+          test is named for): `... attach is $2,700,000,000, not the
+          $200,000,000 you expected ...`.
+        - `expecting_literal`'s single-quote branch restored:
+          `json.decoder.JSONDecodeError: Expecting value: line 1 column 1
+          (char 0)` from `_paste_back`.
+
+        All restored. The first two were invisible to the assertion this test
+        shipped with — `"$27,000,000" in message` is satisfied by the offered
+        literal alone, so it could not see `render_value` regress at all.
         """
         programs = Programs(roots)
         _program_read(programs, "atomic-2026")
@@ -980,11 +1116,17 @@ class TestEditField:
             )
         message = str(caught.value)
         assert caught.value.code == "stale_value"
-        assert "$27,000,000" in message and "2700000000" not in message
-        offered = re.search(r"expecting=('[^']*'|\S+) ", message).group(1).strip("'")
+        # The PRINTED value and the OFFERED literal are two different branches
+        # (`render_value` and `expecting_literal`), so the printed one is
+        # asserted in place rather than by a bare `"$27,000,000" in message` —
+        # which the offered literal satisfies on its own and which therefore
+        # could not see `render_value` regress at all.
+        assert "attach is $27,000,000, not the $2,000,000 you expected" in message
+        assert "2700000000" not in message
 
         _program_edit_field(
-            programs, "atomic-2026", "layer", "attach", "30m", offered, target="xs-1"
+            programs, "atomic-2026", "layer", "attach", "30m",
+            _paste_back(message), target="xs-1",
         )
         after = _program_read(programs, "atomic-2026")
         assert next(ly for ly in after["layers"] if ly["id"] == "xs-1")["attach"] == 30_000_000
@@ -992,7 +1134,14 @@ class TestEditField:
     def test_no_enum_repr_leaks_into_a_refusal(self, roots) -> None:
         """`<Placement.BOUND: 'bound'>` is not something a client can pass
         back, so a refusal printing it refuses the retry too. The bare value
-        it prints instead is fed straight back in."""
+        it prints instead is fed straight back in.
+
+        Mutation drill (2026-08-19): restored `expecting_literal`'s
+        single-quote branch. Failed with `json.decoder.JSONDecodeError:
+        Expecting value: line 1 column 1 (char 0)`. Restored. The test could
+        not have seen that before, because it re-typed "bound" by hand instead
+        of sending what the message offered.
+        """
         programs = Programs(roots)
         _program_read(programs, "atomic-2026")
         with pytest.raises(ValueError) as caught:
@@ -1003,10 +1152,100 @@ class TestEditField:
         assert "Placement." not in message and "<" not in message
         assert "'bound'" in message
 
+        # The value the message OFFERS, not the value we happen to know is
+        # right: typing "bound" here by hand tested the enum branch of
+        # `render_value` and nothing about whether the offer is sendable.
         _program_edit_field(
-            programs, "atomic-2026", "program", "placement", "proposed", "bound"
+            programs, "atomic-2026", "program", "placement", "proposed",
+            _paste_back(message),
         )
         assert _program_read(programs, "atomic-2026")["placement"] == "proposed"
+
+    def test_a_participant_share_is_written_through_the_generic_setter(
+        self, roots
+    ) -> None:
+        """The capability `describe()` had advertised since the surface shipped
+        and that failed on every call.
+
+        `participant.carrier` and `.share_bps` were published as writable with
+        no denial reason, and the write died inside `edit.set_field` on
+        "'participant' is not addressable by set_field; use its verbs" —
+        a private function name, the wrong error code (`guard_refused` for what
+        was really an addressing gap), and a pointer to verbs that exist in no
+        phase. No test in the suite performed a participant write, which is
+        exactly why it shipped.
+
+        Mutation drill (2026-08-19): restored `_entity`'s
+        `raise ValueError(f"{kind!r} is not addressable by set_field")`. Failed
+        with `towerkit.edit.Refusal: [guard_refused] refused — nothing written:
+        'participant' is not addressable by set_field; use its verbs`.
+        Restored.
+        """
+        programs = Programs(roots)
+        _program_read(programs, "atomic-2026")
+
+        out = _program_edit_field(
+            programs, "atomic-2026", "participant", "share_bps", 4_000, 5_000,
+            target="xs-1", index=0, expecting_row="Chubb",
+        )
+
+        assert out["wrote"] == "atomic-2026"
+        shares = next(
+            ly for ly in _program_read(programs, "atomic-2026")["layers"]
+            if ly["id"] == "xs-1"
+        )["participants"]
+        assert [(p["carrier"], p["share_bps"]) for p in shares] == [
+            ("Chubb", 4_000),
+            ("Zurich", 2_500),
+            ("AXA XL", 2_500),
+        ]
+
+    def test_a_participant_write_is_guarded_by_the_carrier_it_read(
+        self, roots
+    ) -> None:
+        """An index is a position in a list the caller read a moment ago, and a
+        participant list reorders whenever a share is added. The row guard is
+        the same one retentions and sublimits have; the refusal names the
+        carrier that IS at that index, so the retry has somewhere to go.
+
+        Mutation drill (2026-08-19): made `_row_guard`'s comparison
+        unreachable. Failed with `Failed: DID NOT RAISE ValueError`. Restored.
+        """
+        programs = Programs(roots)
+        _program_read(programs, "atomic-2026")
+        with pytest.raises(ValueError) as caught:
+            _program_edit_field(
+                programs, "atomic-2026", "participant", "share_bps", 4_000, 5_000,
+                target="xs-1", index=0, expecting_row="Swiss Re",
+            )
+        assert caught.value.code == "stale_value"
+        assert "'Chubb'" in str(caught.value)
+
+    def test_an_over_signed_participant_edit_lands_and_says_so(self, roots) -> None:
+        """A tower under construction is invalid by construction, so the sum is
+        a diagnostic and not a refusal — and `describe()` says which, because a
+        caller who expected a veto would otherwise never learn there was none.
+
+        Mutation drill (2026-08-19): added a `("participant", "share_bps")`
+        guard to `edit._GUARDS` that refuses. Failed with
+        `towerkit.edit.Refusal: [guard_refused] refused — nothing written:
+        over-signed` where the write was expected. Restored: the veto belongs
+        with the add verb, in Phase 2, and this test is what would notice it
+        arriving early.
+        """
+        programs = Programs(roots)
+        _program_read(programs, "atomic-2026")
+
+        out = _program_edit_field(
+            programs, "atomic-2026", "participant", "share_bps", 6_000, 5_000,
+            target="xs-1", index=0, expecting_row="Chubb",
+        )
+
+        assert out["wrote"] == "atomic-2026"
+        assert any(d["code"] == "layer-oversigned" for d in out["errors"])
+        assert "not vetoed" in mcpsurface.describe("participant")[
+            "kinds"
+        ]["participant"]["fields"]["share_bps"]["guard"]
 
     def test_a_denied_field_says_denied_and_says_why(self, roots) -> None:
         """'that field does not exist' and 'you may not write that field' are

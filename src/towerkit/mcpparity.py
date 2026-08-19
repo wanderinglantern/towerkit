@@ -133,8 +133,18 @@ IMPLEMENTED: dict[Cell, Served] = {
     ),
     ("participant", "read"): Served(
         ("program_read",),
-        "Carrier shares come back with each layer. Read is the only participant "
-        "verb that exists, which is exactly the asymmetry the rows below record.",
+        "Carrier shares come back with each layer, each one carrying the index "
+        "the update cell addresses it by.",
+    ),
+    ("participant", "update"): Served(
+        ("program_edit_field",),
+        "carrier and share_bps through the generic setter, addressed by the layer "
+        "id AND the index — the address program_read already reports and "
+        "mcpsurface.TARGET already published. This cell read DEFERRED until "
+        "2026-08-19 on the grounds that one `target` could not carry both halves, "
+        "while describe() advertised both fields as writable with no denial "
+        "reason: an advertised capability that always failed. edit.set_field takes "
+        "the two-part address now, so the guard-bearing choke point serves it.",
     ),
     ("retention", "create"): Served(
         ("retention_add",),
@@ -209,22 +219,18 @@ DEFERRED: dict[Cell, str] = {
         "writing it twice."
     ),
     ("participant", "create"): (
-        "participant_add, Phase 2. Nothing writes a carrier share, so every "
-        "MCP-built layer is permanently pending and renders as 'To be placed'. It "
-        "waits on the over-signing veto: shares have to add up BEFORE the write, "
-        "and that guard belongs in edit.py where the TUI inherits it — which is "
-        "the work, not the tool."
-    ),
-    ("participant", "update"): (
-        "participant_edit, Phase 2. The generic setter cannot stand in: a "
-        "participant hangs off a LAYER as well as an index, which set_field's "
-        "single `target` cannot express, and layer.participants is denied "
-        "wholesale because of the same over-signing veto."
+        "participant_add, Phase 2. No tool APPENDS a share — the update cell can "
+        "only change one that already exists — so a layer built over MCP has no "
+        "participants at all and renders as 'To be placed'. It waits on the "
+        "over-signing veto: shares have to add up BEFORE a write that the caller "
+        "never read, and that guard belongs in edit.py where the TUI inherits it "
+        "— which is the work, not the tool."
     ),
     ("participant", "delete"): (
-        "participant_remove, Phase 2. Same addressing gap as the update cell — "
-        "and removing a share moves a layer back toward pending, so it goes "
-        "through the veto in edit.py rather than a list pop in a surface."
+        "participant_remove, Phase 2. Removing a share moves a layer back toward "
+        "pending, so it goes through the veto in edit.py rather than a list pop in "
+        "a surface. The generic setter cannot stand in for a removal at all: it "
+        "sets a field on a row that already exists."
     ),
     ("named_limit", "create"): (
         "named_limit_add, Phase 2. edit.add_named_limit exists and the TUI's "

@@ -507,6 +507,25 @@ class GuardRefused(ValueError):
         self.code = code
 
 
+# THE one sentence about how the statutory flag moves. Quoted verbatim by the
+# three guards below AND by `mcpsurface.GUARDS`, so the live refusal and
+# `describe()` cannot say different things — which is precisely the
+# two-descriptions drift `mcpsurface` exists to prevent, and which had already
+# happened: these guards named a `layer_statutory` tool while GUARDS, one file
+# over, said there was no verb for it.
+#
+# It names NO tool on purpose. The built server registers 23 and none of them
+# writes `layer.statutory`; the verb is Phase 2 (`mcpparity.DEFERRED_MUTATIONS`
+# carries `set_statutory` for exactly this reason). A refusal that names a call
+# the client cannot make refuses the retry too, which is worse than saying
+# plainly that there is no call yet — so this names the editor, which works.
+STATUTORY_FLAG_FIX = (
+    "The statutory flag moves in the towerkit editor (`towerctl edit`) and nowhere "
+    "else yet: no tool writes layer.statutory, and the generic setter denies the "
+    "field because a bare set writes a file the validator refuses."
+)
+
+
 def _guard_attach(program: Program, layer: Layer, value: object) -> None:
     """`attach` is derived on a follows-underlying layer and zero on a
     statutory one.
@@ -530,9 +549,8 @@ def _guard_attach(program: Program, layer: Layer, value: object) -> None:
         # case would open a hole the editor had closed.
         raise GuardRefused(
             f"{layer.name}: statutory cover owns its column from $0 — the invariant "
-            f"is statutory implies attach == 0. Clear the flag with "
-            f"layer_statutory(layer_id={layer.id!r}, statutory=false), then set the "
-            f"attachment."
+            f"is statutory implies attach == 0. Clear the flag first, then set the "
+            f"attachment. {STATUTORY_FLAG_FIX}"
         )
 
 
@@ -542,8 +560,8 @@ def _guard_limit(program: Program, layer: Layer, value: object) -> None:
     if layer.statutory:
         raise GuardRefused(
             f"{layer.name}: statutory cover has no dollar limit — the invariant is "
-            f"statutory implies limit == 0. Clear the flag with "
-            f"layer_statutory(layer_id={layer.id!r}, statutory=false), then set the limit."
+            f"statutory implies limit == 0. Clear the flag first, then set the "
+            f"limit. {STATUTORY_FLAG_FIX}"
         )
 
 
@@ -565,8 +583,8 @@ def _guard_states(program: Program, layer: Layer, value: object) -> None:
     raise GuardRefused(
         f"{layer.name}: states say where STATUTORY cover is FILED; a dollar-"
         f"limited layer cannot carry them, or the field becomes a general-purpose "
-        f"note. Set statutory first with "
-        f"layer_statutory(layer_id={layer.id!r}, statutory=true), or put the text in notes."
+        f"note. Put the text in notes, which takes it today — or make the layer "
+        f"statutory first. {STATUTORY_FLAG_FIX}"
     )
 
 
@@ -605,13 +623,32 @@ _ADVISORIES: dict[tuple[str, str], Callable[[Program, object], list[Diagnostic]]
     ("program", "currency"): _advise_currency,
 }
 
-# Kinds addressed by a list index rather than an id.
+# Kinds addressed by a list index into a PROGRAM-level collection.
 _INDEXED: dict[str, str] = {"retention": "retentions", "sublimit": "sublimits"}
 
+# Kinds whose rows hang off a LAYER: the address is the layer id AND the index
+# of the row within that layer, because neither half identifies a row on its
+# own. Two layers each have a participant 0, and a carrier name is not unique.
+_LAYER_ROWS: dict[str, str] = {
+    "participant": "participants",
+    "named_limit": "named_limits",
+}
 
-def _entity(program: Program, kind: str, target: str | int | None) -> Any:
-    """The object `field` is set on. `target` is the id for a line or layer,
-    the list index for a retention or sublimit, and None for the program."""
+# Named here rather than imported from `mcpsurface`: that module imports THIS
+# one, and a kind roster is not worth a cycle.
+_KINDS: tuple[str, ...] = ("program", "line", "layer", *_LAYER_ROWS, *_INDEXED)
+
+
+def _entity(
+    program: Program, kind: str, target: str | int | None, index: int | None = None
+) -> Any:
+    """The object `field` is set on.
+
+    `target` is the id for a line or layer, the list index for a retention or
+    sublimit, the LAYER id for a participant or named limit, and None for the
+    program. `index` addresses the row within a layer and is meaningless for
+    every other kind.
+    """
     if kind == "program":
         return program
     if target is None:
@@ -620,17 +657,31 @@ def _entity(program: Program, kind: str, target: str | int | None) -> Any:
         return _line(program, str(target))
     if kind == "layer":
         return _layer(program, str(target))
+    attr = _LAYER_ROWS.get(kind)
+    if attr is not None:
+        # These were refused outright until 2026-08-19, on the grounds that one
+        # `target` cannot carry both halves of the address — but the surface
+        # already advertised `participant.carrier` and `.share_bps` as writable
+        # with no denial reason, so every such write reached that refusal and
+        # died on an internal function name. The address the surface publishes
+        # (`mcpsurface.TARGET`: target AND index) is the address taken here.
+        layer = _layer(program, str(target))
+        rows = getattr(layer, attr)
+        what = kind.replace("_", " ")
+        if index is None:
+            raise ValueError(
+                f"a {what} is addressed by layer id and index; layer {layer.id!r} has "
+                f"{len(rows)} — pass the index program_read reported for the row"
+            )
+        _at(list(rows), int(index), what)
+        return rows[int(index)]
     attr = _INDEXED.get(kind)
     if attr is None:
-        # `participant` and `named_limit` hang off a LAYER as well as an index,
-        # which `target` cannot express. They stay verb-owned (add_named_limit,
-        # edit_named_limit) rather than getting an addressing scheme invented
-        # here for one caller.
-        raise ValueError(f"{kind!r} is not addressable by set_field; use its verbs")
+        raise ValueError(f"no such kind {kind!r}; kinds are {', '.join(_KINDS)}")
     items = getattr(program, attr)
-    index = int(target)
-    _at(list(items), index, kind)
-    return items[index]
+    position = int(target)
+    _at(list(items), position, kind)
+    return items[position]
 
 
 def _resolve(entity: Any, kind: str, field: str) -> tuple[str, str]:
@@ -652,6 +703,7 @@ def set_field(
     field: str,
     value: object,
     target: str | int | None = None,
+    index: int | None = None,
 ) -> list[Diagnostic]:
     """Set one field, through the guards. THE choke point.
 
@@ -664,11 +716,15 @@ def set_field(
     do. They are not validator diagnostics: re-reading the file will not
     reproduce them, which is why they must not be merged into `warnings`.
 
+    `target` and `index` together are the address; which halves a kind needs
+    is `mcpsurface.TARGET`, and a participant or a named limit needs both
+    because its row hangs off a layer.
+
     Raises `GuardRefused` for a guard, `KeyError` for an unknown target or
     field, `IndexError` for an out-of-range index, and `ValueError` /
     pydantic's `ValidationError` for a value the model refuses.
     """
-    entity = _entity(program, kind, target)
+    entity = _entity(program, kind, target, index)
     head, _, rest = field.partition(".")
     attr, canonical = _resolve(entity, kind, head)
     if rest:

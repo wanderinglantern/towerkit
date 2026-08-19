@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from towerkit import edit
+from towerkit import edit, mcpsurface
 from towerkit.model import load_program
 from towerkit.validate import WARNING
 
@@ -79,7 +79,12 @@ class TestAttachOnAFollowsUnderlyingLayer:
     def test_attach_is_refused_on_a_statutory_layer(self) -> None:
         """The second half of guard A, and the one the spec's table omits: the
         TUI already blocked attach on a statutory layer, so a guard covering
-        only follows-underlying would open a hole the editor had closed."""
+        only follows-underlying would open a hole the editor had closed.
+
+        Mutation drill (2026-08-19): deleted the `if layer.statutory` branch
+        from `_guard_attach`. Failed with `DID NOT RAISE
+        <class 'towerkit.edit.GuardRefused'>`. Restored.
+        """
         program = _sample()
         layer = _statutory_layer(program)
 
@@ -87,7 +92,11 @@ class TestAttachOnAFollowsUnderlyingLayer:
             edit.set_field(program, "layer", "attach", 5_000_000, "primary-el")
 
         assert layer.attach == 0
-        assert "layer_statutory(layer_id='primary-el', statutory=false)" in str(caught.value)
+        message = str(caught.value)
+        assert "statutory implies attach == 0" in message
+        # The fix, quoted from the one source rather than restated here — see
+        # `TestOneSourceForTheStatutoryFix` below.
+        assert edit.STATUTORY_FLAG_FIX in message
 
     def test_an_ordinary_layer_still_takes_an_attachment(self) -> None:
         """The guard is CONDITIONAL. If this ever fails the guard has stopped
@@ -122,9 +131,19 @@ class TestLimitOnAStatutoryLayer:
         assert layer.limit == 0, "a refused write must write nothing"
         assert caught.value.code == "guard_refused"
 
-    def test_the_refusal_names_the_verb_that_clears_the_flag(self) -> None:
+    def test_the_refusal_names_something_a_caller_can_actually_do(self) -> None:
         """`layer.statutory` is denied to the generic setter, so a caller told
-        only "no" has no move at all. The refusal has to name the verb."""
+        only "no" has no move at all — and this refusal used to name
+        `layer_statutory(layer_id=..., statutory=false)`, which the server does
+        not register and will not until Phase 2. Naming an unbuilt tool refuses
+        the retry as surely as saying nothing: the client calls it, gets
+        "unknown tool", and is back where it started. So it names the editor,
+        which works today, and says plainly that there is no call.
+
+        Mutation drill (2026-08-19): replaced `STATUTORY_FLAG_FIX` in
+        `_guard_limit` with the old `layer_statutory(...)` sentence. Failed on
+        `assert edit.STATUTORY_FLAG_FIX in message`. Restored.
+        """
         program = _sample()
         _statutory_layer(program)
 
@@ -132,8 +151,9 @@ class TestLimitOnAStatutoryLayer:
             edit.set_field(program, "layer", "limit", 1_000_000, "primary-el")
 
         message = str(caught.value)
-        assert "layer_statutory(layer_id='primary-el', statutory=false)" in message
         assert "statutory implies limit == 0" in message
+        assert edit.STATUTORY_FLAG_FIX in message
+        assert "towerctl edit" in message
 
     def test_an_ordinary_layer_still_takes_a_limit(self) -> None:
         program = _sample()
@@ -155,8 +175,13 @@ class TestStatesOnADollarLimitedLayer:
             edit.set_field(program, "layer", "states", ["NY", "NJ"], "umbrella")
 
         assert layer.states == [], "a refused write must write nothing"
-        assert "dollar-limited layer cannot carry them" in str(caught.value)
-        assert "layer_statutory(layer_id='umbrella', statutory=true)" in str(caught.value)
+        message = str(caught.value)
+        assert "dollar-limited layer cannot carry them" in message
+        # Two escapes, and BOTH have to be things a Phase 1 client can do:
+        # `notes` is a writable field on the same layer, and the flag is the
+        # editor's. This assertion read `layer_statutory(...)` until 2026-08-19.
+        assert "notes" in message
+        assert edit.STATUTORY_FLAG_FIX in message
 
     def test_set_states_is_guarded_by_delegating_to_the_choke_point(self) -> None:
         """The named setter is a thin wrapper, not a second door. If it grew
@@ -192,6 +217,54 @@ class TestStatesOnADollarLimitedLayer:
         layer = _statutory_layer(program)
         edit.set_states(program, "primary-el", ["OH", "Ontario"])
         assert layer.states == ["OH", "Ontario"]
+
+
+class TestOneSourceForTheStatutoryFix:
+    """The refusal a client SEES and the guard text `describe()` PUBLISHES are
+    two descriptions of one rule, and two descriptions drift.
+
+    They had. `edit.py` told callers to call `layer_statutory(...)`, a tool the
+    server does not register; `mcpsurface.GUARDS['layer.limit']` said the
+    opposite — "Phase 1 has no verb for it" — and a test in
+    `test_mcp_surface.py` banned the string from `describe()` outright. The
+    module that exists to stop exactly this had it inside itself.
+
+    So there is one string now, `edit.STATUTORY_FLAG_FIX`, and both sides
+    interpolate it. These tests fail if either side paraphrases.
+    """
+
+    def test_the_live_refusal_and_the_published_guard_share_one_string(self) -> None:
+        """Mutation drill (2026-08-19): put the old paraphrase back into
+        `GUARDS['layer.limit']` ("Phase 1 has no verb for it, so that is the
+        towerkit editor") in place of the interpolated constant — a drift of
+        exactly the size that shipped. Failed with `assert 'The statutory flag
+        moves in the towerkit editor ...' in 'Refused on a statutory layer:
+        ... Phase 1 has no verb for it, so that is the towerkit editor.'`.
+        Restored.
+        """
+        program = _sample()
+        _statutory_layer(program)
+        with pytest.raises(edit.GuardRefused) as caught:
+            edit.set_field(program, "layer", "limit", 1_000_000, "primary-el")
+
+        assert edit.STATUTORY_FLAG_FIX in str(caught.value)
+        assert edit.STATUTORY_FLAG_FIX in mcpsurface.GUARDS["layer.limit"]
+        assert edit.STATUTORY_FLAG_FIX in mcpsurface.GUARDS["layer.states"]
+        assert edit.STATUTORY_FLAG_FIX in mcpsurface.GUARDS["layer.attach"]
+
+    def test_the_one_source_names_no_tool(self) -> None:
+        """It names `towerctl edit`, which a human can run, and no tool at all.
+        `test_mcpserver.TestRefusalsNameCallableThings` holds the general
+        form, derived from the built server's tool list; this is the specific
+        claim about the sentence every statutory refusal now ends on.
+
+        Mutation drill (2026-08-19): rewrote the constant to say the flag moves
+        "via layer_statutory(layer_id=..., statutory=false)". Failed with
+        `assert 'layer_statutory' not in 'The statuto...tor refuses.'`.
+        Restored.
+        """
+        assert "layer_statutory" not in edit.STATUTORY_FLAG_FIX
+        assert "towerctl edit" in edit.STATUTORY_FLAG_FIX
 
 
 class TestCurrencyAdvisory:
@@ -290,6 +363,75 @@ class TestSetFieldPlumbing:
     def test_an_out_of_range_index_raises_index_error(self) -> None:
         with pytest.raises(IndexError):
             edit.set_field(_sample(), "retention", "amount", 1, 99)
+
+    def test_a_participant_is_addressed_by_its_layer_and_its_index(self) -> None:
+        """Both halves, because neither identifies a row on its own: every
+        layer has a participant 0, and a carrier appears on several layers.
+
+        The surface advertised `participant.carrier` and `.share_bps` as
+        writable from the day it shipped, and `_entity` refused the kind — so
+        every one of those writes died on "'participant' is not addressable by
+        set_field; use its verbs", naming a private function and verbs that
+        exist in no phase. Nothing in the suite performed a participant write,
+        which is how it shipped.
+
+        Mutation drill (2026-08-19): made `_entity` return `rows[0]` whatever
+        the index. Failed with `At index 0 diff: ('Chubb', 1000) !=
+        ('Chubb', 5000)` — the write landed on the wrong row. Restored.
+
+        Two more drills on the same branch: dropping the `index is None` check
+        (defaulting to 0) failed the next test with `DID NOT RAISE ValueError`,
+        and dropping `_at` for a modulo failed the one after with `DID NOT
+        RAISE IndexError`.
+        """
+        program = _sample()
+        layer = next(ly for ly in program.layers if ly.id == "xs-1")
+
+        edit.set_field(program, "participant", "share_bps", 1_000, "xs-1", index=2)
+
+        assert [(p.carrier, p.share_bps) for p in layer.participants] == [
+            ("Chubb", 5_000),
+            ("Zurich", 2_500),
+            ("AXA XL", 1_000),
+        ]
+
+    def test_a_participant_write_with_no_index_says_which_index_it_wants(self) -> None:
+        """A caller that sent only the layer id gets told the address, and how
+        many rows there are to choose from — not a stack trace.
+
+        Mutation drill (2026-08-19): defaulted the missing index to 0. Failed
+        with `Failed: DID NOT RAISE ValueError`. Restored.
+        """
+        program = _sample()
+        with pytest.raises(ValueError) as caught:
+            edit.set_field(program, "participant", "carrier", "Ace", "xs-1")
+        message = str(caught.value)
+        assert "layer id and index" in message
+        assert "'xs-1' has 3" in message
+
+    def test_an_out_of_range_participant_index_raises_index_error(self) -> None:
+        """The same code the server turns into `no_such_target`, so a caller
+        that guessed a row is told what is there.
+
+        Mutation drill (2026-08-19): replaced `_at` with `rows[index % len]`.
+        Failed with `Failed: DID NOT RAISE IndexError`. Restored.
+        """
+        with pytest.raises(IndexError):
+            edit.set_field(_sample(), "participant", "carrier", "Ace", "xs-1", index=9)
+
+    def test_an_unknown_kind_names_the_kinds_that_exist(self) -> None:
+        """The branch that used to say "use its verbs" about a kind the
+        surface publishes. It is now reachable only by a genuine typo, and it
+        answers one.
+
+        Mutation drill (2026-08-19): shortened the refusal to "unknown".
+        Failed with `assert "no such kind 'carrier'" in 'unknown'`. Restored.
+        """
+        with pytest.raises(ValueError) as caught:
+            edit.set_field(_sample(), "carrier", "name", "Ace", "xs-1")
+        message = str(caught.value)
+        assert "no such kind 'carrier'" in message
+        assert "participant" in message
 
 
 class TestSetStatutory:
