@@ -16,7 +16,7 @@ from openpyxl.worksheet.worksheet import Worksheet
 
 from ..model import Program
 from ..scale import DEFAULT_GAMMA
-from ..soi import SoiSection, build_soi, premium_value, sheet_title
+from ..soi import SoiSection, build_soi, premium_subtotal, premium_value, sheet_title
 from ..theme import Theme
 from .schematic_xlsx import add_schematic_sheet
 from .table_xlsx import (
@@ -75,15 +75,20 @@ def _table_parts(
                 values.append(premium_value(row))
             rows.append(tuple(values))
         # TWO SUBTOTALS, NEVER ONE MINGLED FIGURE (Grant, 2026-08-18): bound
-        # cover on its own line, unbound stated separately beneath it. Both
-        # print even at zero — "Unbound cover $0.00" is itself an assertion
-        # worth reading, and a section that sometimes has one line and
-        # sometimes two teaches the reader to skim past them.
+        # cover on its own line, unbound stated separately beneath it. BOTH
+        # lines print always — a section that sometimes has one line and
+        # sometimes two teaches the reader to skim past them — but what the
+        # cell HOLDS is premium_subtotal's decision, not a bare sum: a section
+        # whose unbound rows state no premium prints an em dash there, because
+        # "$0.00" under a visible "To be placed" row asserts free cover
+        # (fix round 1; see soi.premium_subtotal).
         table_sections.append(TableSection(
             section.label, tuple(rows),
             totals=(
-                ("Bound cover — premium subtotal", section.bound_premium_total),
-                ("Unbound cover — premium subtotal", section.unbound_premium_total),
+                ("Bound cover — premium subtotal",
+                 premium_subtotal(section, bound=True)),
+                ("Unbound cover — premium subtotal",
+                 premium_subtotal(section, bound=False)),
             ) if show_premiums else (),
         ))
 

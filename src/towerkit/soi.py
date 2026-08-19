@@ -183,7 +183,15 @@ class SoiRow:
 
     @property
     def is_bound(self) -> bool:
-        return self.status is SoiStatus.BOUND
+        # `==`, NEVER `is`. SoiStatus is a StrEnum and bookkit's PlacementStatus
+        # values are plain strings, so a caller composing rows from its own data
+        # sets status="Bound" and an identity test reads it as UNBOUND: the
+        # Status cell prints Bound while that row's premium lands in the unbound
+        # subtotal, and the sheet contradicts itself in silence. `==` is strictly
+        # safer here — None == SoiStatus.BOUND is False and
+        # SoiStatus.PARTIALLY_BOUND == "Bound" is False, so nothing that was
+        # unbound becomes bound (fix round 1, 2026-08-18).
+        return self.status == SoiStatus.BOUND
 
 
 @dataclass(frozen=True)
@@ -236,6 +244,40 @@ def premium_value(row: SoiRow) -> int | str | None:
     return row.premium
 
 
+# What a premium subtotal prints when the rows under it stated no premium at
+# all. NOT "$0.00": the argument in premium_value applies with equal force one
+# row lower down — if $0.00 reads as free cover in a body cell it reads as free
+# cover in a subtotal, and "Unbound cover — premium subtotal $0.00" printed
+# beneath a visible "To be placed" row says the unplaced cover is free. An em
+# dash says the sheet has nothing to state, which is the truth (fix round 1,
+# 2026-08-18).
+NOT_STATED = "\u2014"
+
+
+def premium_subtotal(section: SoiSection, *, bound: bool) -> int | str:
+    """What one of a section's two subtotal cells holds.
+
+    Three outcomes, and they are three different assertions:
+
+    - No contributing row states a premium — including the case of no
+      contributing rows at all: NOT_STATED. There is no number here.
+    - The stated premiums sum to zero: "Included", the same word the body cell
+      uses for a zero, because a stated zero means the cover is priced with
+      another layer, never that it is free.
+    - Otherwise the sum, which is the only case a reader may add up.
+
+    A genuine zero is a real assertion and is kept distinct from silence."""
+    stated = [
+        row.premium
+        for row in section.rows
+        if row.is_bound == bound and row.premium is not None
+    ]
+    if not stated:
+        return NOT_STATED
+    total = sum(stated)
+    return "Included" if total == 0 else total
+
+
 def _row(layer: Layer, program: Program, claimed: set[int] | None = None) -> SoiRow:
     period = layer.period or program.period
     return SoiRow(
@@ -273,11 +315,20 @@ def build_soi(program: Program) -> list[SoiSection]:
     if PROGRAM_WIDE in buckets:
         order.append(PROGRAM_WIDE)
 
-    # One pass in DISPLAY order, threading the claimed-retentions set through
-    # it, so "stated once" means "stated on the first row the reader meets".
-    claimed: set[int] = set()
+    # One pass in DISPLAY order, threading a claimed-retentions set through it,
+    # so "stated once" means "stated on the first row the reader meets".
+    #
+    # THE SET IS PER SECTION, NOT PER SHEET. Within a section the dedup is
+    # right: the reader's eye carries the retention column down from the row
+    # that states it. Across a section boundary it carries nothing, so a
+    # captive shared by a Casualty primary and a Property primary — the very
+    # case retention_text's docstring cites — would print in Casualty and leave
+    # the Property section stating NO retention at all. That is a false
+    # statement by omission, which is the class of error this branch exists to
+    # remove (fix round 1, 2026-08-18).
     sections: list[SoiSection] = []
     for key in order:
+        claimed: set[int] = set()
         rows = tuple(
             _row(layer, program, claimed)
             for layer in sorted(buckets[key], key=sort_key)
