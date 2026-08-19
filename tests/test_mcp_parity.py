@@ -31,6 +31,7 @@ from towerkit import mcpparity
 from towerkit.mcpserver import build_server
 
 SAMPLE = Path(__file__).parent.parent / "programs" / "atomic-2026.json"
+SRC = Path(__file__).parent.parent / "src" / "towerkit"
 
 
 @pytest.fixture()
@@ -228,10 +229,18 @@ def test_the_deferred_mutations_are_the_phase_2_verbs() -> None:
     verb-level and cell-level — have come apart.
 
     `edit_named_limit` was on this list until 2026-08-19 and did not belong:
-    `mcpsurface._SETTERS` routes `named_limit.*` to it, so `program_edit_field`
-    had been reaching it since the day the generic setter shipped.
+    the capability it names — a named limit's name and amount — is served by
+    `program_edit_field`, which reaches the row at the choke point.
+
+    `adopt` moved the other way the same day, and for the opposite reason: it
+    sat in MUTATIONS claiming `program_clone_renewal` as its caller, which no
+    call graph supports (that tool calls `Program.clone_as_renewal`, a model
+    method). Wholesale replacement of a program's four structural collections
+    is a thing no tool can ask for; it is the TUI's line-transfer step, and
+    `line_transfer` is what closes it.
     """
     assert set(mcpparity.DEFERRED_MUTATIONS) == {
+        "adopt",
         "add_layer",
         "add_named_limit",
         "remove_named_limit",
@@ -395,3 +404,139 @@ def test_the_generic_setter_reaches_exactly_the_kinds_the_ledger_claims(
         f"cells claim {sorted(claimed)} — a cell is describing a capability the "
         f"server does not have, or denying one it does. Refusals seen: {refused}"
     )
+
+
+# --- the reasons, checked against the CALL GRAPH -------------------------------
+#
+# The section above probes the generic setter live, per kind. It cannot see the
+# other half of the same defect: a cell that names a SPECIFIC verb and claims
+# it reaches a mutation it never touches. `('adopt')` did exactly that until
+# 2026-08-19 — "the renewal clone is its only caller" — and both halves were
+# false. `_program_clone_renewal` calls `Program.clone_as_renewal()`, a model
+# method, and `edit.adopt`'s only caller anywhere is the TUI's line-transfer
+# flow. Nothing failed: the ledger's two direction checks compare TOOL NAMES,
+# and `program_clone_renewal` is a real registered tool.
+#
+# So the claim is read off the source instead. `mcpserver.py` and
+# `mcpsurface.py` are the whole connector — the surface is the only other
+# module a tool reaches `edit.py` through — and a reference to `edit.X`
+# anywhere in a function's body is an edge, whether it is CALLED there
+# (`edit.set_field(...)`) or handed on as the mutation itself
+# (`_write(..., edit.restack, ...)`, which is why references count and not just
+# calls).
+
+_CONNECTOR = ("mcpserver", "mcpsurface")
+
+
+def _connector_graph() -> dict[tuple[str, str], set[tuple[str, str]]]:
+    """(module, function) -> everything its body names, qualified.
+
+    Nested definitions are recorded under their own names AND their bodies are
+    included in the enclosing function's, because both matter: a tool is an
+    `async def` nested inside `_register_write_tools`, and the mutation a write
+    performs lives in a `do()` closure handed to `_write`.
+    """
+    import ast
+
+    graph: dict[tuple[str, str], set[tuple[str, str]]] = {}
+
+    def visit(module: str, node: ast.AST) -> None:
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, ast.FunctionDef | ast.AsyncFunctionDef):
+                edges = graph.setdefault((module, child.name), set())
+                for sub in ast.walk(child):
+                    if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name):
+                        edges.add((module, sub.func.id))
+                    elif isinstance(sub, ast.Attribute) and isinstance(sub.value, ast.Name):
+                        edges.add((sub.value.id, sub.attr))
+            visit(module, child)
+
+    for module in _CONNECTOR:
+        visit(module, ast.parse((SRC / f"{module}.py").read_text("utf-8")))
+    return graph
+
+
+def _mutations_reached(tool: str) -> set[str]:
+    """Every `edit.py` function the named tool can reach."""
+    graph = _connector_graph()
+    seen: set[tuple[str, str]] = set()
+    stack = [("mcpserver", tool)]
+    found: set[str] = set()
+    while stack:
+        node = stack.pop()
+        if node in seen:
+            continue
+        seen.add(node)
+        for target in graph.get(node, ()):
+            if target[0] == "edit":
+                found.add(target[1])
+            elif target in graph:
+                stack.append(target)
+    return found
+
+
+def test_the_call_graph_reads_the_connector_and_not_an_empty_file() -> None:
+    """The reachability tests below are negative-shaped, so the machinery under
+    them has to be shown working first: a graph that parsed nothing would agree
+    with every one of them."""
+    graph = _connector_graph()
+    assert ("mcpserver", "program_edit_field") in graph, "the tools were not found"
+    # Mutation drill (2026-08-19): emptied `_CONNECTOR`. Failed with
+    # `AssertionError: the tools were not found / assert ('mcpserver',
+    # 'program_edit_field') in {}`. Restored.
+    assert "set_field" in _mutations_reached("program_edit_field")
+    assert "add_line" in _mutations_reached("line_add")
+    assert "add_line" not in _mutations_reached("line_remove")
+
+
+def test_a_cell_naming_a_specific_verb_must_actually_reach_its_mutation() -> None:
+    """A ledger reason is a claim about the code, and this is the half of it
+    the name checks cannot see.
+
+    Cells that name `program_edit_field` are exempt and are checked LIVE
+    instead, by the per-kind probe above: the generic setter serves a mutation
+    by writing the same field at the same choke point, not by calling the
+    function — `set_states` and `set_premium_detail` are wrappers the TUI uses
+    for its own entry syntax, and `edit_named_limit` is the row's own verb.
+    Every other cell names a verb that exists to perform exactly this mutation,
+    and if it does not reach it, the cell is fiction.
+
+    Mutation drill (2026-08-19): put the `adopt` row back in MUTATIONS as
+    `Served(("program_clone_renewal",), ...)`. Failed with `the ledger says
+    {'adopt': ('program_clone_renewal',)} serve those edit.py functions, and
+    they cannot reach them`. Restored.
+    """
+    unreachable = {}
+    for name, served in mcpparity.MUTATIONS.items():
+        if "program_edit_field" in served.tools:
+            continue
+        reached: set[str] = set()
+        for tool in served.tools:
+            reached |= _mutations_reached(tool)
+        if name not in reached:
+            unreachable[name] = served.tools
+    assert not unreachable, (
+        f"the ledger says {unreachable} serve those edit.py functions, and they "
+        f"cannot reach them — the cell is describing a call that does not happen. "
+        f"Either the tool is wrong, or the mutation belongs in DEFERRED_MUTATIONS"
+    )
+
+
+def test_a_deferred_mutation_is_one_no_tool_can_reach() -> None:
+    """The inverse, and the direction that catches a verb quietly wired up:
+    a mutation the ledger calls deferred must be reachable from NO registered
+    tool at all.
+
+    Mutation drill (2026-08-19): added `edit.adopt(program, program)` to
+    `_program_clone_renewal`. Failed with `the ledger defers ['adopt'] and the
+    connector reaches them`. Restored.
+    """
+    reached: set[str] = set()
+    for tool in sorted(mcpparity.ledger_tools()):
+        reached |= _mutations_reached(tool)
+    wired = sorted(set(mcpparity.DEFERRED_MUTATIONS) & reached)
+    assert not wired, (
+        f"the ledger defers {wired} and the connector reaches them — a Phase 2 "
+        f"verb landed and its row did not move"
+    )
+    assert "set_field" in reached, "nothing was reached at all; this passes vacuously"

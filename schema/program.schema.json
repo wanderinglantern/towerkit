@@ -11,7 +11,8 @@
     "period",
     "lines",
     "layers",
-    "retentions"
+    "retentions",
+    "sublimits"
   ],
   "properties": {
     "$schema": {

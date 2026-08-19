@@ -53,7 +53,7 @@ from __future__ import annotations
 
 import builtins
 import json
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from datetime import date
 from enum import Enum
@@ -261,8 +261,11 @@ GUARDS: dict[str, str] = {
         "caller never supplied into the field the Schedule of Insurance reads."
     ),
     "program.currency": (
-        "Written, and the response warns that NO figure was converted: every "
-        "amount is the same integer it was and only the label moved."
+        # QUOTED from `edit.py`, never restated — the rule this table's own
+        # header sets, broken here until 2026-08-19. The restatement had
+        # dropped the load-bearing half: money.py hard-codes USD, so the label
+        # moves nowhere a reader can see.
+        f"Written, and the response warns: {edit.CURRENCY_NOT_CONVERTED}"
     ),
     "participant.share_bps": (
         "Written, and nothing blocks. One row's share is set in place; the shares "
@@ -285,7 +288,9 @@ VALUE_RULES: dict[str, str] = {
     "money": (
         "Whole dollars. Send '5m', '250k', '$5,000,000', '5000000', or a JSON "
         "integer of dollars. Never cents, never a decimal. Values come back as "
-        "'$5,000,000'."
+        "'$5,000,000'. A leading minus is accepted in the same forms ('-$5'), "
+        "and whether the field will take one is its own bound, published as "
+        "`bounds` beside its type."
     ),
     "date": (
         "Send a string. ISO ('2026-06-01') is exact; '6/1/2026' is month/day/year. "
@@ -301,7 +306,9 @@ VALUE_RULES: dict[str, str] = {
     "text": "Free text, sent as a string.",
     "clearing": (
         "Send null to clear an optional field and drop the key from the file; an "
-        "empty string does the same for free text. A required field refuses both."
+        "empty string does the same for free text. A required field refuses both. "
+        "In `expecting` the two part company: null means UNSET and an empty string "
+        "means the empty string itself, which is a value a text field can hold."
     ),
 }
 
@@ -309,6 +316,16 @@ VALUE_RULES: dict[str, str] = {
 # compare-and-set mismatch. `stale_sha` would be a lie — nothing about the
 # file hash is wrong — so it is added here and covers both the row guard and
 # the field-level `expecting` mismatch.
+#
+# `internal_error` is likewise absent from the design doc, and is the code for
+# a failure that is nobody's contract: an exception the write path did not
+# anticipate. It exists because one escaped. A `TypeError` raised inside
+# `mcpsurface.apply` fell through `mcpserver._write`'s except clause and
+# reached the client as a bare `Error executing tool program_edit_field: ...`
+# with no `[code] ` prefix at all — outside the stable-code guarantee this
+# branch is built on, and invisible to a caller catching `edit.Refusal`. A
+# code that says "this is a towerkit bug, not your value" is worth having;
+# silence is not.
 ERROR_CODES: tuple[str, ...] = (
     "stale_sha",
     "stale_value",
@@ -321,22 +338,31 @@ ERROR_CODES: tuple[str, ...] = (
     "bad_value",
     "exists",
     "no_snapshot",
+    "internal_error",
 )
 
 # Fields whose named setter in `edit.py` does something a plain assignment
 # cannot. Everything absent routes through `edit.set_field`, THE choke point,
 # which is what makes a newly guarded field need no edit here.
+#
+# There is exactly ONE row, and the wildcards that used to sit beside it are
+# the reason to keep it that way. `retention.*`, `sublimit.*` and
+# `named_limit.*` routed every field of three kinds into `edit.edit_retention`,
+# `edit.edit_sublimit` and `edit.edit_named_limit` as `**{python_name: value}`
+# — and those three functions' explicit keyword parameters ARE a hand-written
+# enumeration of the three models. Nothing cross-checked them, so a field added
+# to `Retention` was ADVERTISED writable by `describe()` and came back
+# `edit_retention() got an unexpected keyword argument 'broker_ref'` over the
+# wire: the sixth field table, inside the module whose whole purpose is to be
+# the single published truth. `_check_lines` — the one thing those functions
+# added — now runs at the choke point (`edit._NORMALISERS`), so the guard
+# survives and the enumeration does not.
 _SETTERS: dict[str, str] = {
     # The id follows the name and cascades through every appliesTo. This is the
     # direct consequence of denying `line.id`: a plain write strands every
     # reference on the old slug. (`layer.name` is the opposite — layer ids come
     # from `unique_id(program, "layer")`, never from the name.)
     "line.name": "rename_line",
-    # `_check_lines` runs on appliesTo only through these, and the rest of each
-    # row goes the same way so one row has one writer.
-    "retention.*": "edit_retention",
-    "sublimit.*": "edit_sublimit",
-    "named_limit.*": "edit_named_limit",
 }
 
 # The one list[str] that also accepts the comma-separated form, because
@@ -376,6 +402,9 @@ class Entry:
     # caller can act on. See `_length`.
     min_length: int | None = None
     max_length: int | None = None
+    # The same thing for the numeric types, read off `ge` / `le`. See `_bounds`.
+    minimum: int | None = None
+    maximum: int | None = None
 
 
 # --- derivation ----------------------------------------------------------------
@@ -408,7 +437,23 @@ def _flatten(info: FieldInfo) -> tuple[Any, list[Any], bool]:
     if nested is not None:
         metadata = [*metadata, *nested]
         annotation = annotation.__origin__
-    return annotation, metadata, optional
+    # One more level, and it is the difference between `Money` and
+    # `Money | None` carrying the same rules. `Money` is
+    # `Annotated[int, Field(ge=0), MONEY]`: pydantic flattens the `Field` into
+    # `FieldInfo.metadata` as `Ge(0)` when the field is required, and leaves
+    # the raw `FieldInfo` in the annotation's own `__metadata__` when it is
+    # optional. Unexpanded, `layer.premium` — `Money | None` — advertised no
+    # minimum while `layer.attach` advertised `ge=0`, from the identical alias.
+    # The MONEY tag survived either way, which is why the difference went
+    # unnoticed: the type was right and the bound was gone.
+    return annotation, [*_expanded(metadata)], optional
+
+
+def _expanded(metadata: list[Any]) -> Iterator[Any]:
+    for item in metadata:
+        yield item
+        if isinstance(item, FieldInfo):
+            yield from item.metadata
 
 
 def _length(metadata: list[Any]) -> tuple[int | None, int | None]:
@@ -435,12 +480,34 @@ def _length(metadata: list[Any]) -> tuple[int | None, int | None]:
     return low, high
 
 
-def _le(metadata: list[Any]) -> int | None:
+def _bounds(metadata: list[Any]) -> tuple[int | None, int | None]:
+    """A numeric field's `ge` / `le`, as pydantic records them.
+
+    The counterpart to `_length`, and it was missing. `layer.attach` is
+    `Money`, which is `Annotated[int, Field(ge=0), MONEY]`, and
+    `program_edit_field(kind="layer", field="attach", value=-1)` came back as a
+    raw four-line pydantic repr with a documentation URL — the same defect the
+    `Program.currency` `min_length` fix closed for strings, left open on money.
+    `model.py:246` states the rule: a bound on the MODEL is the difference
+    between a write being REFUSED and a bad file being written and reported.
+
+    Read here so the refusal can name a value that would be accepted. Not a
+    second rule: pydantic refuses the same value a moment later on assignment.
+
+    `layer.limit` deliberately carries no `ge`, so it has no bound here either
+    and a negative limit stays writable — a draft state `validate.py` reports
+    by name. That is exactly why this is read off the model and not declared.
+    """
+    low: int | None = None
+    high: int | None = None
     for item in metadata:
+        bound = getattr(item, "ge", None)
+        if isinstance(bound, int) and not isinstance(bound, bool):
+            low = bound
         bound = getattr(item, "le", None)
-        if isinstance(bound, int):
-            return bound
-    return None
+        if isinstance(bound, int) and not isinstance(bound, bool):
+            high = bound
+    return low, high
 
 
 def _classify(where: str, base: Any, metadata: list[Any]) -> tuple[str, tuple[str, ...] | None]:
@@ -461,7 +528,7 @@ def _classify(where: str, base: Any, metadata: list[Any]) -> tuple[str, tuple[st
     if get_origin(base) is list and get_args(base) == (str,):
         return "list_of_strings", None
     if base is int:
-        if _le(metadata) == BPS_SCALE:
+        if _bounds(metadata)[1] == BPS_SCALE:
             return "share_bps", None
         raise RuntimeError(
             f"{where} is an int the surface cannot name: tag it model.MONEY if it is "
@@ -473,7 +540,10 @@ def _classify(where: str, base: Any, metadata: list[Any]) -> tuple[str, tuple[st
 
 
 def _setter_for(kind: str, field: str) -> str | None:
-    return _SETTERS.get(f"{kind}.{field}") or _SETTERS.get(f"{kind}.*")
+    """One field, one lookup. The `{kind}.*` wildcard this used to fall back
+    on is what let three kinds route past the choke point into functions whose
+    parameter lists were a second copy of the models."""
+    return _SETTERS.get(f"{kind}.{field}")
 
 
 def _entry(
@@ -490,6 +560,7 @@ def _entry(
     key = f"{kind}.{field}"
     kind_of, values = _classify(key, base, metadata)
     low, high = _length(metadata) if kind_of == "text" else (None, None)
+    floor, ceiling = _bounds(metadata) if kind_of in ("money", "share_bps") else (None, None)
     return Entry(
         kind=kind,
         field=field,
@@ -505,6 +576,8 @@ def _entry(
         accepts_comma_string=key in _COMMA_STRING,
         min_length=low,
         max_length=high,
+        minimum=floor,
+        maximum=ceiling,
     )
 
 
@@ -714,8 +787,10 @@ def parse_value(entry: Entry, value: object) -> Any:
     if entry.type == "share_bps":
         if isinstance(value, bool) or not isinstance(value, int):
             raise BadValue(f"{entry.field} takes {VALUE_RULES['share_bps']}")
-        if not 0 <= value <= BPS_SCALE:
-            raise BadValue(f"{value} is outside 0-10000 — {VALUE_RULES['share_bps']}")
+        # The 0-10000 range is `Participant.share_bps`'s own `ge`/`le`, read
+        # off the model by `_bounds`. Spelling it out here was a copy of the
+        # model that nothing compared against it.
+        _check_bounds(entry, value)
         return value
     if not isinstance(value, str):
         raise BadValue(f"{entry.field} takes {VALUE_RULES['text']}")
@@ -752,10 +827,51 @@ def _chars(count: int | None) -> str:
     return f"{count} character" + ("" if count == 1 else "s")
 
 
+def _check_bounds(entry: Entry, value: int) -> None:
+    """The model's own `ge`/`le`, refused here so the message is usable.
+
+    The numeric half of `_check_length`, and it was missing: `attach` is
+    `Money` (`ge=0`), and `value=-1` reached the client as pydantic's own
+    four-line repr with a URL in it — a refusal naming no value that would be
+    accepted, which is the standard the design doc sets for every one of them.
+    A field with no bound on the model has none here; that is the whole
+    contract of reading it off the model rather than declaring it.
+    """
+    if entry.minimum is not None and value < entry.minimum:
+        raise BadValue(
+            f"{_amount(entry, value)} is outside what {entry.field} takes — "
+            f"{_bound_rule(entry)}"
+        )
+    if entry.maximum is not None and value > entry.maximum:
+        raise BadValue(
+            f"{_amount(entry, value)} is outside what {entry.field} takes — "
+            f"{_bound_rule(entry)}"
+        )
+
+
+def _bound_rule(entry: Entry) -> str:
+    """Called only from `_check_bounds`, so at least one bound exists."""
+    low, high = entry.minimum, entry.maximum
+    if low is not None and high is not None:
+        return f"it takes {_amount(entry, low)} to {_amount(entry, high)}"
+    if low is not None:
+        return f"it takes {_amount(entry, low)} or more"
+    return f"it takes {_amount(entry, high)} or less"
+
+
+def _amount(entry: Entry, value: int | None) -> str:
+    """A number in the lexicon its own field speaks, so the bound a refusal
+    names can be pasted back."""
+    if value is None:
+        return "null"
+    return format_money(value) if entry.type == "money" else str(value)
+
+
 def _parse_money(entry: Entry, value: object) -> int:
     if isinstance(value, bool):  # bool is an int; True is not one dollar
         raise BadValue(f"{entry.field} takes {VALUE_RULES['money']}")
     if isinstance(value, int):
+        _check_bounds(entry, value)
         return value
     if isinstance(value, float):
         raise BadValue(
@@ -763,10 +879,23 @@ def _parse_money(entry: Entry, value: object) -> int:
         )
     if not isinstance(value, str):
         raise BadValue(f"{entry.field} takes {VALUE_RULES['money']}")
+    # The MINUS SIGN is read here and not in `money.parse_money`, which refuses
+    # a negative outright and is the TUI's and `ingest`'s parser too. It has to
+    # be read SOMEWHERE: `layer.limit` carries no `ge` on purpose, so -5 is a
+    # state the field can hold, `render_value` and `expecting_literal` both
+    # print it as '-$5', and a refusal that offers a literal the parser then
+    # rejects is a loop the caller cannot leave. Whether a negative is ALLOWED
+    # is the model's question, asked by `_check_bounds` below, not the
+    # spelling's.
+    text = value.strip()
+    negative = text.startswith("-")
     try:
-        return parse_money(value)
+        amount = parse_money(text[1:].lstrip() if negative else text)
     except MoneyParseError as exc:
         raise BadValue(f"{exc} — {VALUE_RULES['money']}") from exc
+    amount = -amount if negative else amount
+    _check_bounds(entry, amount)
+    return amount
 
 
 def _parse_list(entry: Entry, value: object) -> list[str]:
@@ -793,13 +922,25 @@ def parse_expecting(entry: Entry, value: object) -> Any:
     `null` is accepted for any field, clearable or not: a field can be unset on
     a draft and the guard has to be expressible either way, or it becomes
     opt-out — and an optional compare-and-set is not a compare-and-set.
+
+    `""` means THE EMPTY STRING, not "unset", and it is not put through
+    `parse_value` — which reads `""` as a CLEAR and answers `None`. The two
+    readings had made a text field holding `""` permanently unwritable over
+    the protocol, on a file `towerctl validate` exits 0 on: `expecting=null`
+    refused with "notes is '', not the null you expected — pass expecting=\"\"",
+    and `expecting=""` refused with "send null, not an empty string". The two
+    refusals named each other and no value ever reached the write. `""` is
+    reachable — `edit.set_field(p, "layer", "notes", "")` writes it, and older
+    files and hand edits carry it — so it has to be expressible, and the value
+    the mismatch offers is the value that works.
+
+    A length bound is NOT applied to it: `expecting` is a comparison operand,
+    not a write. A field that cannot hold `""` simply never matches one.
     """
     if value is None:
         return None
     if value == "" and entry.type == "text":
-        raise BadValue(
-            f"send null, not an empty string, to expect {entry.field} to be unset"
-        )
+        return ""
     return parse_value(entry, value)
 
 
@@ -912,11 +1053,19 @@ def apply(
 ) -> list[Diagnostic]:
     """Perform the write, through `edit.py` and nothing else.
 
-    Most entries go to `edit.set_field`, THE choke point, which is where the
-    conditional guards live and is why a newly guarded field needs no edit
-    here. `line.name` goes to `rename_line` because the id cascade is part of
-    what renaming a line MEANS, and the indexed rows go to their own verbs so
-    `_check_lines` sees every appliesTo.
+    Every entry but one goes to `edit.set_field`, THE choke point, which is
+    where the conditional guards and normalisers live and is why a newly
+    guarded field needs no edit here. `line.name` goes to `rename_line`
+    because the id cascade is part of what renaming a line MEANS.
+
+    It used to split three whole KINDS off to `edit.edit_retention`,
+    `edit.edit_sublimit` and `edit.edit_named_limit` by splatting
+    `{python_name: value}` into them. Their keyword parameters are a
+    hand-written copy of the three models, so `describe()` advertised fields
+    that always failed — see the comment on `_SETTERS`. A `setter` is now a
+    statement about ONE field, never about a kind, and the check those verbs
+    carried (`_check_lines` on appliesTo) lives at the choke point where a
+    clear, a value and every other field of the row all pass through it.
 
     Returns write-time advisories (currency's "nothing was converted"), which
     are statements about what the write did NOT do — not validator diagnostics,
@@ -925,23 +1074,7 @@ def apply(
     address = edit_address(entry, target, index)
     if entry.setter is None:
         return edit.set_field(program, entry.kind, entry.field, value, address, index)
-    if entry.setter == "rename_line":
-        edit.rename_line(program, str(target), str(value))
-        return []
-    kwargs: dict[str, Any] = {entry.path[-1]: value}
-    if entry.setter == "edit_named_limit":
-        edit.edit_named_limit(program, str(target), int(index or 0), **kwargs)
-        return []
-    if value is None:
-        # `None` means "leave this field alone" to edit_retention and
-        # edit_sublimit, so a CLEAR cannot be expressed through them. The only
-        # check they add is `_check_lines` on appliesTo, which is not
-        # clearable, so the choke point is the right path for a clear.
-        return edit.set_field(program, entry.kind, entry.field, value, address, index)
-    if entry.setter == "edit_retention":
-        edit.edit_retention(program, int(index or 0), **kwargs)
-    else:
-        edit.edit_sublimit(program, int(index or 0), **kwargs)
+    edit.rename_line(program, str(target), str(value))
     return []
 
 
@@ -973,6 +1106,12 @@ def describe(kind: str | None = None) -> dict[str, Any]:
             if entry.min_length is not None or entry.max_length is not None:
                 # Published, or the caller learns the bound only by tripping it.
                 payload["length"] = [entry.min_length, entry.max_length]
+            if entry.minimum is not None or entry.maximum is not None:
+                # Same reason, for the numbers. `layer.limit` has no bound and
+                # publishes none, which is the honest answer: a negative limit
+                # is a draft state the validator reports, not a write the
+                # surface refuses.
+                payload["bounds"] = [entry.minimum, entry.maximum]
             if entry.guard is not None:
                 payload["guard"] = entry.guard
             fields[field] = payload

@@ -14,13 +14,16 @@ from __future__ import annotations
 
 import json
 import re
+from contextlib import ExitStack
 from datetime import date
 from pathlib import Path
+from typing import Annotated
 
 import pytest
+from conftest import model_field
 from pydantic import BaseModel, Field
 
-from towerkit import mcpsurface
+from towerkit import edit, mcpsurface
 from towerkit.model import (
     MONEY,
     Layer,
@@ -498,8 +501,6 @@ def test_no_enum_repr_leaks_into_a_refusal() -> None:
     is exactly the shape that passes for the wrong reason.)
     """
     entry = mcpsurface.SURFACE["program"]["placement"]
-    from towerkit.model import Placement
-
     for shown in (mcpsurface.render_value(entry, Placement.BOUND),
                   mcpsurface.expecting_literal(entry, Placement.BOUND),
                   mcpsurface.mismatch_message(entry, "program", Placement.BOUND, "proposed")):
@@ -539,40 +540,6 @@ def _offered(message: str) -> str:
     return found.group(1)
 
 
-def test_every_offered_literal_is_json_the_field_takes_back() -> None:
-    """One case per type, because `expecting_literal` branches on type and the
-    three that were wrong — money, date, text — were wrong in the same way.
-    Lists and booleans were already JSON, which is what made the bug look like
-    a rendering choice rather than a defect.
-
-    `text` is the one that could not terminate: the refusal read `currency is
-    'USD', not the 'ZZZ' you expected — pass expecting='USD'`, and sending
-    'USD' produced the identical sentence, forever.
-
-    Mutation drill (2026-08-19): restored the old `expecting_literal` body.
-    Failed on the first case with `json.decoder.JSONDecodeError: Expecting
-    value: line 1 column 1 (char 0)` — the literal the refusal offers is not
-    JSON, so there is nothing a client could send. Restored.
-    """
-    cases: list[tuple[str, object, object]] = [
-        ("layer.attach", 5_000_000, 5_000_000),
-        ("program.period.start", date(2026, 6, 1), date(2026, 6, 1)),
-        ("program.currency", "USD", "USD"),
-        ("layer.name", "O'Neill \"1st\" Excess", "O'Neill \"1st\" Excess"),
-        ("layer.states", ["NY", "NJ"], ["NY", "NJ"]),
-        ("program.render.showTotals", True, True),
-        ("participant.share_bps", 3500, 3500),
-        ("program.placement", Placement.BOUND, "bound"),
-        ("layer.premium", None, None),
-    ]
-    for key, current, expected in cases:
-        kind, _, field = key.partition(".")
-        entry = mcpsurface.SURFACE[kind][field]
-        literal = mcpsurface.expecting_literal(entry, current)
-        sent = json.loads(literal)
-        assert mcpsurface.parse_expecting(entry, sent) == expected, key
-
-
 def test_a_refused_literal_pasted_back_ends_the_loop() -> None:
     """The text case end to end, in the shape the client experiences it:
     refusal in, literal out, literal back in, no refusal.
@@ -597,12 +564,25 @@ def test_expecting_is_compared_on_the_normalised_value() -> None:
     assert not mcpsurface.compare_values(entry, mcpsurface.parse_expecting(entry, "2m"), 5_000_000)
 
 
-def test_expecting_null_is_the_only_way_to_guard_a_field_that_is_none() -> None:
+def test_null_and_the_empty_string_are_two_different_expectations() -> None:
+    """`null` expects UNSET; `""` expects the empty string, which is a value a
+    text field can hold. They used to be the same question and it had no
+    answer: `parse_expecting` refused `""` outright while the mismatch message
+    for a field holding `""` offered `pass expecting=""`, so the two refusals
+    named each other and the field could never be written.
+
+    Mutation drill (2026-08-19): restored the `raise BadValue("send null, not
+    an empty string, …")` branch in `parse_expecting`. Failed with
+    `towerkit.mcpsurface.BadValue: send null, not an empty string, to expect
+    policyNumber to be unset` on the first assertion. Restored.
+    """
     entry = mcpsurface.SURFACE["layer"]["policyNumber"]
     assert mcpsurface.parse_expecting(entry, None) is None
     assert mcpsurface.compare_values(entry, None, None)
-    with pytest.raises(mcpsurface.BadValue, match="null"):
-        mcpsurface.parse_expecting(entry, "")
+    # Neither one answers for the other, and the mismatch says which is which.
+    assert mcpsurface.parse_expecting(entry, "") == ""
+    assert not mcpsurface.compare_values(entry, mcpsurface.parse_expecting(entry, ""), None)
+    assert not mcpsurface.compare_values(entry, None, "")
     assert not mcpsurface.compare_values(entry, mcpsurface.parse_expecting(entry, "None"), None)
 
 
@@ -783,21 +763,49 @@ def test_the_guarded_layer_fields_route_through_the_choke_point() -> None:
 
 
 def test_retention_and_sublimit_writes_check_the_line_ids() -> None:
-    """`appliesTo` reaches `_check_lines` only through `edit_retention` /
-    `edit_sublimit`; a bare setattr writes unknown line ids into the file."""
-    assert mcpsurface.SURFACE["retention"]["appliesTo"].setter == "edit_retention"
-    assert mcpsurface.SURFACE["sublimit"]["appliesTo"].setter == "edit_sublimit"
-    assert mcpsurface.SURFACE["named_limit"]["amount"].setter == "edit_named_limit"
+    """`appliesTo` reaches `_check_lines`, and it reaches it at the CHOKE
+    POINT rather than through a kind-wide setter.
+
+    It used to get there because `_SETTERS` routed `retention.*` and
+    `sublimit.*` into `edit.edit_retention` / `edit.edit_sublimit` — whose
+    keyword parameters are a hand-written copy of the two models, so every
+    other field of both kinds paid for this one check with a `TypeError` the
+    moment a model grew. The check is a rule about ONE field now
+    (`edit._NORMALISERS`), so it is asserted by DRIVING it, not by reading a
+    setter name off the entry.
+
+    Mutation drill (2026-08-19): removed the `("retention", "appliesTo")` row
+    from `edit._NORMALISERS`. Failed with `DID NOT RAISE <class 'KeyError'>` —
+    `['nope']` was written into the file. Restored. Deleting the
+    `("sublimit", "appliesTo")` row failed the sublimit half the same way, and
+    taking the `_NORMALISERS` call out of `set_field` failed both.
+    """
+    for kind in ("retention", "sublimit"):
+        assert mcpsurface.SURFACE[kind]["appliesTo"].setter is None
+    assert mcpsurface.SURFACE["named_limit"]["amount"].setter is None
 
     program = Program(
         insured="Atomic", program="Casualty", placement="bound",
         period=Period(start=date(2026, 1, 1), end=date(2027, 1, 1)),
         lines=[Line(id="gl", name="General Liability")],
         retentions=[Retention(appliesTo=["gl"], type="sir", amount=100_000)],
+        sublimits=[Sublimit(name="Flood", amount=1, appliesTo=["gl"])],
     )
-    entry = mcpsurface.SURFACE["retention"]["appliesTo"]
-    with pytest.raises(KeyError, match="unknown line"):
-        mcpsurface.apply(program, entry, None, 0, ["nope"])
+    for kind in ("retention", "sublimit"):
+        entry = mcpsurface.SURFACE[kind]["appliesTo"]
+        with pytest.raises(KeyError, match="unknown line"):
+            mcpsurface.apply(program, entry, None, 0, ["nope"])
+    assert program.retentions[0].applies_to == ["gl"], "nothing was written"
+    assert program.sublimits[0].applies_to == ["gl"]
+
+    # And the rest of `_check_lines`: duplicates dropped, order kept. This is
+    # what makes it a NORMALISER and not a guard, and the only reason the
+    # value cannot simply be checked and passed through.
+    program.lines.append(Line(id="auto", name="Auto"))
+    mcpsurface.apply(
+        program, mcpsurface.SURFACE["retention"]["appliesTo"], None, 0, ["auto", "gl", "auto"]
+    )
+    assert program.retentions[0].applies_to == ["auto", "gl"]
 
 
 def test_every_setter_named_by_an_entry_exists_in_edit_py() -> None:
@@ -878,3 +886,402 @@ def test_period_and_render_are_not_kinds() -> None:
 def test_the_module_level_surface_is_the_default_build() -> None:
     assert mcpsurface.build_surface() == mcpsurface.SURFACE
     assert NamedLimit  # imported for the KIND_MODELS assertion above
+
+
+# --- the advertised capability, DRIVEN ----------------------------------------
+#
+# `describe()` is the only published statement of what can be written, and
+# until 2026-08-19 three whole kinds could not honour it. `mcpsurface._SETTERS`
+# routed every field of `retention`, `sublimit` and `named_limit` through
+# `edit.edit_retention`, `edit.edit_sublimit` and `edit.edit_named_limit` as
+# `**{python_name: value}` — and those three functions' keyword parameters are
+# a hand-written enumeration of the three models. A field added to `Retention`
+# was advertised `{'type': 'text', 'required': False, 'clearable': True}` and
+# came back, over a real client, as `edit_retention() got an unexpected keyword
+# argument 'broker_ref'`.
+#
+# Nothing in the suite could see it. Every test above INSPECTS the surface —
+# the entry's type, its setter name, its bounds — and an entry is a promise,
+# not a capability. So these two DRIVE it: every field of every kind is
+# written, and the value is read back off the model.
+
+
+def _full_program() -> Program:
+    """One row of every kind, so every advertised field has somewhere to land —
+    including the two containers (`program.render`, `layer.period`), which are
+    reachable only when the parent object exists."""
+    return Program(
+        insured="Atomic Corp",
+        program="Casualty",
+        placement="bound",
+        period=Period(start=date(2026, 1, 1), end=date(2027, 1, 1)),
+        render=RenderSettings(),
+        lines=[Line(id="gl", name="General Liability"), Line(id="auto", name="Auto")],
+        layers=[
+            Layer(
+                id="primary",
+                name="Primary",
+                appliesTo=["gl"],
+                attach=0,
+                limit=5_000_000,
+                period=Period(start=date(2026, 1, 1), end=date(2027, 1, 1)),
+                participants=[Participant(carrier="Zurich", share_bps=BPS_SCALE)],
+                namedLimits=[NamedLimit(name="Sexual Abuse", amount=1_000_000)],
+            )
+        ],
+        retentions=[Retention(appliesTo=["gl"], type="sir", amount=250_000)],
+        sublimits=[Sublimit(name="Flood", amount=25_000_000, appliesTo=["gl"])],
+    )
+
+
+def _within(entry: mcpsurface.Entry, value: int) -> bool:
+    low, high = entry.minimum, entry.maximum
+    return (low is None or value >= low) and (high is None or value <= high)
+
+
+def _holdable(entry: mcpsurface.Entry, line_ids: list[str]) -> list[object]:
+    """Every value this entry's ADVERTISED type and its OWN published bounds
+    say the field can hold — generated, never listed.
+
+    A hand-written case list cannot fail for a value nobody thought of, which
+    is exactly how two holes in the offered `expecting` literal survived a
+    green suite: the empty string (which `parse_expecting` refused while
+    `expecting_literal` offered it) and a negative amount (which
+    `expecting_literal` offered as '-$5' and `parse_money` refused). Both are
+    generated here from what the surface itself publishes.
+    """
+    if entry.type == "text":
+        low, high = entry.min_length or 0, entry.max_length
+        sample = "O'Neill \"1st\" Excess"
+        if high is not None:
+            sample = sample[:high]
+        sample += "x" * max(0, low - len(sample))
+        return ([""] if low == 0 else []) + [sample]
+    if entry.type == "money":
+        # -5 only where the MODEL allows one: `layer.limit` carries no `ge` on
+        # purpose, and `attach` carries `ge=0`.
+        return [value for value in (0, 2_340_000, -5) if _within(entry, value)]
+    if entry.type == "share_bps":
+        return [value for value in (0, 3_500, BPS_SCALE) if _within(entry, value)]
+    if entry.type == "date":
+        return [date(2026, 6, 1), date(2027, 1, 1)]
+    if entry.type == "enum":
+        return list(entry.values or ())
+    if entry.type == "bool":
+        return [True, False]
+    return [[], list(line_ids)]
+
+
+def _writable(entry: mcpsurface.Entry, line_ids: list[str]) -> object:
+    """One value the MODEL will also take: `appliesTo` is `min_length=1` and
+    `name` is `min_length=1`, so the empty forms `_holdable` generates are
+    states to EXPECT, not values to write."""
+    values = _holdable(entry, line_ids)
+    if entry.type in ("text", "list_of_strings"):
+        return values[-1]
+    if entry.type == "money":
+        return next((v for v in (2_340_000, 0) if _within(entry, v)), values[0])
+    return values[0]
+
+
+def _address(kind: str, program: Program) -> tuple[str | None, int | None]:
+    """The address for row 0 of a kind, from `mcpsurface.TARGET` — the same
+    table `describe()` publishes to the caller."""
+    wants = mcpsurface.TARGET[kind]
+    target = None
+    if "target" in wants:
+        target = program.lines[0].id if kind == "line" else program.layers[0].id
+    return target, (0 if "index" in wants else None)
+
+
+def _row(program: Program, kind: str, target: str | None, index: int | None) -> object:
+    """Where the row lives, stated INDEPENDENTLY of `edit._entity`: a test that
+    reads back through the addressing it is testing cannot notice a write that
+    landed on the wrong row."""
+    if kind == "program":
+        return program
+    if kind == "line":
+        return next(line for line in program.lines if line.id == target)
+    if kind == "retention":
+        return program.retentions[index or 0]
+    if kind == "sublimit":
+        return program.sublimits[index or 0]
+    layer = next(ly for ly in program.layers if ly.id == target)
+    if kind == "layer":
+        return layer
+    if kind == "participant":
+        return layer.participants[index or 0]
+    return layer.named_limits[index or 0]
+
+
+def _stored(row: object, entry: mcpsurface.Entry) -> object:
+    value: object = row
+    for name in entry.path:
+        value = getattr(value, name)
+    return value
+
+
+def _drive(surface: dict[str, dict[str, mcpsurface.Entry]], program: Program) -> tuple[
+    list[str], dict[str, str]
+]:
+    """Write every field the surface advertises. Returns what landed and what a
+    guard refused."""
+    written: list[str] = []
+    refused: dict[str, str] = {}
+    for kind, fields in surface.items():
+        for field, entry in fields.items():
+            key = f"{kind}.{field}"
+            target, index = _address(kind, program)
+            value = _writable(entry, program.line_ids())
+            try:
+                mcpsurface.apply(program, entry, target, index, value)
+            except edit.GuardRefused as exc:
+                refused[key] = str(exc)
+                continue
+            # Re-addressed AFTER the write: setting `line.name` re-slugs the id.
+            target, index = _address(kind, program)
+            stored = _stored(_row(program, kind, target, index), entry)
+            assert mcpsurface.compare_values(entry, stored, value), (
+                f"{key} advertised writable, the write reported success, and the "
+                f"model holds {stored!r} instead of {value!r}"
+            )
+            # The value that just landed has to be EXPRESSIBLE, or the next
+            # compare-and-set against it cannot be written. Checked on real
+            # stored state — which is where the enum instances and the parsed
+            # dates are, rather than the wire forms `_holdable` produces.
+            offered = json.loads(mcpsurface.expecting_literal(entry, stored))
+            assert mcpsurface.compare_values(
+                entry, mcpsurface.parse_expecting(entry, offered), stored
+            ), f"{key} holds a value its own refusal could not offer back"
+            written.append(key)
+    return written, refused
+
+
+def test_every_advertised_field_is_actually_writable() -> None:
+    """The promise `describe()` makes, kept for all seven kinds.
+
+    Mutation drill (2026-08-19): put the `"retention.*": "edit_retention"`,
+    `"sublimit.*": "edit_sublimit"` and `"named_limit.*": "edit_named_limit"`
+    rows back in `mcpsurface._SETTERS` with `apply`'s kwargs splat. Failed with
+    `TypeError: edit_retention() got an unexpected keyword argument 'vehicle'`
+    — an advertised field, on today's model, that the write path cannot take.
+    Restored.
+    """
+    program = _full_program()
+    written, refused = _drive(mcpsurface.SURFACE, program)
+
+    total = sum(len(fields) for fields in mcpsurface.SURFACE.values())
+    assert len(written) + len(refused) == total
+    assert len(written) > 30, "the surface stopped producing fields; this passes vacuously"
+
+    # A refusal is only acceptable where `describe()` warned about it, and on
+    # this program exactly one field does: `states` on a dollar-limited layer.
+    # An exact set rather than a floor, because a NEW guard on a field callers
+    # were told is writable is a contract change someone has to look at.
+    assert set(refused) == {"layer.states"}, refused
+    for key in refused:
+        kind, _, field = key.partition(".")
+        assert mcpsurface.SURFACE[kind][field].guard is not None, (
+            f"{key} refused the write with nothing in describe() warning it would"
+        )
+
+
+def test_a_field_the_surface_has_never_seen_is_writable_on_every_kind() -> None:
+    """The half that cannot pass by reproducing today's field set.
+
+    Adding `brokerRef`/`brokerFee` to every model is what editing `model.py`
+    does, and it is the reproduction the verifier ran: `describe` advertised
+    `brokerRef: {'type': 'text', 'required': False, 'clearable': True}` on
+    `retention` and the write came back `edit_retention() got an unexpected
+    keyword argument 'broker_ref'` over a real `mcp.client.Client`.
+
+    Mutation drill (2026-08-19): restored the three `_SETTERS` wildcards and
+    `apply`'s splat. Failed with `TypeError: edit_retention() got an unexpected
+    keyword argument 'broker_ref'`. Restored. Removing only the `named_limit.*`
+    row failed on `retention.brokerRef` and `sublimit.brokerRef` alone, so each
+    kind is carrying its own weight here.
+    """
+    models = [Program, Line, Layer, Participant, Retention, Sublimit, NamedLimit]
+    with ExitStack() as stack:
+        for cls in models:
+            stack.enter_context(
+                model_field(cls, "broker_ref", str | None, Field(alias="brokerRef", default=None))
+            )
+            stack.enter_context(
+                model_field(cls, "broker_fee", Money | None, Field(alias="brokerFee", default=None))
+            )
+        # The surface is a module-level derivation computed at import; editing
+        # `model.py` for real recomputes it on the next start, and this is that
+        # recomputation. Nothing in `mcpsurface.py` changes.
+        surface = mcpsurface.build_surface()
+        written, _refused = _drive(surface, _full_program())
+
+    for kind in mcpsurface.KINDS:
+        for field in ("brokerRef", "brokerFee"):
+            assert f"{kind}.{field}" in written, (
+                f"{kind}.{field} is advertised by describe() and the write did not land"
+            )
+
+
+def test_every_offered_literal_is_json_the_field_takes_back() -> None:
+    """The whole surface, and every value its own published type and bounds
+    say a field can hold — not a case list.
+
+    This was nine hand-written cases, one per type, and it was the same shape
+    as the money-key table already killed in `tests/`: it cannot fail for a
+    value nobody listed. Two states failed and it passed anyway.
+
+    - A text field holding `""` was PERMANENTLY UNWRITABLE over the protocol,
+      on a file `towerctl validate` exits 0 on: `expecting=null` refused with
+      `notes is '', not the null you expected — pass expecting=""`, and
+      `expecting=""` refused with `send null, not an empty string`. The two
+      refusals named each other.
+    - `layer.limit` carries no `ge` deliberately, so -5 is a state it can
+      hold; the mismatch offered `expecting="-$5"` and `parse_money` refuses a
+      negative outright, so only the bare integer worked.
+
+    Mutation drill (2026-08-19): restored `parse_expecting`'s `raise BadValue`
+    on `""`. Failed on `program.notes` with `send null, not an empty string, to
+    expect notes to be unset`. Restored. Then removed the minus-sign branch
+    from `_parse_money`. Failed on `layer.limit` with `cannot parse money
+    value: '-$5'`. Restored. (Both mutations leave the old nine-case list
+    green, which is the point.)
+    """
+    line_ids = ["gl", "auto"]
+    checked = 0
+    for kind, fields in mcpsurface.SURFACE.items():
+        for field, entry in fields.items():
+            # `null` for every entry, clearable or not: a field can be unset on
+            # a half-built draft and the guard has to be expressible either way.
+            for value in [*_holdable(entry, line_ids), None]:
+                literal = mcpsurface.expecting_literal(entry, value)
+                sent = json.loads(literal)  # a refusal that is not JSON is unsendable
+                back = mcpsurface.parse_expecting(entry, sent)
+                assert mcpsurface.compare_values(entry, back, value), (
+                    f"{kind}.{field} holding {value!r} offers expecting={literal}, "
+                    f"which comes back as {back!r}"
+                )
+                checked += 1
+    assert checked > 100, "the generator stopped producing values; this passes vacuously"
+
+
+# --- the model's own numeric bounds -------------------------------------------
+
+
+def test_a_money_field_refuses_what_its_model_bound_refuses_and_names_the_bound() -> None:
+    """`attach` is `Money`, which is `Annotated[int, Field(ge=0), MONEY]`, and
+    `value=-1` used to reach the client as pydantic's own four-line repr with a
+    documentation URL in it — a refusal naming no value that would be
+    accepted. This is the defect the `Program.currency` `min_length` fix closed
+    for strings, left open on the numbers.
+
+    Both spellings, because they disagreed: the string '-5' was refused
+    cleanly by `parse_money` while the integer -5 went straight through to
+    pydantic.
+
+    Mutation drill (2026-08-19): made `_bounds` return `(None, None)`. Failed
+    with `DID NOT RAISE` on the first assertion. Restored.
+    """
+    attach = mcpsurface.SURFACE["layer"]["attach"]
+    assert (attach.minimum, attach.maximum) == (0, None)
+    for wire in (-1, "-$1", "-1"):
+        with pytest.raises(mcpsurface.BadValue, match=r"\$0 or more"):
+            mcpsurface.parse_value(attach, wire)
+
+
+def test_a_money_field_with_no_bound_takes_a_negative_in_either_spelling() -> None:
+    """`layer.limit` carries no `ge` ON PURPOSE — positivity is a semantic rule
+    `validate.py` reports so a draft stays loadable — so -5 is a state the
+    field can hold, and every spelling of it has to work or the refusal that
+    offers `-$5` is a loop.
+
+    Mutation drill (2026-08-19): removed the minus-sign branch from
+    `_parse_money`. Failed with `BadValue: cannot parse money value: '-$5'`.
+    Restored.
+    """
+    limit = mcpsurface.SURFACE["layer"]["limit"]
+    assert (limit.minimum, limit.maximum) == (None, None)
+    assert mcpsurface.parse_value(limit, -5) == -5
+    assert mcpsurface.parse_value(limit, "-$5") == -5
+    assert mcpsurface.parse_value(limit, "-5m") == -5_000_000
+    assert mcpsurface.render_value(limit, -5) == "-$5"
+
+
+def test_the_bound_is_read_off_the_model_not_declared_here() -> None:
+    """Asked about a field the surface has never seen, with a bound no money
+    field in `model.py` carries — the only question a name-keyed table cannot
+    answer.
+
+    Mutation drill (2026-08-19): stopped `_entry` carrying the bound onto the
+    entry. Failed with `assert (None, None) == (1000, 9000)`. Removing
+    `_flatten`'s `_expanded` step instead failed the same assertion, because
+    an OPTIONAL money field files its constraints one level deeper. Both
+    restored.
+    """
+
+    class LayerWithAMinimumFee(Layer):
+        broker_fee: Annotated[int, Field(ge=1_000, le=9_000), MONEY] | None = Field(
+            alias="brokerFee", default=None
+        )
+
+    surface = mcpsurface.build_surface({**mcpsurface.KIND_MODELS, "layer": LayerWithAMinimumFee})
+    fee = surface["layer"]["brokerFee"]
+    assert (fee.minimum, fee.maximum) == (1_000, 9_000)
+    with pytest.raises(mcpsurface.BadValue, match=r"\$1,000 to \$9,000"):
+        mcpsurface.parse_value(fee, "500")
+    assert mcpsurface.parse_value(fee, "5k") == 5_000
+    assert surface["layer"]["brokerFee"].type == "money"
+
+
+def test_an_optional_money_field_carries_the_same_bound_as_a_required_one() -> None:
+    """`Money` and `Money | None` are the same annotation with the same rules;
+    pydantic just files their metadata in two different places — flattened into
+    `FieldInfo.metadata` when the field is required, left on the inner
+    `Annotated`'s own `__metadata__` when it is optional.
+
+    `_flatten` already knew that for the MONEY tag and not for the bounds, so
+    `layer.premium` advertised no minimum at all while `layer.attach`, the same
+    `Money`, advertised `ge=0`. The type was right and the bound was gone,
+    which is why nothing noticed.
+
+    Mutation drill (2026-08-19): removed the `_expanded` FieldInfo expansion
+    from `_flatten`. Failed with `assert None == 0`. Restored.
+    """
+    premium = mcpsurface.SURFACE["layer"]["premium"]
+    assert premium.minimum == 0
+    with pytest.raises(mcpsurface.BadValue, match=r"\$0 or more"):
+        mcpsurface.parse_value(premium, -1)
+    assert mcpsurface.parse_value(premium, None) is None, "clearing still works"
+
+
+def test_describe_publishes_the_numeric_bounds_it_enforces() -> None:
+    """A bound the caller learns only by tripping it is a bound the caller
+    trips. `limit` publishes none, which is the honest answer.
+
+    Mutation drill (2026-08-19): removed the `bounds` block from `describe`.
+    Failed with `KeyError: 'bounds'`. Restored.
+    """
+    fields = mcpsurface.describe("layer")["kinds"]["layer"]["fields"]
+    assert fields["attach"]["bounds"] == [0, None]
+    assert "bounds" not in fields["limit"]
+    share = mcpsurface.describe("participant")["kinds"]["participant"]["fields"]["share_bps"]
+    assert share["bounds"] == [0, BPS_SCALE]
+
+
+def test_the_share_range_is_the_models_and_not_a_copy_of_it() -> None:
+    """`parse_value` spelled `0 <= value <= BPS_SCALE` in its own body, which
+    is `Participant.share_bps`'s `ge`/`le` written down a second time.
+
+    Mutation drill (2026-08-19): changed `Participant.share_bps` to
+    `Field(ge=0, le=5_000)` in `model.py`. This test failed on the 9000 case
+    with `DID NOT RAISE`; with the copy restored in `parse_value` it would have
+    passed while the model refused the write. Restored.
+    """
+    entry = mcpsurface.SURFACE["participant"]["share_bps"]
+    assert (entry.minimum, entry.maximum) == (
+        Participant.model_fields["share_bps"].metadata[0].ge,
+        Participant.model_fields["share_bps"].metadata[1].le,
+    )
+    for refused in (-1, BPS_SCALE + 1):
+        with pytest.raises(mcpsurface.BadValue, match="0 to 10000"):
+            mcpsurface.parse_value(entry, refused)

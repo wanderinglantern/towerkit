@@ -8,9 +8,11 @@ API instead of extending it."""
 from __future__ import annotations
 
 import subprocess
+from enum import Enum
 from pathlib import Path
 
 import pytest
+from pydantic import BaseModel, Field
 
 REPO = Path(__file__).parent.parent
 
@@ -541,3 +543,502 @@ def test_reconciling_a_property_keeps_the_hand_authored_half_in_place() -> None:
         "items": {"type": "string", "minLength": 1},
     }
     assert list(merged) == ["description", "type", "minItems", "items"]
+
+
+# --- the GENERATOR's own logic, not only the document it produced ------------
+#
+# Every test above compares the CHECKED-IN DOCUMENT to the models. That is the
+# right question and it is not the whole one: on an already-synced document
+# most of `schemagen`'s logic is a no-op, so a mutation to the logic changes
+# nothing anybody can see. Seven mutations were applied 2026-08-19 and FOUR
+# survived the entire suite AND left `tools/sync_schema.py --check` printing
+# "schema is in sync with model.py":
+#
+# - `_required_for` restored to FILTERING instead of deriving — the exact
+#   defect the module was rewritten to kill;
+# - `enum` re-derivation skipped;
+# - `node["properties"] = {**properties, **existing}`, so the property set is
+#   no longer re-derived;
+# - the undeclared-`STRICTER_THAN_MODEL` raise removed.
+#
+# The invariants are not lost — each shows up one step later, the next time
+# somebody edits a model. But the state in between is precisely what this
+# branch exists to end: the tool says "in sync", pytest says stale, and the
+# assertion message tells the maintainer to run the tool that just lied.
+#
+# So these ask what the generator PRODUCES, from a synthetic model and a
+# synthetic document that are deliberately NOT in sync. A change to the logic
+# then fails here even while the checked-in schema is perfectly correct.
+
+
+class _Colour(Enum):
+    RED = "red"
+    BLUE = "blue"
+
+
+class _Thing(BaseModel):
+    """A model whose only job is to be out of step with `_synthetic_doc`."""
+
+    alpha: str = Field(min_length=1)
+    beta: str | None = None
+    colour: _Colour = _Colour.RED
+
+
+def _synthetic_doc(properties: dict, required: list[str] | None = None) -> dict:
+    node: dict = {"type": "object", "additionalProperties": False, "properties": properties}
+    if required is not None:
+        node["required"] = required
+    return {"$defs": {"thing": node}}
+
+
+def _synthetic_sync(monkeypatch, doc: dict) -> dict:
+    """`sync_document` over `_Thing` alone, at `$defs/thing`.
+
+    Patching `SCHEMA_MODELS` rather than adding a real model keeps the
+    synthetic shape out of the shipped schema: this is a test about the
+    derivation, not about towerkit's own document.
+    """
+    from towerkit import schemagen
+
+    monkeypatch.setattr(schemagen, "SCHEMA_MODELS", {"$defs/thing": _Thing})
+    return schemagen.sync_document(doc)["$defs"]["thing"]
+
+
+def test_the_generator_adds_a_required_key_the_document_lacks(monkeypatch) -> None:
+    """`required` is DERIVED from `FieldInfo.is_required()`, never filtered
+    from what the document already says. Filtering was the 2026-08-19 defect:
+    nothing ever ADDED, so a new required field on a model was simply not
+    required by the schema and `--check` stayed clean.
+
+    The document here says `required: []` and the model says `alpha` has no
+    default, so the generator must put it back.
+
+    Mutation drill (2026-08-19): replaced the derivation in
+    `schemagen._required_for` with the filter it used to be —
+    `wanted = [k for k in list(node.get("required") or []) if k in properties]`.
+    Failed with `AssertionError: schemagen.sync_document did not derive
+    required from the model: got None`. Restored.
+    """
+    node = _synthetic_sync(
+        monkeypatch,
+        _synthetic_doc(
+            {
+                "alpha": {"type": "string", "minLength": 1},
+                "beta": {"type": "string"},
+                "colour": {"enum": ["red", "blue"]},
+            },
+            required=[],
+        ),
+    )
+    assert node.get("required") == ["alpha"], (
+        f"schemagen.sync_document did not derive required from the model: "
+        f"got {node.get('required')!r}"
+    )
+
+
+def test_the_generator_re_derives_a_stale_enums_values(monkeypatch) -> None:
+    """Adding a member to an enum is a one-line change nobody calls a schema
+    change, and re-deriving the VALUE LIST is the only thing that catches it.
+    `test_every_schema_enum_lists_the_models_members` above proves the
+    checked-in document agrees today; this proves the generator would FIX it,
+    which is what the assertion message there promises.
+
+    Mutation drill (2026-08-19): removed `"enum"` from
+    `schemagen.DERIVED_KEYWORDS` and skipped its re-derivation, by making the
+    merge loop `if key == "enum" and "enum" in out: continue`. Failed with
+    `AssertionError: schemagen.sync_document did not re-derive the enum:
+    ['red'] assert ['red'] == ['red', 'blue']`. Restored.
+    """
+    node = _synthetic_sync(
+        monkeypatch,
+        _synthetic_doc(
+            {
+                "alpha": {"type": "string", "minLength": 1},
+                "beta": {"type": "string"},
+                "colour": {"description": "Kept.", "enum": ["red"]},
+            }
+        ),
+    )
+    assert node["properties"]["colour"]["enum"] == ["red", "blue"], (
+        f"schemagen.sync_document did not re-derive the enum: "
+        f"{node['properties']['colour'].get('enum')}"
+    )
+    assert node["properties"]["colour"]["description"] == "Kept."
+
+
+def test_the_generator_drops_a_property_the_model_no_longer_has(monkeypatch) -> None:
+    """The property SET is re-derived, not merged into. A property whose model
+    field is gone is a key the schema still accepts and nothing can write.
+
+    Mutation drill (2026-08-19): changed `schemagen.sync_document`'s
+    `node["properties"] = properties` to
+    `node["properties"] = {**properties, **existing}`. Failed with
+    `AssertionError: schemagen.sync_document kept a property the model does
+    not have: ['alpha', 'beta', 'colour', 'ghost']`. Restored.
+    """
+    node = _synthetic_sync(
+        monkeypatch,
+        _synthetic_doc(
+            {
+                "alpha": {"type": "string", "minLength": 1},
+                "ghost": {"type": "string"},
+                "beta": {"type": "string"},
+                "colour": {"enum": ["red", "blue"]},
+            }
+        ),
+    )
+    assert list(node["properties"]) == ["alpha", "beta", "colour"], (
+        f"schemagen.sync_document kept a property the model does not have: "
+        f"{list(node['properties'])}"
+    )
+
+
+def test_the_generator_re_derives_a_property_the_document_already_has(monkeypatch) -> None:
+    """The other half of the same mutation: an EXISTING property is
+    reconciled, not passed through, so a retyped model field is corrected
+    rather than left describing the old type — while its prose survives.
+
+    Mutation drill (2026-08-19): changed `schemagen.sync_document`'s
+    `node["properties"] = properties` to
+    `node["properties"] = {**properties, **existing}`. Failed with
+    `AssertionError: schemagen.sync_document did not re-derive an existing
+    property: {'description': 'Kept.', 'type': 'integer'}`. Restored.
+    """
+    node = _synthetic_sync(
+        monkeypatch,
+        _synthetic_doc(
+            {
+                "alpha": {"description": "Kept.", "type": "integer"},
+                "beta": {"type": "string"},
+                "colour": {"enum": ["red", "blue"]},
+            }
+        ),
+    )
+    assert node["properties"]["alpha"] == {"description": "Kept.", "type": "string"}, (
+        f"schemagen.sync_document did not re-derive an existing property: "
+        f"{node['properties']['alpha']}"
+    )
+
+
+def test_an_undeclared_stricter_than_model_required_entry_raises() -> None:
+    """A schema that demands a key the model defaults REFUSES a file
+    `model.py` loads. It is either a leftover from making the field optional
+    or a deliberate file-format rule, and only a person can say which — so the
+    generator refuses rather than reconciling it away, and
+    `STRICTER_THAN_MODEL` is where the deliberate ones are written down.
+
+    `test_no_schema_required_entry_is_optional_on_the_model` above asks this
+    of the checked-in document, where it is a no-op; this asks the generator.
+
+    Mutation drill (2026-08-19): replaced the computation in
+    `schemagen._required_for` with `stray = []`. Failed with `Failed: DID NOT
+    RAISE <class 'towerkit.schemagen.SchemaDerivationError'>`. Restored.
+    """
+    from towerkit.schemagen import SchemaDerivationError, _required_for
+
+    properties = {"alpha": {"type": "string"}, "beta": {"type": "string"}}
+    with pytest.raises(SchemaDerivationError) as caught:
+        _required_for(
+            "$defs/thing", "$defs/thing", _Thing, properties, {"required": ["alpha", "beta"]}
+        )
+    assert "beta" in str(caught.value)
+    assert "STRICTER_THAN_MODEL" in str(caught.value)
+    # and the declared half is accepted, so the raise is about the DECLARATION
+    # and not about strictness itself.
+    from towerkit import schemagen
+
+    assert _required_for(
+        "$defs/thing", "$defs/thing", _Thing, properties, {"required": ["alpha"]}
+    ) == ["alpha"]
+    assert schemagen.STRICTER_THAN_MODEL[""] == frozenset(
+        # A pin, so this test's premise stays true. `sublimits` joined the other
+        # three on 2026-08-19: it had been left out of the schema's root `required`
+        # by oversight, not by a distinction.
+        {"lines", "layers", "retentions", "sublimits"}
+    )
+
+
+def test_every_stricter_than_model_entry_is_still_a_choice_somebody_made() -> None:
+    """An entry here suppresses the refusal above, so a stale one is a
+    suppression nobody would notice. Each must name a real disk key of the
+    model at that pointer AND a field the model actually makes optional — once
+    the model requires it, the derivation covers it and the entry is silently
+    excusing nothing.
+
+    Mutation drills (2026-08-19), all three on
+    `schemagen.STRICTER_THAN_MODEL[""]`, restored after each:
+
+    - added `"notes"` (optional on the model, absent from the schema's
+      `required`) — `AssertionError: ... $: notes is not required by the
+      schema`;
+    - added `"insured"` (already required by the model, so the entry excuses
+      nothing) — `AssertionError: ... $: insured is required by the model, so
+      the entry excuses nothing`;
+    - added `"ghost"` — `AssertionError: ... $: ghost is not a field of
+      Program`.
+    """
+    from towerkit.model import disk_fields
+    from towerkit.schemagen import SCHEMA_MODELS, STRICTER_THAN_MODEL, _at
+
+    doc = _schema_document()
+    stale = []
+    for pointer, keys in STRICTER_THAN_MODEL.items():
+        model = SCHEMA_MODELS[pointer]
+        where = pointer or "$"
+        required_by_model = {key for key, _, info in disk_fields(model) if info.is_required()}
+        known = {key for key, _, _ in disk_fields(model)}
+        schema_required = set(_at(doc, pointer).get("required", []))
+        for key in sorted(keys):
+            if key not in known:
+                stale.append(f"{where}: {key} is not a field of {model.__name__}")
+            elif key in required_by_model:
+                stale.append(
+                    f"{where}: {key} is required by the model, so the entry excuses nothing"
+                )
+            elif key not in schema_required:
+                stale.append(f"{where}: {key} is not required by the schema")
+    assert not stale, (
+        "STRICTER_THAN_MODEL entries the model already requires, or that are not "
+        "fields at all: " + ", ".join(stale)
+    )
+
+
+# --- what "stranded" means, checked against the validator validate.py loads --
+#
+# The first cut keyed the check off `out["type"]`, which is ABSENT for a `$ref`
+# property and for an `enum` property, so it refused two legitimate tightenings
+# and blocked the whole schema — and its message told the maintainer to delete
+# a rule that IS enforced. Sibling keywords to `$ref` have applied since draft
+# 2019-09. These tests run the real validator rather than reasoning about it.
+
+
+def _rejects(prop: dict, value: object) -> list[str]:
+    """What `Draft202012Validator` — the class `validate.py` loads — says about
+    one value under one property subschema, with the real `$defs` in scope."""
+    from jsonschema import Draft202012Validator
+
+    doc = _schema_document()
+    schema = {
+        "type": "object",
+        "properties": {"probe": prop},
+        "$defs": doc["$defs"],
+    }
+    return [error.message for error in Draft202012Validator(schema).iter_errors({"probe": value})]
+
+
+def test_a_bound_beside_a_ref_is_kept_because_the_validator_applies_it() -> None:
+    """`{"$ref": "#/$defs/money", "minimum": 1000}` is a legitimate tightening
+    — a floor above the `$def`'s own — and refusing it exits the generator 1
+    and blocks every other repair in the document.
+
+    Mutation drill (2026-08-19): restored the old type-keyed predicate —
+    `kind = out.get("type")` with `if key in out and kind not in applies` —
+    which is `None` for a `$ref` property and so matches nothing. Failed with
+    `towerkit.schemagen.SchemaDerivationError: $defs/layer:attach is now a
+    #/$defs/money, so every value it accepts is ['integer'], and the
+    hand-authored ['minimum'] constrains only ['integer', 'number'] — no value
+    this property can accept is ever tested against it`, which is the refusal
+    contradicting itself in one sentence. Restored.
+    """
+    from towerkit.schemagen import reconcile_property
+
+    tightened = {"$ref": "#/$defs/money", "minimum": 1000}
+    assert _rejects(tightened, 500) == ["500 is less than the minimum of 1000"], (
+        "the premise is gone: this jsonschema no longer applies a sibling of $ref"
+    )
+    doc = _schema_document()
+    merged = reconcile_property(
+        "$defs/layer:attach", tightened, {"$ref": "#/$defs/money"}, doc["$defs"]
+    )
+    assert merged == tightened
+
+
+def test_a_bound_beside_an_enum_is_kept_because_the_validator_applies_it() -> None:
+    """Same defect, second false positive. `enum` says nothing about the
+    instance TYPE, so a `minLength` beside it is applied to every string
+    member — it narrows the enum, it does not sit inert on it.
+
+    Mutation drill (2026-08-19): restored the old type-keyed predicate —
+    `kind = out.get("type")` with `if key in out and kind not in applies` —
+    which is `None` for an `enum` property too. Failed with
+    `towerkit.schemagen.SchemaDerivationError: $:placement is now an enum, so
+    every value it accepts is ['string'], and the hand-authored ['minLength']
+    constrains only ['string'] — no value this property can accept is ever
+    tested against it`. Restored.
+    """
+    from towerkit.schemagen import reconcile_property
+
+    tightened = {"minLength": 9, "enum": ["bound", "proposed"]}
+    assert _rejects(tightened, "bound") == ["'bound' is too short"], (
+        "the premise is gone: this jsonschema no longer applies a sibling of enum"
+    )
+    merged = reconcile_property(
+        "$:placement", tightened, {"enum": ["bound", "proposed"]}, _schema_document()["$defs"]
+    )
+    assert merged == tightened
+
+
+def test_a_keyword_no_accepted_value_can_be_tested_against_still_raises() -> None:
+    """The narrowing must not have thrown the check away. All three shapes
+    below are inert — the validator ACCEPTS the value, so the keyword reads as
+    a rule and rejects nothing — and each must still refuse.
+
+    Mutation drill (2026-08-19): made `schemagen._permitted_types` return
+    `None` unconditionally. Failed with `Failed: DID NOT RAISE
+    SchemaDerivationError` on the first case. Restored.
+    """
+    from towerkit.schemagen import SchemaDerivationError, reconcile_property
+
+    defs = _schema_document()["$defs"]
+    inert = [
+        # a minLength the model retyped out from under
+        ({"type": "string", "minLength": 1}, {"type": "integer"}, 1, "minLength"),
+        # a minLength beside a $ref to an INTEGER $def — the true stranding,
+        # as against the `minimum` two tests up, which bites
+        ({"$ref": "#/$defs/money", "minLength": 5}, {"$ref": "#/$defs/money"}, 5, "minLength"),
+        # a numeric bound beside an enum of strings
+        ({"minimum": 5, "enum": ["bound"]}, {"enum": ["bound", "proposed"]}, "bound", "minimum"),
+    ]
+    for existing, derived, accepted, keyword in inert:
+        merged = dict(existing)
+        merged.update(derived)
+        assert _rejects(merged, accepted) == [], (
+            f"{merged} is not inert after all — this case belongs in the kept list"
+        )
+        with pytest.raises(SchemaDerivationError) as caught:
+            reconcile_property("$defs/thing:probe", existing, derived, defs)
+        assert keyword in str(caught.value)
+        assert "rejects nothing" in str(caught.value)
+
+
+def test_an_unresolvable_ref_stands_the_stranded_check_down() -> None:
+    """A `$ref` whose `$def` we were not handed makes the permitted types
+    UNKNOWN, and unknown is not stranded. Refusing wrongly exits 1 and blocks
+    the whole document; keeping a keyword that may be inert costs nothing but
+    the keyword. The safe direction is the one that does not block.
+
+    Mutation drill (2026-08-19): made `schemagen._permitted_types` GUESS for
+    an unresolved `$ref` — `return frozenset({"integer"})` in place of
+    `return None`. Failed with `towerkit.schemagen.SchemaDerivationError:
+    $defs/thing:probe is now a #/$defs/nowhere, so every value it accepts is
+    ['integer'], and the hand-authored ['minLength'] constrains only
+    ['string'] ... so it is a rule that rejects nothing`, refusing a merge it
+    has no grounds to judge. Restored.
+    """
+    from towerkit.schemagen import reconcile_property
+
+    merged = reconcile_property(
+        "$defs/thing:probe",
+        {"$ref": "#/$defs/nowhere", "minLength": 5},
+        {"$ref": "#/$defs/nowhere"},
+        {},
+    )
+    assert merged == {"$ref": "#/$defs/nowhere", "minLength": 5}
+
+
+# --- a derived keyword is overwritten only where the model derives one -------
+
+
+def test_a_hand_authored_enum_the_model_has_no_opinion_on_survives() -> None:
+    """`enum` is derived from an `Enum` annotation and from NOTHING else, so on
+    a plain `str` field the model asserts nothing about the value set. Deleting
+    the human's `{"enum": ["USD", "GBP"]}` there — which the first cut did with
+    no message at all — silently LOOSENS validation on a broker's file, which
+    is the exact failure this module exists to end.
+
+    Preserved rather than refused because it can only TIGHTEN: every value the
+    enum admits the derived `type` admits too, so nothing `model.py` loads
+    becomes unloadable. `pattern` and `minLength` beside it are kept on the
+    same grounds and always were; `enum` was the one that vanished.
+
+    Mutation drill (2026-08-19): removed `HAND_AUTHORABLE_KEYWORDS` from the
+    delete loop in `schemagen.reconcile_property`, restoring `if k in
+    DERIVED_KEYWORDS and k not in derived`. Failed with `AssertionError: a
+    hand-authored enum was silently deleted: {'type': 'string', 'minLength':
+    3, 'maxLength': 3}`. Restored.
+    """
+    from towerkit.schemagen import reconcile_property
+
+    existing = {"type": "string", "minLength": 3, "maxLength": 3, "enum": ["USD", "GBP"]}
+    merged = reconcile_property("$:currency", existing, {"type": "string"}, {})
+    assert merged == existing, f"a hand-authored enum was silently deleted: {merged}"
+    assert _rejects(merged, "XYZ") == ["'XYZ' is not one of ['USD', 'GBP']"]
+
+
+def test_a_hand_authored_enum_the_model_contradicts_raises() -> None:
+    """The one thing a preserved enum is checked for. An enum of strings under
+    a model that says `integer` accepts NO value at all — the mirror of the
+    loosening above, and the only shape where silence would be worse than a
+    refusal.
+
+    Mutation drill (2026-08-19): deleted the `not permitted` branch from
+    `schemagen.reconcile_property`. Failed with `Failed: DID NOT RAISE
+    <class 'towerkit.schemagen.SchemaDerivationError'>`. Restored.
+    """
+    from towerkit.schemagen import SchemaDerivationError, reconcile_property
+
+    with pytest.raises(SchemaDerivationError) as caught:
+        reconcile_property(
+            "$defs/layer:limit",
+            {"type": "string", "enum": ["USD", "GBP"]},
+            {"type": "integer"},
+            {},
+        )
+    assert "no value at all" in str(caught.value)
+    assert "integer" in str(caught.value)
+    # a model enum, in contrast, simply WINS — there is no judgement to keep
+    assert reconcile_property(
+        "$:placement", {"enum": ["bound"]}, {"enum": ["bound", "proposed"]}, {}
+    ) == {"enum": ["bound", "proposed"]}
+
+
+def test_a_second_pass_over_a_repaired_document_changes_nothing() -> None:
+    """`sync_document` must be the fixed point of itself, on a document that
+    needed REAL repair and that carries hand-authored keywords the generator
+    has to decide about. A second pass that differed would leave `--check`
+    reporting stale forever after any repair, and a second pass that RAISED
+    would mean the generator refuses its own output.
+
+    Honest note on what the bare fixed-point line protects: no mutation was
+    found that breaks `sync_document(once) == once` alone — the function is a
+    projection, so the second pass has nothing left to do. What the drills
+    below kill are the assertions beside it, which is where this test earns
+    its place: they say the two 2026-08-19 preservation rules survive being
+    fed back in.
+
+    Mutation drills (2026-08-19), restored after each:
+
+    - the P8 mutation (`if k in DERIVED_KEYWORDS and k not in derived` in
+      `schemagen.reconcile_property`, deleting the hand-authored enum):
+      `KeyError: 'enum'`;
+    - the P7 mutation (the old type-keyed stranded predicate):
+      `towerkit.schemagen.SchemaDerivationError: $defs/layer:attach ... the
+      hand-authored ['minimum'] constrains only ['integer', 'number']` — it
+      refuses to run at all;
+    - the P6 `_required_for` filter mutation: `AssertionError: assert None ==
+      ['insured', 'program', 'placement', 'period', 'lines', 'layers',
+      'retentions']`;
+    - the P6 enum mutation (`if key == "enum" and "enum" in out: continue` in
+      the merge loop): `AssertionError: assert ['bound'] == ['bound',
+      'proposed']`.
+    """
+    import copy
+
+    from towerkit.schemagen import sync_document
+
+    stale = _schema_document()
+    stale["required"] = []                                    # to be re-derived
+    stale["properties"]["placement"]["enum"] = ["bound"]       # to be re-derived
+    stale["properties"]["currency"]["enum"] = ["USD", "GBP"]   # to be KEPT
+    stale["$defs"]["layer"]["properties"]["attach"]["minimum"] = 1000  # to be KEPT
+
+    once = sync_document(stale)
+    assert once.get("required") == [
+        "insured", "program", "placement", "period",
+        "lines", "layers", "retentions", "sublimits",
+    ]
+    assert once["properties"]["placement"]["enum"] == ["bound", "proposed"]
+    assert once["properties"]["currency"]["enum"] == ["USD", "GBP"]
+    assert once["$defs"]["layer"]["properties"]["attach"]["minimum"] == 1000
+
+    assert sync_document(copy.deepcopy(once)) == once, "sync_document is not idempotent"

@@ -596,25 +596,38 @@ def _guard_states(program: Program, layer: Layer, value: object) -> None:
     )
 
 
+# THE one sentence about what setting `currency` does and does not do, in the
+# same shape as `STATUTORY_FLAG_FIX` above and for the same reason: it is
+# QUOTED by `mcpsurface.GUARDS["program.currency"]` rather than restated there,
+# so `describe()` and the live advisory cannot come to say different things.
+#
+# The second half is the load-bearing half and had already been dropped once by
+# the restatement: `money.py` hard-codes "USD" into `format_currency` and
+# `format_money_compact`, so the label moves NOWHERE a reader can see it. A
+# guard note that says only "nothing was converted" reads like a rounding
+# caveat; the fact is that the chart, the SOI and the CLI all still print
+# dollars.
+CURRENCY_NOT_CONVERTED = (
+    "NO figure was converted — every amount is the same integer it was, and only "
+    "the label moved. towerkit formats money as US dollars wherever it renders "
+    "(money.py hard-codes USD into format_currency), so this changes the file and "
+    "program_read and NOTHING a reader of the chart, the SOI or the CLI ever "
+    "sees. Restate the amounts yourself if the program was re-quoted."
+)
+
+
 def _advise_currency(program: Program, value: object) -> list[Diagnostic]:
     """NOT a refusal — an advisory, because the write does far less than it
     looks like it does and silence about that was the failure mode.
 
-    The second sentence is not decoration. `currency` is read in exactly three
-    places (the canonical dump, the MCP read, and construction in `ingest`),
-    and `money.py` hard-codes "USD" into `format_currency` and
-    `format_compact_currency` — so setting it changes the file and the read,
-    and NOTHING a reader of the chart, the SOI or the CLI ever sees.
+    The sentence itself is `CURRENCY_NOT_CONVERTED`, so the surface can quote
+    it instead of paraphrasing it.
     """
     return [
         Diagnostic(
             WARNING,
             "currency-not-converted",
-            f"currency is now {value}: NO figure was converted — every amount is the "
-            f"same integer it was, and only the label moved. towerkit formats money as "
-            f"US dollars wherever it renders, so this changes the file and program_read "
-            f"and nothing a reader of the chart or SOI sees. Restate the amounts "
-            f"yourself if the program was re-quoted.",
+            f"currency is now {value}: {CURRENCY_NOT_CONVERTED}",
             ("program", None),
         )
     ]
@@ -633,6 +646,42 @@ _GUARDS: dict[tuple[str, str], Callable[[Program, Any, object], None]] = {
 
 _ADVISORIES: dict[tuple[str, str], Callable[[Program, object], list[Diagnostic]]] = {
     ("program", "currency"): _advise_currency,
+}
+
+
+def _normalise_applies_to(program: Program, entity: Any, value: object) -> object:
+    """`_check_lines` on the way through the choke point.
+
+    A retention's and a sublimit's `appliesTo` used to reach `_check_lines`
+    only because `mcpsurface` routed the whole of those two kinds through
+    `edit_retention` / `edit_sublimit` — whose keyword parameters were a
+    hand-written copy of the two models, so a field added to either arrived
+    ADVERTISED as writable and died on `got an unexpected keyword argument`.
+    The routing is gone; the check it existed for is here, at the choke point,
+    where it applies to one field instead of to a whole kind.
+
+    Not a guard: it REPLACES the value (duplicates dropped, order kept), which
+    is what `_check_lines` has always done for the two add verbs. A key absent
+    from `_NORMALISERS` is written exactly as sent, so a new model field still
+    needs no edit to this file.
+
+    `layer.appliesTo` is deliberately absent: it is verb-owned (`layer_lines`
+    → `set_applies_to`) and denied to the generic setter, so a row here would
+    be unreachable code no test could fail on.
+    """
+    if not isinstance(value, list):
+        # Let pydantic refuse the type; a list is what `_check_lines` reads.
+        return value
+    return _check_lines(program, [str(item) for item in value])
+
+
+# Keyed like `_GUARDS`, and read the same way: a key absent from it means the
+# value is written exactly as it arrived. A normaliser answers "what does this
+# field MEAN when set", which is this module's job for every surface, where a
+# guard answers "may it be set at all".
+_NORMALISERS: dict[tuple[str, str], Callable[[Program, Any, object], object]] = {
+    ("retention", "appliesTo"): _normalise_applies_to,
+    ("sublimit", "appliesTo"): _normalise_applies_to,
 }
 
 # Kinds addressed by a list index into a PROGRAM-level collection.
@@ -728,6 +777,10 @@ def set_field(
     do. They are not validator diagnostics: re-reading the file will not
     reproduce them, which is why they must not be merged into `warnings`.
 
+    A field in `_NORMALISERS` has its value REPLACED on the way through
+    (`appliesTo` is checked against the line ids and de-duplicated), which is
+    the check `edit_retention` and `edit_sublimit` used to be the only door to.
+
     `target` and `index` together are the address; which halves a kind needs
     is `mcpsurface.TARGET`, and a participant or a named limit needs both
     because its row hangs off a layer.
@@ -766,6 +819,9 @@ def set_field(
     guard = _GUARDS.get((kind, canonical))
     if guard is not None:
         guard(program, entity, value)
+    normalise = _NORMALISERS.get((kind, canonical))
+    if normalise is not None:
+        value = normalise(program, entity, value)
     setattr(owner, attr, value)
     advise = _ADVISORIES.get((kind, canonical))
     return advise(program, value) if advise is not None else []

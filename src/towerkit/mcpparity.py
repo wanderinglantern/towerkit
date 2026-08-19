@@ -195,9 +195,9 @@ IMPLEMENTED: dict[Cell, Served] = {
     ),
     ("named_limit", "update"): Served(
         ("program_edit_field",),
-        "name and amount through the generic setter, which routes them to "
-        "edit.edit_named_limit, addressed by the layer id AND the index — the "
-        "address program_read reports and mcpsurface.TARGET publishes. This cell "
+        "name and amount through the generic setter, addressed by the layer id "
+        "AND the index — the address program_read reports and mcpsurface.TARGET "
+        "publishes. This cell "
         "read DEFERRED until 2026-08-19, claiming set_field's single target could "
         "not carry both halves of the address; it carries both and always did, "
         "and the write was proved landing on a real file. The parity tests "
@@ -351,11 +351,6 @@ MUTATIONS: dict[str, Served] = {
     ),
     "move_line": Served(("line_move",), "Column order, one step at a time."),
     "remove_line": Served(("line_remove",), "The remove verb, with its cascade."),
-    "adopt": Served(
-        ("program_clone_renewal",),
-        "Copies a program's structure onto a fresh year — the renewal clone is "
-        "its only caller and its only reason to be public.",
-    ),
     "heal_follows": Served(
         ("program_restack", "layer_follows", "program_edit_field"),
         "Runs on EVERY write: mcpserver._write calls it before validating, so a "
@@ -389,10 +384,15 @@ MUTATIONS: dict[str, Served] = {
     ),
     "edit_named_limit": Served(
         ("program_edit_field",),
-        "named_limit.name and .amount through the generic setter, which routes "
-        "the kind here (mcpsurface._SETTERS) so the row's own edit verb owns the "
-        "write. The ledger called it TUI-only until 2026-08-19 and it had been "
-        "reachable over MCP the whole time.",
+        "named_limit.name and .amount through the generic setter — which reaches "
+        "them at the choke point (edit.set_field addresses a row hanging off a "
+        "layer by layer id AND index), not by calling this function. It did call "
+        "it, through a `named_limit.*` wildcard in mcpsurface._SETTERS, until "
+        "2026-08-19: the wildcard splatted every field of the kind into this "
+        "function's keyword parameters, which are a hand-written copy of the "
+        "NamedLimit model, so a field added to the model was advertised writable "
+        "and raised TypeError. Same standing as set_premium_detail: the TUI calls "
+        "it, and the capability it names is served.",
     ),
     "set_container": Served(
         ("program_edit_field",),
@@ -409,6 +409,19 @@ MUTATIONS: dict[str, Served] = {
 }
 
 DEFERRED_MUTATIONS: dict[str, str] = {
+    "adopt": (
+        "Reached by the TUI's line-transfer flow (tui/screens/editor.py) and by "
+        "nothing else. Closed by line_transfer, Phase 2 — see the DEFERRED_TOOLS "
+        "row, which is where the cross-program write safety is argued.\n\n"
+        "It read IMPLEMENTED by program_clone_renewal until 2026-08-19, and that "
+        "was false in both halves. `_program_clone_renewal` calls "
+        "`Program.clone_as_renewal()`, a MODEL method, and never touches this "
+        "function; and what this function does — replace all four structural "
+        "collections on an EXISTING program in one step — is not what cloning a "
+        "renewal does or something any tool can ask for. The parity tests compare "
+        "tool NAMES, so a cell whose reason is fiction passed both directions of "
+        "the check; the call graph is read now (test_mcp_parity)."
+    ),
     "add_layer": (
         "Reached by the TUI and by nothing else. Closed by layer_add — see the "
         "('layer', 'create') row."

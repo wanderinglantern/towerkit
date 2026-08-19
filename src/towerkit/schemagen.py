@@ -59,14 +59,51 @@ is how a schema starts accepting files it should refuse.
 Where a hand-authored fact CONTRADICTS the model rather than merely adding to
 it, this raises too, and the split is deliberate:
 
-- a DERIVED fact is overwritten in silence, because the model IS the source
-  of truth for it — there is no judgement to preserve;
-- a hand-authored CONSTRAINT that the derived type has made meaningless — a
-  `minLength` on a property that is now an integer, a `required` entry for a
-  field the model made optional — raises. JSON Schema ignores an inapplicable
-  keyword, so keeping it silently loosens the document, and dropping it
-  silently discards a rule a human chose. Both are the failure this module
-  exists to end: a schema that passes files it should reject.
+- a DERIVED fact is overwritten WHERE THE MODEL HAS SOMETHING TO SAY, in
+  silence, because the model IS the source of truth for it — there is no
+  judgement to preserve. Where the model says nothing, the human's value
+  stays: see the `enum` rule below;
+- a hand-authored CONSTRAINT the derived type has stranded — a `minLength` on
+  a property that is now an integer, a `required` entry for a field the model
+  made optional — raises. Keeping it silently loosens the document, and
+  dropping it silently discards a rule a human chose. Both are the failure
+  this module exists to end: a schema that passes files it should reject.
+
+Two rules were wrong on 2026-08-19 and are stated here because getting them
+wrong is easy and the errors point in opposite directions.
+
+**Stranded means CANNOT BITE, not "sits beside a `$ref` or an `enum`".** The
+first cut keyed off `out["type"]`, which is absent for both, so
+`{"$ref": "#/$defs/money", "minimum": 1000}` and
+`{"enum": [...], "minLength": 1}` were refused and the whole schema was
+blocked. Sibling keywords to `$ref` have applied since draft 2019-09, and
+`enum` constrains the value set without saying anything about the type.
+Checked against `jsonschema.Draft202012Validator`, the validator `validate.py`
+loads:
+
+- `{"$ref": "#/$defs/money", "minimum": 1000}` rejects `500` with
+  "500 is less than the minimum of 1000";
+- `{"enum": ["bound", "proposed"], "minLength": 9}` rejects `"bound"` with
+  "'bound' is too short";
+- `{"type": "integer", "minLength": 5}` ACCEPTS `1` — the genuinely stranded
+  shape, and the only one that should raise.
+
+So the test is on the JSON types the property can still ACCEPT (through its
+`type`, through the `$def` its `$ref` names, and through its `enum` members'
+own types). A keyword is stranded only when no accepted value is ever of a
+type the keyword is defined for; then, and only then, it rejects nothing.
+
+**A derived keyword is overwritten only where the model derives one.** `enum`
+is derived from an `Enum` annotation and from nothing else, so on a plain
+`str` field the model asserts NOTHING about the value set — and deleting a
+hand-authored `{"enum": ["USD", "GBP"]}` there, which the first cut did with
+no message at all, silently LOOSENS validation on a broker's file. That is
+the exact failure this module exists to end, arriving through the repair.
+A hand-authored `enum` is therefore preserved, like `pattern` beside it: it
+can only tighten, and the model has no opinion to impose. It is checked for
+one thing — that its members are of a type the derived schema accepts —
+because an enum of strings under `{"type": "integer"}` accepts nothing at
+all, and a property that refuses every file is the mirror failure.
 
 The module is PURE — a document in, a document out. It knows nothing about
 where the two copies live on disk: that is repo layout, and repo layout
@@ -146,18 +183,45 @@ SCALAR_DEFS: frozenset[str] = frozenset({"money", "share"})
 # raises rather than being reconciled away. That is what makes making a model
 # field optional a choice the maintainer has to make out loud.
 STRICTER_THAN_MODEL: dict[str, frozenset[str]] = {
-    "": frozenset({"lines", "layers", "retentions"}),
+    # All four default to `[]` on the model, so a program missing one LOADS —
+    # and every towerkit writer emits all four on every file, so a program
+    # missing one is a file no writer produced. The schema holds the stricter
+    # line. `sublimits` was absent from this set and from the schema's root
+    # `required` until 2026-08-19, which was an oversight rather than a
+    # distinction: it has been on `Program` since the first commit, every
+    # program file carries it, and the reason above applies to it word for
+    # word. Making it consistent tightens `towerctl validate` on a
+    # hand-written file that omits the key; nothing towerkit wrote can.
+    "": frozenset({"lines", "layers", "retentions", "sublimits"}),
 }
 
 # The keywords `derive_property` emits. Everything else in a property is the
 # human's half and is preserved, in place, byte for byte.
 DERIVED_KEYWORDS: frozenset[str] = frozenset({"$ref", "type", "format", "enum", "items"})
 
-# Which JSON types each hand-authored constraint keyword means anything for.
-# A keyword left stranded on a retyped property is the contradiction that
-# raises: JSON Schema simply IGNORES a keyword that does not apply to the
-# instance type, so `minLength: 1` surviving on a property the model retyped
-# to `integer` reads as a rule and enforces nothing.
+# The derived keywords a human may ALSO author, so that one left in a property
+# the model no longer emits it for is kept rather than dropped.
+#
+# `enum` only. The model derives one from an `Enum` annotation and from nothing
+# else, so on a plain `str` field it is stating no opinion, and dropping the
+# human's `{"enum": ["USD", "GBP"]}` there loosens the document in silence.
+# The other four are type IDENTITY — `type`, `$ref`, `format`, `items` say what
+# the value IS, which is the model's answer alone, so one left behind by a
+# retyped field is stale and goes.
+HAND_AUTHORABLE_KEYWORDS: frozenset[str] = frozenset({"enum"})
+
+# Every type a JSON instance can have. `null` is here for completeness only:
+# `_unwrap` peels `| None` and the canonical file omits an absent key rather
+# than writing `null`, so no derived property ever permits it.
+_JSON_TYPES: frozenset[str] = frozenset(
+    {"string", "integer", "number", "boolean", "array", "object", "null"}
+)
+
+# Which JSON types each hand-authored constraint keyword is DEFINED for. A
+# keyword is applied only to instances of those types and is inert for every
+# other, so one that no accepted value can ever be of the right type for is
+# a rule that rejects nothing — see the module docstring for the validator
+# evidence, and `_permitted_types` for how "accepted value" is worked out.
 _APPLIES_TO: dict[str, frozenset[str]] = {
     "minLength": frozenset({"string"}),
     "maxLength": frozenset({"string"}),
@@ -324,8 +388,68 @@ def derive_property(model: type[BaseModel], name: str, info: FieldInfo) -> dict[
     return _subschema(where, *_unwrap(info))
 
 
+_DEFS_PREFIX = "#/$defs/"
+
+
+def _json_type(value: Any) -> str:
+    """The JSON type of one literal — `bool` before `int`, as everywhere else
+    here, because `True` is an `int` in python and `true` is not a number in
+    JSON."""
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, int):
+        return "integer"
+    if isinstance(value, float):
+        return "number"
+    if isinstance(value, str):
+        return "string"
+    if isinstance(value, list):
+        return "array"
+    if isinstance(value, dict):
+        return "object"
+    return "null"
+
+
+def _permitted_types(
+    node: Mapping[str, Any], defs: Mapping[str, Any], seen: frozenset[str] = frozenset()
+) -> frozenset[str] | None:
+    """The JSON types a value this subschema ACCEPTS can have.
+
+    `None` means unknown — a `$ref` that names no `$def` we were handed — and
+    unknown is not "stranded". This check exists to catch a rule that enforces
+    nothing; guessing would make it block a schema that is fine, which is
+    worse, and that is exactly the 2026-08-19 defect it replaces.
+
+    All three narrowings compose, which is the point: a `$ref` to `money` says
+    integer, an `enum` of strings says string, and a property carrying both
+    accepts nothing.
+    """
+    permitted = _JSON_TYPES
+    ref = node.get("$ref")
+    if isinstance(ref, str):
+        if ref in seen or not ref.startswith(_DEFS_PREFIX):
+            return None
+        target = defs.get(ref.removeprefix(_DEFS_PREFIX))
+        if not isinstance(target, Mapping):
+            return None
+        inner = _permitted_types(target, defs, seen | {ref})
+        if inner is None:
+            return None
+        permitted &= inner
+    kind = node.get("type")
+    if isinstance(kind, str):
+        permitted &= {kind}
+    members = node.get("enum")
+    if isinstance(members, list):
+        permitted &= {_json_type(member) for member in members}
+    return permitted
+
+
 def reconcile_property(
-    where: str, existing: Mapping[str, Any], derived: Mapping[str, Any]
+    where: str,
+    existing: Mapping[str, Any],
+    derived: Mapping[str, Any],
+    defs: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """One existing property, with the model's facts imposed on it and the
     human's prose left alone.
@@ -335,45 +459,79 @@ def reconcile_property(
     `appliesTo` is written `type, minItems, items` and comes back out in that
     order even though `derive_property` emits `type, items`.
 
+    `defs` is the document's `$defs`, needed only to look through a `$ref` to
+    the types it permits. Omitted, an unresolvable `$ref` reads as "unknown"
+    and the stranded check stands down for that property — the safe direction,
+    since refusing wrongly blocks the whole schema.
+
     Public because the contract tests ask the same question of the checked-in
     document — a test that re-implemented the merge would be a second copy of
     the rule, which is the shape of mistake this module is about.
     """
+    defs = {} if defs is None else defs
     out = dict(existing)
-    for key in [k for k in out if k in DERIVED_KEYWORDS and k not in derived]:
+    for key in [
+        k
+        for k in out
+        if k in DERIVED_KEYWORDS - HAND_AUTHORABLE_KEYWORDS and k not in derived
+    ]:
         # `format: date` left behind by a field that is no longer a date, a
-        # `type` left behind by one that is now a `$ref`.
+        # `type` left behind by one that is now a `$ref`. NOT `enum`: the model
+        # derives one only from an `Enum` annotation, so its absence from
+        # `derived` means the model has no opinion, and the human's survives.
         del out[key]
     for key, value in derived.items():
         if key == "items" and isinstance(out.get("items"), dict) and isinstance(value, Mapping):
             # An element subschema carries prose too — `states` items are
             # `{"type": "string", "minLength": 1}`.
-            out["items"] = reconcile_property(f"{where}[]", out["items"], value)
+            out["items"] = reconcile_property(f"{where}[]", out["items"], value, defs)
         else:
             out[key] = value
-    kind = out.get("type")
-    stranded = sorted(
-        key
-        for key, applies in _APPLIES_TO.items()
-        if key in out and kind not in applies
-    )
-    if stranded:
+
+    permitted = _permitted_types(out, defs)
+    if permitted is not None and not permitted:
+        # Only reachable through a preserved hand-authored `enum` whose members
+        # are of a type the model's own `type`/`$ref` refuses: strings under
+        # `{"type": "integer"}`. The property would then refuse EVERY file,
+        # which is the mirror of the loosening the preservation rule prevents.
         raise SchemaDerivationError(
-            f"{where} is now {_describe(out)} and the hand-authored {stranded} "
-            f"{'means' if len(stranded) == 1 else 'mean'} nothing for it — JSON Schema "
-            f"ignores a keyword that does not apply, so leaving it there is a rule "
-            f"that enforces nothing; drop it, or change the model back"
+            f"{where} is now {_describe(out)} and the hand-authored enum "
+            f"{out.get('enum')} has no type in common with it, so the property "
+            f"would accept no value at all; drop the enum, or change the model back"
         )
+    if permitted is not None:
+        stranded = sorted(
+            key for key, applies in _APPLIES_TO.items() if key in out and not permitted & applies
+        )
+        if stranded:
+            constrains = sorted(set().union(*(_APPLIES_TO[key] for key in stranded)))
+            raise SchemaDerivationError(
+                f"{where} is now {_describe(out)}, so every value it accepts is "
+                f"{sorted(permitted)}, and the hand-authored {stranded} "
+                f"{'constrains' if len(stranded) == 1 else 'constrain'} only "
+                f"{constrains} — no value this property can accept is ever tested "
+                f"against {'it' if len(stranded) == 1 else 'them'}, so it is a rule "
+                f"that rejects nothing; drop it, or change the model back"
+            )
     return out
 
 
 def _describe(node: Mapping[str, Any]) -> str:
-    """What a reconciled property now IS, for a refusal message."""
+    """What a reconciled property now IS, for a refusal message.
+
+    `type` before `enum`, so a property carrying both is described by the half
+    the MODEL imposed — that is the half the maintainer has to change, and the
+    refusal that says "an enum" when the model made it an integer sends them
+    to the wrong line.
+    """
     if "$ref" in node:
         return f"a {node['$ref']}"
+    kind = node.get("type")
+    if isinstance(kind, str):
+        return f"an {kind}" if kind[:1] in "aeiou" else f"a {kind}"
     if "enum" in node:
         return "an enum"
-    return f"a {node.get('type', 'schema')}"
+    return "a schema"
 
 
 def _required_for(
@@ -425,6 +583,7 @@ def sync_document(doc: Mapping[str, Any]) -> dict[str, Any]:
             f"them to SCHEMA_MODELS or SCALAR_DEFS, or nothing ever checks them"
         )
 
+    defs = out.get("$defs", {})
     inline = set(SCHEMA_MODELS)
     for pointer, model in SCHEMA_MODELS.items():
         where = pointer or "$"
@@ -444,7 +603,7 @@ def sync_document(doc: Mapping[str, Any]) -> dict[str, Any]:
                 continue
             derived = derive_property(model, name, info)
             properties[key] = (
-                reconcile_property(f"{where}:{key}", existing[key], derived)
+                reconcile_property(f"{where}:{key}", existing[key], derived, defs)
                 if key in existing
                 else derived
             )

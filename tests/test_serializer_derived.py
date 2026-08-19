@@ -19,69 +19,22 @@ from __future__ import annotations
 
 import json
 import shutil
-from collections.abc import Iterator
-from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
-from pydantic import BaseModel, Field
-from pydantic.fields import FieldInfo
+from conftest import model_field
+from pydantic import Field
 
 from towerkit.model import (
     Layer,
     Money,
-    NamedLimit,
-    Participant,
-    Period,
-    Program,
-    RenderSettings,
-    Retention,
-    Sublimit,
     dumps_program,
     load_program,
     loads_program,
     money_disk_keys,
 )
-from towerkit.model import Line as CoverageLine
-
-# Innermost first. A pydantic model compiles its children's schemas INTO its
-# own, so rebuilding `Layer` alone leaves `Program` still validating layers
-# with the schema it captured at import — the new field would exist on the
-# class and be missing from every instance the loader produced.
-_REBUILD_ORDER = (
-    Period, NamedLimit, Participant, CoverageLine, RenderSettings,
-    Retention, Sublimit, Layer, Program,
-)
 
 SAMPLE = Path(__file__).parent.parent / "programs" / "atomic-2026.json"
-
-
-@contextmanager
-def model_field(
-    cls: type[BaseModel], name: str, annotation: object, field: FieldInfo
-) -> Iterator[None]:
-    """Add a field to a pydantic model for the duration of a test.
-
-    This is what editing `model.py` does, minus the edit: the same
-    `__pydantic_fields__` entry, in the same declaration order (last), rebuilt
-    the same way. Anything derived from the model sees it; anything
-    hand-written does not. Restored in a `finally` because these classes are
-    process-global and every other test in the session shares them.
-    """
-    original = dict(cls.__pydantic_fields__)
-    cls.__pydantic_fields__[name] = FieldInfo.from_annotated_attribute(annotation, field)
-    _rebuild()
-    try:
-        yield
-    finally:
-        cls.__pydantic_fields__.clear()
-        cls.__pydantic_fields__.update(original)
-        _rebuild()
-
-
-def _rebuild() -> None:
-    for cls in _REBUILD_ORDER:
-        cls.model_rebuild(force=True)
 
 
 def test_a_new_model_field_reaches_the_file_and_comes_back() -> None:

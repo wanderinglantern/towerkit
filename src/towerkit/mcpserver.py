@@ -353,6 +353,27 @@ def _write(
         raise
     except (ValidationError, ValueError, KeyError, IndexError, RuntimeError) as exc:
         raise Refusal("guard_refused", f"refused — nothing written: {_reason(exc)}") from exc
+    except Exception as exc:
+        # LAST, and it is not defensive padding. The tuple above is a list of
+        # the exception types a mutation was EXPECTED to raise, and `TypeError`
+        # was not on it: `mcpsurface.apply` splatted keyword arguments into
+        # `edit.edit_retention`, so a field the surface advertised as writable
+        # came back to the client as a bare `Error executing tool
+        # program_edit_field: edit_retention() got an unexpected keyword
+        # argument 'broker_ref'` — no `[code] ` prefix, outside the stable-code
+        # contract every other refusal on this branch honours, and invisible to
+        # a caller that catches `Refusal` and branches on `.code`.
+        #
+        # `internal_error` rather than `guard_refused`, because the difference
+        # matters to whoever reads it: a guard is a statement about the
+        # caller's value, and this is a statement about towerkit. The type name
+        # travels with it so a bug report can start from something.
+        raise Refusal(
+            "internal_error",
+            f"refused — nothing written: towerkit failed internally "
+            f"({type(exc).__name__}: {_reason(exc)}). This is a towerkit bug, not "
+            f"a problem with the value you sent.",
+        ) from exc
 
     _atomic_write(path, text)
     ref = write_ref()
@@ -472,7 +493,23 @@ def _program_list(programs: Programs) -> dict[str, Any]:
 
 
 def _readable(model: BaseModel) -> dict[str, Any]:
-    """Every field a model declares, keyed the way the FILE keys it.
+    """Every field a model declares, keyed the way the WRITE SURFACE addresses
+    it — the JSON alias where there is one, the python name where there is not.
+
+    That is `mcpsurface`'s rule, not the FILE's, and this docstring claimed the
+    file's until 2026-08-19. They differ in exactly one place and the model
+    says where: `model._disk_key` also consults `_DISK_FORM`, which renames
+    `Participant.share_bps` to `share` and converts 3500 to the fraction 0.35.
+    So a participant's share reads back under the model's own name, in basis
+    points, while the file on disk holds `"share": 0.35`.
+
+    The read is keyed for the WRITE on purpose, and this is the one place to
+    say why: every key `program_read` returns is a key `program_edit_field`
+    accepts, in the lexicon `describe` publishes and with the value in the unit
+    the write takes. Keying it the file's way would hand a caller `share: 0.35`
+    and refuse `share` on the way back — the same "the read teaches a
+    vocabulary the write refuses" defect `_period`'s invented from/to keys
+    were. A caller that wants the file's spelling reads the file.
 
     DERIVED, not listed. The hand-written projection this replaces returned
     7 of 17 `Layer` fields: `notes` was writable on four tools and readable on

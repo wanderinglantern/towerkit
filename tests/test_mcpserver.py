@@ -65,7 +65,7 @@ from towerkit.mcpserver import (
     build_server,
     file_sha256,
 )
-from towerkit.model import load_program
+from towerkit.model import dumps_program, load_program
 
 SAMPLE = Path(__file__).parent.parent / "programs" / "atomic-2026.json"
 
@@ -1836,3 +1836,178 @@ class TestSnapshotCap:
         import towerkit.mcpserver as server
 
         assert server.SNAPSHOT_KEEP == 100
+
+
+class TestTheErrorContractHasNoHoles:
+    """Every refusal a client can be handed carries a stable `[code]`.
+
+    One did not. `_write` caught `(ValidationError, ValueError, KeyError,
+    IndexError, RuntimeError)` — the types a mutation was expected to raise —
+    and a `TypeError` from inside `mcpsurface.apply` walked straight past it,
+    out of the tool, and reached the client as the SDK's own
+    `Error executing tool program_edit_field: ...` with no prefix at all:
+    outside the stable-code contract this branch is built on, and invisible to
+    a caller that catches `edit.Refusal` and branches on `.code`.
+    """
+
+    def _boom(self, *args: object, **kwargs: object) -> None:
+        raise TypeError("apply() got an unexpected keyword argument 'broker_ref'")
+
+    def test_an_unexpected_internal_error_still_arrives_with_a_code(
+        self, roots, monkeypatch
+    ) -> None:
+        """Mutation drill (2026-08-19): narrowed `_write`'s `except Exception`
+        clause to `except (ArithmeticError,)`. Failed with `TypeError: apply()
+        got an unexpected keyword argument 'broker_ref'` escaping
+        `pytest.raises(ValueError)` uncaught — which is the shape the client
+        saw, because a `TypeError` is not a `ValueError` and nothing between
+        here and the SDK was catching one. Restored.
+        """
+        programs = Programs(roots)
+        _program_read(programs, "atomic-2026")
+        before = (roots[0] / "atomic-2026.json").read_bytes()
+        monkeypatch.setattr(mcpsurface, "apply", self._boom)
+
+        with pytest.raises(ValueError) as caught:
+            _program_edit_field(
+                programs, "atomic-2026", "layer", "notes", "anything", None, target="xs-1"
+            )
+        assert caught.value.code == "internal_error"
+        assert str(caught.value).startswith("[internal_error] ")
+        # The type name travels, so a bug report can start somewhere.
+        assert "TypeError" in str(caught.value)
+        assert "nothing written" in str(caught.value)
+        assert (roots[0] / "atomic-2026.json").read_bytes() == before
+
+    async def test_the_code_is_published_and_reaches_the_client_over_the_protocol(
+        self, roots, monkeypatch
+    ) -> None:
+        """The SDK gives an error result one channel — a flat string — so the
+        prefix is the whole contract, and this is the trip it has to survive.
+
+        Mutation drill (2026-08-19): narrowed `_write`'s `except Exception`
+        clause to `except (ArithmeticError,)`. Failed with `assert
+        '[internal_error]' in "Error executing tool program_edit_field:
+        apply() got an unexpected keyword argument 'broker_ref'"` — the
+        verifier's reproduction, byte for byte. Restored.
+        """
+        from mcp.client import Client
+
+        assert "internal_error" in mcpsurface.ERROR_CODES, "a code nobody publishes"
+        monkeypatch.setattr(mcpsurface, "apply", self._boom)
+        async with Client(build_server(roots)) as client:
+            await client.call_tool("program_read", {"name": "atomic-2026"})
+            result = await client.call_tool(
+                "program_edit_field",
+                {
+                    "name": "atomic-2026",
+                    "kind": "layer",
+                    "field": "notes",
+                    "value": "anything",
+                    "expecting": None,
+                    "target": "xs-1",
+                },
+            )
+            assert result.is_error
+            assert "[internal_error]" in result.content[0].text
+
+
+class TestModelBoundsReachTheClient:
+    def test_a_number_below_the_models_bound_names_a_value_that_would_work(
+        self, roots
+    ) -> None:
+        """`layer.attach` is `Money`, which is `Annotated[int, Field(ge=0),
+        MONEY]`. `value=-1` used to come back as pydantic's own four-line repr
+        with a documentation URL in it — a refusal naming nothing a caller can
+        send, which is the standard the design doc sets for every one of them
+        and the defect the `Program.currency` `min_length` fix closed for
+        strings.
+
+        Mutation drill (2026-08-19): stopped `mcpsurface._entry` carrying the
+        bound onto the entry. Failed with `assert 'guard_refused' ==
+        'bad_value'`, and the refusal the client got back was the defect
+        verbatim: `[guard_refused] refused — nothing written: 1 validation
+        error for Layer / attach / Input should be greater than or equal to 0
+        [type=greater_than_equal, input_value=-1, input_type=int] / For further
+        information visit https://errors.pydantic.dev/2.13/v/
+        greater_than_equal`. Restored.
+        """
+        programs = Programs(roots)
+        _program_read(programs, "atomic-2026")
+        with pytest.raises(ValueError) as caught:
+            _program_edit_field(
+                programs, "atomic-2026", "layer", "attach", -1, "27m", target="xs-1"
+            )
+        message = str(caught.value)
+        assert caught.value.code == "bad_value"
+        assert "$0 or more" in message
+        assert "pydantic" not in message and "type=greater_than_equal" not in message
+
+    def test_a_field_with_no_bound_still_takes_a_negative(self, roots) -> None:
+        """`layer.limit` carries no `ge` on purpose — positivity is a semantic
+        rule `validate.py` reports so a draft stays loadable — so this write
+        LANDS, and comes back with the diagnostic rather than a refusal.
+
+        Mutation drill (2026-08-19): removed the minus-sign branch from
+        `mcpsurface._parse_money`. Failed with `[bad_value] cannot parse money
+        value: '-$5'`. Restored.
+        """
+        programs = Programs(roots)
+        _program_read(programs, "atomic-2026")
+        out = _program_edit_field(
+            programs, "atomic-2026", "layer", "limit", "-$5", "25m", target="xs-1"
+        )
+        assert out["write_ref"].startswith("TKW-")
+        after = _program_read(programs, "atomic-2026")
+        assert next(ly for ly in after["layers"] if ly["id"] == "xs-1")["limit"] == -5
+
+
+class TestAnEmptyStringIsAState:
+    def test_a_text_field_holding_the_empty_string_can_be_overwritten(
+        self, roots
+    ) -> None:
+        """It could not be, over the real protocol, on a file `towerctl
+        validate` exits 0 on: `expecting=null` refused with `notes is '', not
+        the null you expected — pass expecting=""`, and `expecting=""` refused
+        with `expecting: send null, not an empty string`. The two refusals
+        named each other and no value ever reached the write.
+
+        `""` is reachable — `edit.set_field` writes it, and older files and
+        hand edits carry it — so the state has to have an expressible
+        expectation, and the one the refusal offers has to be it.
+
+        Mutation drill (2026-08-19): restored the `raise BadValue("send null,
+        not an empty string, …")` branch in `mcpsurface.parse_expecting`.
+        Failed on the retry with `[bad_value] expecting: send null, not an
+        empty string, to expect notes to be unset` — the second half of the
+        loop, reproduced exactly. Restored.
+        """
+        path = roots[0] / "atomic-2026.json"
+        program = load_program(path)
+        edit.set_field(program, "layer", "notes", "", "xs-1")
+        path.write_text(dumps_program(program), encoding="utf-8")
+
+        programs = Programs(roots)
+        # A legal file, not a corrupt one: the state this test is about is one
+        # the validator has no opinion on at all, which is why a caller can
+        # actually meet it.
+        assert not _program_check(programs, "atomic-2026")["errors"]
+
+        _program_read(programs, "atomic-2026")
+        with pytest.raises(ValueError) as caught:
+            _program_edit_field(
+                programs, "atomic-2026", "layer", "notes", "bound at expiring terms",
+                None, target="xs-1",
+            )
+        message = str(caught.value)
+        assert caught.value.code == "stale_value"
+
+        # Pasted back exactly as offered, decoded the way a client decodes it.
+        _program_edit_field(
+            programs, "atomic-2026", "layer", "notes", "bound at expiring terms",
+            _paste_back(message), target="xs-1",
+        )
+        after = _program_read(programs, "atomic-2026")
+        assert next(ly for ly in after["layers"] if ly["id"] == "xs-1")["notes"] == (
+            "bound at expiring terms"
+        )
