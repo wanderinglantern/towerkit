@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import re
 
+from towerkit.tui.screens import editor as editor_module
 from towerkit.tui.screens.editor import (
     EDITOR_HELP,
     LAYERS_SHEET_HINT,
@@ -56,9 +57,19 @@ def _bound_keys() -> set[str]:
 
 
 def _hint_lines() -> dict[str, str]:
+    """Every hint line in the editor module, DISCOVERED rather than listed.
+
+    The two sheet hints used to be named here one by one, which makes this
+    arbiter blind to the next hint constant somebody adds — the failure mode
+    it exists to catch, arriving through the test itself. Any module-level
+    `*_HINT` string is a hint line and is checked.
+    """
     lines = {f"NODE_HINTS[{kind!r}]": text for kind, text in NODE_HINTS.items()}
-    lines["LAYERS_SHEET_HINT"] = LAYERS_SHEET_HINT
-    lines["PARTICIPANTS_SHEET_HINT"] = PARTICIPANTS_SHEET_HINT
+    for name, value in vars(editor_module).items():
+        if name.endswith("_HINT") and isinstance(value, str):
+            lines[name] = value
+    assert lines["LAYERS_SHEET_HINT"] == LAYERS_SHEET_HINT  # discovery works
+    assert lines["PARTICIPANTS_SHEET_HINT"] == PARTICIPANTS_SHEET_HINT
     return lines
 
 
@@ -118,3 +129,45 @@ def test_the_participants_jump_is_advertised_where_the_cost_was() -> None:
     assert "p" in _named_keys(NODE_HINTS["program"])
     assert "p" in _named_keys(LAYERS_SHEET_HINT)
     assert re.search(r"^\s*p\s", EDITOR_HELP, re.MULTILINE), EDITOR_HELP
+
+
+def test_the_named_limits_jump_is_advertised_the_same_way() -> None:
+    """`n` reaches the one field that needs a grid rather than an input. It
+    is advertised exactly where `p` is — the layer node, the group, the
+    program root, the layers sheet (where the picker lands) and help — or it
+    is a key only the source knows about."""
+    assert "n" in _named_keys(NODE_HINTS["layer"])
+    assert "n" in _named_keys(NODE_HINTS["layers-group"])
+    assert "n" in _named_keys(NODE_HINTS["program"])
+    assert "n" in _named_keys(LAYERS_SHEET_HINT)
+    assert re.search(r"^\s*n\s", EDITOR_HELP, re.MULTILINE), EDITOR_HELP
+
+
+# `#key-hint` is one row of a height-1 Static with a column of padding either
+# side, so at a 140-column terminal it has 138 columns of content and anything
+# past them is not scrolled — it is gone, silently, ending with the `? all
+# keys` escape hatch. bookkit learned this on its footer; the same widget
+# shape is here. The live-widget proof of the 138 sits in
+# tests/test_layer_detail_editing.py::TestHintLinesFit.
+HINT_COLUMNS = 138
+
+# what _refresh_hint appends to every NODE_HINTS entry before printing it
+HINT_SUFFIX = " · ? all keys"
+
+
+def _plain(text: str) -> str:
+    return re.sub(r"\[/?b\]", "", text).replace("\\", "")
+
+
+def test_no_hint_line_overflows_the_row_it_is_printed_on() -> None:
+    too_wide = []
+    for where, text in _hint_lines().items():
+        line = _plain(text)
+        if where.startswith("NODE_HINTS"):
+            line += HINT_SUFFIX
+        if len(line) > HINT_COLUMNS:
+            too_wide.append(f"{where}: {len(line)} columns > {HINT_COLUMNS}")
+    assert not too_wide, (
+        "hint lines cropped at 140 columns (the tail, where `? all keys` "
+        "lives, is what disappears):\n  " + "\n  ".join(too_wide)
+    )

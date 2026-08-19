@@ -18,6 +18,10 @@ BANNED = (
     ".lines.append(", ".layers.append(", ".retentions.append(", ".sublimits.append(",
     ".lines.pop(", ".layers.pop(", ".retentions.pop(", ".sublimits.pop(",
     ".lines.remove(", ".layers.remove(", ".retentions.remove(", ".sublimits.remove(",
+    # a layer's own repeating collection, held to the same rule: the
+    # named-limits grid adds and deletes rows through edit.add_named_limit /
+    # edit.remove_named_limit, so the MCP server inherits the same meaning
+    ".named_limits.append(", ".named_limits.pop(", ".named_limits.remove(",
     'setattr(p, "lines"', 'setattr(p, "layers"',
     'setattr(p, "retentions"', 'setattr(p, "sublimits"',
     "p.lines =", "p.layers =", "p.retentions =", "p.sublimits =",

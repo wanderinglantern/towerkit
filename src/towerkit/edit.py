@@ -12,7 +12,15 @@ from __future__ import annotations
 
 import re
 
-from .model import Layer, Line, Program, Retention, RetentionType, Sublimit
+from .model import (
+    Layer,
+    Line,
+    NamedLimit,
+    Program,
+    Retention,
+    RetentionType,
+    Sublimit,
+)
 
 
 def slugify(name: str) -> str:
@@ -335,3 +343,80 @@ def edit_sublimit(
 def remove_sublimit(program: Program, index: int) -> None:
     _at(list(program.sublimits), index, "sublimit")
     program.sublimits.pop(index)
+
+
+# -- layer detail fields ------------------------------------------------------
+#
+# `states`, `namedLimits` and `premiumDetail` shipped with no setter: they were
+# reachable only by hand-editing JSON. These are the one definition of what
+# setting each MEANS, so the editor and any later tool cannot drift apart.
+#
+# None of them enforces a validator rule. `validate.py` owns every refusal
+# (monopolistic states, duplicates, prose-versus-structure, a premium detail on
+# a priced layer) and reports it as a diagnostic the surface shows the user.
+# Silently repairing the input here would delete the refusal instead of
+# delivering it — a draft that breaks a semantic rule must stay editable and
+# stay flagged, exactly as a zero limit does.
+
+
+def parse_states(text: str) -> list[str]:
+    """`'NY, NJ'` → `['NY', 'NJ']` — the comma-separated entry syntax, defined
+    once so every surface splits it the same way.
+
+    Whitespace is trimmed and empty pieces dropped (a trailing comma is a
+    typing artefact, not a state). Nothing else is touched: codes are stored
+    VERBATIM, and duplicates are NOT collapsed — the validator refuses them by
+    name, and swallowing one here would hide the refusal it exists to make.
+    """
+    return [part.strip() for part in text.split(",") if part.strip()]
+
+
+def set_states(program: Program, layer_id: str, states: list[str]) -> Layer:
+    """Replace a layer's states wholesale. See `parse_states` for the syntax."""
+    layer = _layer(program, layer_id)
+    layer.states = [state.strip() for state in states if state.strip()]
+    return layer
+
+
+def set_premium_detail(program: Program, layer_id: str, detail: str | None) -> Layer:
+    """The word a ZERO premium prints. Empty is None, so clearing the field
+    drops the key from the file rather than writing `""`."""
+    layer = _layer(program, layer_id)
+    layer.premium_detail = (detail or "").strip() or None
+    return layer
+
+
+def add_named_limit(
+    program: Program, layer_id: str, name: str, amount: int
+) -> NamedLimit:
+    """Append one coordinate limit. Order is the file's order and is display
+    order, so a new one lands at the end and is never sorted into place."""
+    layer = _layer(program, layer_id)
+    named = NamedLimit(name=name, amount=amount)
+    layer.named_limits.append(named)
+    return named
+
+
+def edit_named_limit(
+    program: Program,
+    layer_id: str,
+    index: int,
+    name: str | None = None,
+    amount: int | None = None,
+) -> NamedLimit:
+    """`None` means leave alone. Named limits have no ids — like retentions and
+    sublimits, the caller addresses them by the index a read reported."""
+    layer = _layer(program, layer_id)
+    _at(list(layer.named_limits), index, "named limit")
+    named = layer.named_limits[index]
+    if name is not None:
+        named.name = name
+    if amount is not None:
+        named.amount = amount
+    return named
+
+
+def remove_named_limit(program: Program, layer_id: str, index: int) -> None:
+    layer = _layer(program, layer_id)
+    _at(list(layer.named_limits), index, "named limit")
+    layer.named_limits.pop(index)
