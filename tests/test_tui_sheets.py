@@ -385,3 +385,143 @@ class TestKnownLayerNames:
 
     def test_missing_dir_is_extra_only(self, tmp_path) -> None:
         assert known_layer_names(tmp_path / "nope", ["X"]) == ["X"]
+
+
+# --- reaching the participants grid ------------------------------------------
+#
+# A senior AE measured 42 keystrokes to change one carrier's share. The
+# editing was never the problem — the participants SheetTable above already
+# does it in seven keys. The cost was NAVIGATION: finding the layer, then
+# tabbing past twenty form fields to land on the grid. `p` deletes that
+# second leg, and these tests pin the number so the path cannot regrow.
+
+# 'xs-2' (2nd Excess) is model index 8 of 14 layers and tree line 21 of 33 —
+# a mid-file layer, not a first-row special case. Its participant 1 is
+# Munich Re at 35%.
+TARGET_LAYER = "xs-2"
+TARGET_ROW = 1
+TARGET_TREE_LINE = 21
+TARGET_SHEET_ROW = 8
+
+# The edit itself, once the cursor is on the grid's first cell: down to the
+# row, right to the share column, i to open the editor, ctrl+u to clear the
+# prefill, two digits, enter to commit.
+EDIT_KEYS = ["down", "right", "i", "ctrl+u", "3", "0", "enter"]
+
+# The measured routes that existed before `p`:
+#   tree  : 21 down + enter + 21 tab + 7 = 50
+#   v     : v + 8 down + enter + 20 tab + 7 = 37
+# `p` must beat the better of the two by a wide margin, not by a keystroke.
+KEYSTROKE_BUDGET = 20
+
+
+class TestParticipantsJump:
+    async def test_p_from_a_layer_node_focuses_the_participants_grid(
+        self, sample_copy
+    ) -> None:
+        """The layer is already selected in the outline: `p` puts the cursor
+        on its participants grid without walking the form."""
+        app = TowerkitApp(path=sample_copy)
+        async with app.run_test(size=(160, 48)) as pilot:
+            editor = app.screen
+            editor.selected = ("layer", TARGET_LAYER)
+            await editor._rebuild_detail()
+            await pilot.pause()
+            await pilot.press("p")
+            await pilot.pause()
+            focused = app.focused
+            assert isinstance(focused, SheetTable), f"focus went to {focused!r}"
+            assert focused.id == "participants-sheet"
+            assert editor._commit_ref == ("layer", TARGET_LAYER)
+
+    async def test_p_on_a_layers_sheet_row_opens_that_rows_participants(
+        self, sample_copy
+    ) -> None:
+        """From the layers sheet, `p` drills into the CURSOR row's layer —
+        not whatever the outline happened to have selected."""
+        app = TowerkitApp(path=sample_copy)
+        async with app.run_test(size=(160, 48)) as pilot:
+            editor = app.screen
+            await pilot.press("v")
+            for _ in range(TARGET_SHEET_ROW):
+                await pilot.press("down")
+            await pilot.pause()
+            assert editor.selected == ("program", None), "outline still on the root"
+            await pilot.press("p")
+            await pilot.pause()
+            assert not editor._layers_sheet_open, "the layers sheet handed over"
+            assert editor.selected == ("layer", TARGET_LAYER)
+            assert editor._commit_ref == ("layer", TARGET_LAYER)
+            focused = app.focused
+            assert isinstance(focused, SheetTable)
+            assert focused.id == "participants-sheet"
+            rows = [focused.get_row_at(i)[0] for i in range(focused.row_count)]
+            assert rows == ["Swiss Re", "Munich Re", "Liberty"]
+
+    async def test_p_with_no_layer_in_context_opens_the_layers_sheet_and_says_so(
+        self, sample_copy
+    ) -> None:
+        """A refusal says something. On the program node there is no layer to
+        drill into, so `p` opens the layer picker and names the next step
+        instead of returning in silence."""
+        app = TowerkitApp(path=sample_copy)
+        async with app.run_test(size=(160, 48)) as pilot:
+            editor = app.screen
+            assert editor.selected == ("program", None)
+            await pilot.press("p")
+            await pilot.pause()
+            assert editor._layers_sheet_open, "p opened the layer picker"
+            focused = app.focused
+            assert isinstance(focused, SheetTable)
+            assert focused.id == "layers-sheet"
+            assert any(
+                "p" in n.message and "participants" in n.message
+                for n in app._notifications
+            ), [n.message for n in app._notifications]
+
+    async def test_p_twice_from_the_opening_state_reaches_the_grid(
+        self, sample_copy
+    ) -> None:
+        """The picker it opens is driven by the SAME key: p, pick, p."""
+        app = TowerkitApp(path=sample_copy)
+        async with app.run_test(size=(160, 48)) as pilot:
+            editor = app.screen
+            await pilot.press("p")
+            for _ in range(TARGET_SHEET_ROW):
+                await pilot.press("down")
+            await pilot.press("p")
+            await pilot.pause()
+            assert editor.selected == ("layer", TARGET_LAYER)
+            focused = app.focused
+            assert isinstance(focused, SheetTable)
+            assert focused.id == "participants-sheet"
+
+    async def test_changing_a_share_fits_the_keystroke_budget(
+        self, sample_copy
+    ) -> None:
+        """THE regression pin: the whole task, driven as real keypresses from
+        the editor's opening state, inside the budget — and the share actually
+        changed. A path that regrows fails here, not in a review."""
+        app = TowerkitApp(path=sample_copy)
+        keys = (
+            ["p"]                          # open the layer picker
+            + ["down"] * TARGET_SHEET_ROW  # walk to '2nd Excess'
+            + ["p"]                        # drill into its participants
+            + EDIT_KEYS                    # Munich Re 35% -> 30%
+        )
+        assert len(keys) <= KEYSTROKE_BUDGET, len(keys)
+        async with app.run_test(size=(160, 48)) as pilot:
+            editor = app.screen
+            before = editor._layer(TARGET_LAYER).participants[TARGET_ROW]
+            assert (before.carrier, before.share_bps) == ("Munich Re", 3_500)
+            for key in keys:
+                await pilot.press(key)
+                await pilot.pause()
+            after = editor._layer(TARGET_LAYER).participants[TARGET_ROW]
+            assert after.carrier == "Munich Re", "the wrong row was written"
+            assert after.share_bps == 3_000, f"{len(keys)} keys and no change"
+            assert editor.session.dirty
+            # still exactly one undo step
+            await pilot.press("u")
+            await pilot.pause()
+            assert editor._layer(TARGET_LAYER).participants[TARGET_ROW].share_bps == 3_500
