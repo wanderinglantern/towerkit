@@ -95,9 +95,15 @@ class TestResolution:
         assert out["retentions"][0]["index"] == 0
 
     def test_escaping_the_roots_is_refused(self, roots) -> None:
+        """Absolute paths are the sandbox's verdict; dotted traversals are
+        refused as bad NAMES since round twelve — `resolve()` suffixes
+        before resolving, so a terminal `..` never actually traversed and
+        the exemption was a hole, not a courtesy."""
         programs = Programs(roots)
-        for bad in ("../outside", "/etc/passwd", "private/../../escape"):
-            with pytest.raises(ValueError, match="outside"):
+        with pytest.raises(ValueError, match="outside"):
+            _program_read(programs, "/etc/passwd")
+        for bad in ("../outside", "private/../../escape"):
+            with pytest.raises(edit.Refusal, match=r"\[bad_value\]"):
                 _program_read(programs, bad)
 
     def test_unknown_name_names_what_is_available(self, roots) -> None:
@@ -596,11 +602,15 @@ class TestCreation:
             )
 
     def test_create_refuses_outside_the_roots(self, roots) -> None:
+        # An ABSOLUTE path: since round twelve a dotted name is refused
+        # earlier as a bad NAME (`..` never truly traversed — the .json
+        # suffix consumed it), so the sandbox's own refusal is pinned here
+        # with the one escape shape that survives the suffix.
         programs = Programs(roots)
         with pytest.raises(ValueError, match="outside"):
             _program_create(
                 programs,
-                "../escape",
+                "/tmp/escape",
                 insured="X",
                 program="Y",
                 placement="bound",
@@ -1778,7 +1788,9 @@ class TestEditField:
             ("no_such_program", {"kind": "layer", "field": "attach", "value": "1m",
                                  "expecting": "2m", "target": "xs-1", "name": "ghost"}),
             ("outside_roots", {"kind": "layer", "field": "attach", "value": "1m",
-                               "expecting": "2m", "target": "xs-1", "name": "../out"}),
+                               "expecting": "2m", "target": "xs-1", "name": "/tmp/out"}),
+            ("bad_value", {"kind": "layer", "field": "attach", "value": "1m",
+                           "expecting": "2m", "target": "xs-1", "name": "../out"}),
         ]
         for code, kwargs in after_read:
             name = kwargs.pop("name", "atomic-2026")
@@ -2466,3 +2478,32 @@ class TestPerimeterRoundEleven:
         for bad in ("TKW-\x00", "TKW-*", "TKW-short", "TKW-" + "a" * 40):
             with pytest.raises(edit.Refusal, match=r"\[bad_value\]"):
                 _program_revert_write(programs, bad)
+
+
+class TestPerimeterRoundTwelve:
+    def test_dotdot_is_a_bad_name_because_the_suffix_eats_the_traversal(self, roots) -> None:
+        """Round twelve: `resolve()` appends `.json` BEFORE resolution, so a
+        terminal `..` never traverses — `".."` became a hidden `...json`,
+        `a/..` a junk dir plus `a/...json`, and `a/../b` wrote `b.json`
+        while echoing `created: a/../b`. The round-eleven exemption
+        ("`..` stays the sandbox's verdict") was FALSE for exactly these:
+        the sandbox never saw them. `..` is now just another dotted
+        segment — never a valid program name."""
+        programs = Programs(roots)
+        for bad in ("..", "a/..", "a/../b", "../outside", "private/../../escape"):
+            with pytest.raises(edit.Refusal, match=r"\[bad_value\]"):
+                programs.resolve(bad, must_exist=False)
+
+    def test_the_length_bound_is_total_not_per_segment(self, roots) -> None:
+        """Six 200-byte segments passed the per-segment cap and leaked
+        ENAMETOOLONG from mkdir as [internal_error] — the exact class round
+        eleven claimed closed, in multi-segment form."""
+        with pytest.raises(edit.Refusal, match=r"\[bad_value\]"):
+            Programs(roots).resolve("/".join(["y" * 200] * 6), must_exist=False)
+
+    def test_a_unicode_digit_ref_is_bad_value(self, roots) -> None:
+        """`\\d` without re.ASCII matches Arabic-Indic digits; harmless today
+        (ends at no_snapshot) but the shape check should mean what
+        write_ref() issues, which is ASCII."""
+        with pytest.raises(edit.Refusal, match=r"\[bad_value\]"):
+            _program_revert_write(Programs(roots), "TKW-٢٠٢٦٠٨٢٠T٠٠٠٠٠٠-abcd")

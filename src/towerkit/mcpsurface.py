@@ -1178,7 +1178,11 @@ def describe(kind: str | None = None) -> dict[str, Any]:
             "fields": fields,
             "denied": {
                 key.split(".", 1)[1]: reason
-                for key, reason in {**DENIED, **UNDESCRIBABLE}.items()
+                # DENIED second so it WINS: a field in both tables must give
+                # the same answer at both doors, and `denied_reason` serves
+                # the hand reason — the human's decision outranks the
+                # derivation's complaint (round twelve).
+                for key, reason in {**UNDESCRIBABLE, **DENIED}.items()
                 if key.split(".", 1)[0] == name
             },
         }

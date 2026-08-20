@@ -602,3 +602,26 @@ hand-written `_LAYER_KEYS` named here was deleted on 2026-08-19 — see
   echoes the value) only if the transport delivers lone `\ud800` escapes —
   recorded with that caveat. The sha-check-to-write TOCTOU window is
   inherent to lockless optimistic concurrency — design note, not a bug.
+
+## Round twelve: the `..` exemption was the hole, and a correction (2026-08-20)
+
+- **CORRECTION to the round-eleven entry above:** "`..` stays the
+  sandbox's verdict" was FALSE for terminal `..` — `resolve()` appends
+  `.json` before any path resolution, so `".."` became a hidden `...json`
+  and `a/..` a junk directory plus `a/...json`; the sandbox never saw a
+  traversal because the suffix consumed it. `..` is now simply a dotted
+  segment: `bad_value`, like every other invalid name. Only absolute
+  paths — whose escape survives the suffix — remain `outside_roots`.
+- **The name length bound is TOTAL (700 bytes) as well as per-segment** —
+  six 200-byte segments passed the per-segment cap and leaked
+  ENAMETOOLONG out of mkdir as a towerkit bug.
+- **DENIED outranks UNDESCRIBABLE at both doors** — `describe()` merged
+  the tables in the other order from `denied_reason`, so a field in both
+  gave two different explanations. The human's decision wins.
+- **`_REF_SHAPE` is ASCII** — bare `\d` also matched Arabic-Indic digits.
+- **Ledger, gated (round twelve):** a `STRICTER_ENUMS` declaration
+  shadowing a MODEL-derived enum is accepted silently — symmetric with
+  `STRICTER_THAN_MODEL`, which likewise accepts a redundant `required`;
+  fixing one without the other would be a new asymmetry, so both ride
+  together or not at all. `CON`/`NUL` names are valid on macOS and only a
+  portability concern.

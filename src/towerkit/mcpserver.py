@@ -153,18 +153,30 @@ class Programs:
         segment IS — non-empty, no leading dot, no control characters,
         within the filesystem's length — instead of chasing what it isn't.
 
-        `..` is deliberately NOT refused here: traversal is the sandbox's
-        verdict, and it answers `outside_roots` below, which is the truthful
-        code for it.
+        `..` is NOT a sandbox matter, and round twelve proved why the
+        round-eleven exemption ("traversal is the sandbox's verdict") was
+        false: `resolve()` appends `.json` to the raw string BEFORE any
+        path resolution, so a terminal `..` never traverses — `".."`
+        became a hidden `...json`, and `a/..` a junk directory plus
+        `a/...json`. The sandbox never saw the traversal because the
+        suffix consumed it. `..` starts with a dot, and the leading-dot
+        rule now simply applies. Absolute paths alone stay `outside_roots`:
+        their escape survives the suffix.
         """
         segments = name.split("/")
         if segments and segments[0] == "":
             # A leading "/" is an absolute path — an ESCAPE, not a bad name,
             # and the sandbox owns escapes: fall through to `outside_roots`.
             segments = segments[1:] or [""]
+        if len(name.encode("utf-8")) > 700:
+            # TOTAL, not only per segment: six 200-byte segments passed the
+            # per-segment cap and leaked ENAMETOOLONG out of mkdir as a
+            # towerkit bug (round twelve).
+            raise Refusal(
+                "bad_value",
+                f"{name[:40]!r}… is not a valid program name (over 700 bytes)",
+            )
         for seg in segments:
-            if seg == "..":
-                continue
             problem = (
                 "an empty segment"
                 if not seg.strip()
@@ -242,7 +254,9 @@ class Programs:
 
 
 _NAME_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
-_REF_SHAPE = re.compile(r"TKW-\d{8}T\d{6}-[0-9a-f]{4}")
+# re.ASCII: bare \d also matches Arabic-Indic digits, and the shape check
+# means exactly what write_ref() issues, which is ASCII (round twelve).
+_REF_SHAPE = re.compile(r"TKW-\d{8}T\d{6}-[0-9a-f]{4}", re.ASCII)
 
 
 def write_ref() -> str:

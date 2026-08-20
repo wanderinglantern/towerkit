@@ -1363,3 +1363,16 @@ def test_an_enum_with_non_string_values_cannot_be_advertised() -> None:
 
     with pytest.raises(RuntimeError, match="non-string"):
         mcpsurface._classify("layer.numbered", Numbered, [])
+
+
+def test_a_hand_denial_outranks_the_derivation_message_at_both_doors(monkeypatch) -> None:
+    """Round twelve: a field in BOTH tables answered with the hand reason
+    through `denied_reason` and the derivation message through `describe()`
+    — two doors, two explanations. DENIED is the human's decision and wins
+    at both."""
+    key = "layer.id"  # any real DENIED row
+    denied_reason_text = mcpsurface.DENIED[key]
+    monkeypatch.setitem(mcpsurface.UNDESCRIBABLE, key, "derivation message")
+    assert mcpsurface.denied_reason("layer", "id") == denied_reason_text
+    listed = mcpsurface.describe("layer")["kinds"]["layer"]["denied"]["id"]
+    assert listed == denied_reason_text
