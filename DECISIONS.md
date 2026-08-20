@@ -456,3 +456,36 @@ hand-written `_LAYER_KEYS` named here was deleted on 2026-08-19 — see
   VOCABULARY derived from the live tool schemas' argument names, the write
   surface's fields and the kind names, so `layer_id`, `line_ids` and
   `named_limit` stay out of it without a hand-written exclusion list.
+
+## Round six: the perimeter joins the error contract (2026-08-20)
+
+- **Every `load_program` a tool runs now goes through `mcpserver._load`,**
+  which maps a corrupt or model-invalid file to `[invalid_file]` pointing at
+  `program_check`. The stable-code net was strung around `_write.mutate`
+  only; both reads, the write's own pre-image load, clone's source and
+  `program_create`'s enum/model raises all leaked raw exceptions. Same
+  repair as round five's `TypeError`, one ring further out.
+- **`render.theme` gets a validator diagnostic (`render-theme`),** in
+  `validate_file` not `validate_program` (it needs the filesystem; the
+  semantic pass stays pure). Junk wrote clean, validated clean, and crashed
+  `towerctl render` — the currency genus, one field over. Absolute paths are
+  errors even when they load: program files are portable by contract.
+- **`schemagen` raises on two shapes it used to get quietly wrong:** an enum
+  with non-string values (stringified into a schema that rejects the model's
+  own output — proven against Draft202012Validator) and a Money bound the
+  money `$def` cannot express (silently dropped). Both latent; both now
+  refuse loudly and name the hand-authored repair.
+
+## OPEN — two policy calls for Grant, raised by round six (2026-08-20)
+
+- **Import-time total failure for an unclassifiable int.** `mcpsurface`
+  builds SURFACE at module scope, so one innocent count field added to a
+  model raises `RuntimeError` at import and bricks all 23 tools until it is
+  tagged — `towerctl mcp` will not start. Loud is right; TOTAL is the
+  question. The alternative is a per-field denial with the same message, so
+  the rest of the surface keeps working. Not changed here.
+- **A stale hand-authored `enum` survives retyping silently.** A
+  stricter-than-model `required` must be declared in `STRICTER_THAN_MODEL`,
+  but retyping an Enum field to `str` leaves the schema's old `enum` behind
+  as "hand-authored" — stricter than the model with no declaration. The
+  asymmetry is inherited, not decided. Not changed here.

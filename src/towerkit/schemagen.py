@@ -318,11 +318,39 @@ def _subschema(where: str, base: Any, metadata: list[Any]) -> dict[str, Any]:
         # drafts the model was written to accept. The MONEY tag says how to READ
         # the number; the bound says what it may BE, and only the second one is
         # what the $def encodes.
-        return {"$ref": "#/$defs/money"} if _bounded_at_zero(metadata) else {"type": "integer"}
+        if _bounded_at_zero(metadata):
+            return {"$ref": "#/$defs/money"}
+        if _carries_a_bound(metadata):
+            # `ge=1` (or any bound the two branches above cannot express) used
+            # to fall through to a bare `{"type": "integer"}` — the schema
+            # silently looser than the model, which is the one thing this
+            # module promises never to emit. Same policy as the nested-model
+            # branch: refuse loudly and name the hand-authored repair, because
+            # `minimum`/`maximum` are the human's half of the document and
+            # survive reconciliation.
+            raise SchemaDerivationError(
+                f"{where} is Money with a bound the derivation cannot express — "
+                f"author `minimum`/`maximum` by hand on the property (hand-authored "
+                f"keywords survive reconciliation) or move the bound to ge=0"
+            )
+        return {"type": "integer"}
     if base is date:
         return {"type": "string", "format": "date"}
     if isinstance(base, type) and issubclass(base, Enum):
-        return {"enum": [str(member.value) for member in base]}
+        values = [member.value for member in base]
+        if not all(isinstance(v, str) for v in values):
+            # Stringified, an int-valued enum yields `{"enum": ["1", "2"]}`
+            # while the file holds `1` — proven wrong against
+            # Draft202012Validator in round six (`1 is not one of ['1', '2']`).
+            # Wrong-instead-of-raise is the one failure mode this module
+            # promises against.
+            raise SchemaDerivationError(
+                f"{where} is an enum with non-string values {values!r} — the file "
+                f"would hold the raw value, so a stringified enum is a schema that "
+                f"rejects the model's own output; make it a StrEnum or teach "
+                f"_subschema the value type"
+            )
+        return {"enum": values}
     if base is bool:
         return {"type": "boolean"}
     if isinstance(base, type) and issubclass(base, BaseModel):
@@ -358,6 +386,21 @@ def _bounded_at_zero(metadata: list[Any]) -> bool:
         if getattr(item, "ge", None) == 0:
             return True
         if any(getattr(inner, "ge", None) == 0 for inner in getattr(item, "metadata", ())):
+            return True
+    return False
+
+
+def _carries_a_bound(metadata: list[Any]) -> bool:
+    """Any `ge`/`le` at all, in either of `_bounded_at_zero`'s two shapes —
+    so a bound that ISN'T the ge=0 the money `$def` encodes is detected
+    rather than silently dropped."""
+    for item in metadata:
+        if getattr(item, "ge", None) is not None or getattr(item, "le", None) is not None:
+            return True
+        if any(
+            getattr(inner, "ge", None) is not None or getattr(inner, "le", None) is not None
+            for inner in getattr(item, "metadata", ())
+        ):
             return True
     return False
 

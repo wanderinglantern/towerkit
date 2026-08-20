@@ -339,7 +339,7 @@ def _write(
             )
 
     pre_image = path.read_bytes()
-    program = load_program(path)
+    program = _load(path, name)
     try:
         mutate(program)
         edit.heal_follows(program)
@@ -443,10 +443,47 @@ def _reason(exc: Exception) -> str:
     here, at the one boundary that turns an exception into a client-facing
     string, rather than by retyping the exceptions — `KeyError` is what the
     TUI and the tests catch, and it means the right thing inside `edit.py`.
+
+    `ValidationError` is compacted for the same reason: pydantic's own
+    `__str__` is a four-line repr ending in an errors.pydantic.dev URL, which
+    is a report about pydantic, not about the caller's file. `loc: msg` per
+    error is the part a client can act on.
     """
     if isinstance(exc, KeyError) and exc.args and isinstance(exc.args[0], str):
         return exc.args[0]
+    if isinstance(exc, ValidationError):
+        return "; ".join(
+            f"{'.'.join(str(part) for part in err['loc'])}: {err['msg']}"
+            for err in exc.errors()
+        )
     return str(exc)
+
+
+def _load(path: Path, name: str) -> Program:
+    """`load_program` with the error contract every tool owes.
+
+    The stable-code net used to be strung around `_write.mutate` only, so
+    everywhere this ran outside it — both reads, the write's own pre-image
+    load, clone's source — a corrupt or model-invalid file escaped as a raw
+    `JSONDecodeError`/`ValidationError` with no `[code]` (round six,
+    2026-08-20). Files go corrupt in exactly the ways that produce those:
+    hand edits, merge conflicts, partial writes by another tool. A caller
+    branching on `.code` was blind to every one.
+
+    `invalid_file`, not `guard_refused`: this is a statement about the FILE
+    ON DISK, not about any value the caller sent. `program_check` reads the
+    same file through the diagnostic path and reports `json:`/`schema:`
+    errors instead of dying, so the refusal points there.
+    """
+    try:
+        return load_program(path)
+    except (ValidationError, ValueError) as exc:  # JSONDecodeError IS a ValueError
+        raise Refusal(
+            "invalid_file",
+            f"{name} cannot be loaded ({_reason(exc)}) — the file on disk is not a "
+            f"valid program (a hand edit, merge conflict, or partial write from "
+            f"another tool); program_check({name!r}) reports the full diagnostics",
+        ) from exc
 
 
 def _period(program: Program) -> dict[str, str]:
@@ -557,7 +594,7 @@ def _program_read(programs: Programs, name: str) -> dict[str, Any]:
     The one read that arms the write guard, because it is the one read that
     returns the sha. See `Programs.note`."""
     path = programs.resolve(name)
-    program = load_program(path)
+    program = _load(path, name)
     sha = programs.note(path)
     return {"name": name, "sha": sha, **_readable(program)}
 
@@ -571,7 +608,7 @@ def _program_view(programs: Programs, name: str) -> dict[str, Any]:
     from .theme import load_theme
 
     path = programs.resolve(name)
-    program = load_program(path)
+    program = _load(path, name)
     # No `programs.note(path)`: this returns a picture, not the sha. See the
     # arming rule on `Programs.note` — a caller that cannot name the bytes it
     # saw cannot be given the right to overwrite them.
@@ -1112,12 +1149,27 @@ def _program_edit_field(
                 "stale_value", mcpsurface.mismatch_message(entry, who, current, expected)
             )
         advisories.extend(mcpsurface.apply(program, entry, target, index, parsed))
+        # A setter may MOVE the entity — `rename_line` cascades the id off the
+        # new name — and a caller still holding `target` is then addressing a
+        # line that no longer exists. Detected off the entity rather than
+        # special-casing `line.name`, so the next address-moving setter
+        # inherits the report. (Round six: the new id appeared nowhere in the
+        # response; `line_edit`, the verb, already returns `line_id`.)
+        new_id = getattr(entity, "id", None)
+        if target is not None and new_id is not None and new_id != target:
+            moved[f"{kind}_id"] = new_id
 
+    moved: dict[str, str] = {}
     out = _write(programs, name, f"set {field} on {who}", do, expect_sha)
     # Advisories are what the write did NOT do (currency converts no figure).
     # They are not validator diagnostics — re-reading the file will not
     # reproduce them — so they never merge into `warnings`.
-    return {**out, "advisories": _diag(advisories), "note": notes[0] if notes else None}
+    return {
+        **out,
+        **moved,
+        "advisories": _diag(advisories),
+        "note": notes[0] if notes else None,
+    }
 
 
 def _program_revert_write(programs: Programs, write_ref: str) -> dict[str, Any]:
@@ -1183,18 +1235,35 @@ def _program_create(
     path = programs.resolve(name, must_exist=False)
     if path.exists():
         raise Refusal("exists", f"{name} already exists — edit it, or pick another name")
-    fresh = Program(
-        insured=insured,
-        program=program,
-        placement=Placement(placement),
-        period=Period(
-            start=_parse_date(period_from, "period_from"),
-            end=_parse_date(period_to, "period_to"),
-        ),
-        lines=[],
-    )
-    for line_name in lines:
-        edit.add_line(fresh, line_name)
+    try:
+        placed = Placement(placement)
+    except ValueError as exc:
+        # `Placement('quoted')` says "'quoted' is not a valid Placement" —
+        # names the enum's CLASS and none of its values, and carried no code
+        # (round six). Every other refusal on this branch names a value that
+        # would be accepted.
+        raise Refusal(
+            "bad_value",
+            f"placement takes one of {', '.join(repr(p.value) for p in Placement)} — "
+            f"got {placement!r}",
+        ) from exc
+    try:
+        fresh = Program(
+            insured=insured,
+            program=program,
+            placement=placed,
+            period=Period(
+                start=_parse_date(period_from, "period_from"),
+                end=_parse_date(period_to, "period_to"),
+            ),
+            lines=[],
+        )
+        for line_name in lines:
+            edit.add_line(fresh, line_name)
+    except Refusal:
+        raise  # FIRST — Refusal IS a ValueError; see `_write` for the ordering rule
+    except (ValidationError, ValueError, KeyError) as exc:
+        raise Refusal("bad_value", f"refused — nothing created: {_reason(exc)}") from exc
     text = dumps_program(fresh)
     loads_program(text)  # proves the file we are about to write is loadable
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -1220,7 +1289,7 @@ def _program_clone_renewal(programs: Programs, source: str, dest: str) -> dict[s
     dest_path = programs.resolve(dest, must_exist=False)
     if dest_path.exists():
         raise Refusal("exists", f"{dest} already exists — pick another name")
-    clone = load_program(source_path).clone_as_renewal()
+    clone = _load(source_path, source).clone_as_renewal()
     text = dumps_program(clone)
     loads_program(text)  # proves the file we are about to write is loadable
     dest_path.parent.mkdir(parents=True, exist_ok=True)

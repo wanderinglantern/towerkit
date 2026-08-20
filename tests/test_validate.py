@@ -581,3 +581,57 @@ class TestNewFieldsAgainstTheSchema:
         assert '"states"' in text and '"namedLimits"' in text and '"premiumDetail"' in text
         _, diags = validate_file(target)
         assert [d.message for d in diags.items if d.code == "schema"] == []
+
+
+class TestRenderTheme:
+    """`render.theme` names a FILE, and `towerctl render` reads it with no net
+    underneath. Round six (2026-08-20): any junk string wrote clean, validated
+    clean (exit 0), then crashed the renderer with a raw JSONDecodeError — the
+    write-says-clean genus, one field over from currency. The check lives in
+    `validate_file`, not `validate_program`: it needs the filesystem, and the
+    semantic pass stays pure."""
+
+    def _file(self, tmp_path, theme: str):
+        from towerkit.model import RenderSettings, dumps_program
+
+        program = make_program(render=RenderSettings(theme=theme))
+        path = tmp_path / "p.json"
+        path.write_text(dumps_program(program), encoding="utf-8")
+        return path
+
+    def test_a_theme_that_cannot_load_is_an_error(self, tmp_path) -> None:
+        _, diags = validate_file(self._file(tmp_path, "no/such/theme.json"))
+        codes = [d.code for d in diags.errors]
+        assert "render-theme" in codes
+
+    def test_an_absolute_theme_path_is_an_error_even_when_it_loads(self, tmp_path) -> None:
+        """Program files are portable by contract (CLAUDE.md: theme paths stay
+        RELATIVE); an absolute path renders here and breaks on the next
+        machine, which is worse than breaking now."""
+        from importlib import resources
+
+        theme = tmp_path / "t.json"
+        theme.write_text(
+            resources.files("towerkit").joinpath("themes/default.json").read_text("utf-8"),
+            encoding="utf-8",
+        )
+        _, diags = validate_file(self._file(tmp_path, str(theme)))
+        offending = [d for d in diags.errors if d.code == "render-theme"]
+        assert offending and "relative" in offending[0].message
+
+    def test_a_loadable_relative_theme_is_clean(self, tmp_path, monkeypatch) -> None:
+        """Passed trivially at RED, so it owes mutation evidence (CLAUDE.md,
+        2026-08-14). Drill: `_check_render_theme` mutated to error
+        unconditionally — `AssertionError: assert not [Diagnostic(...,
+        code='render-theme', ...)]`. Restored."""
+        from importlib import resources
+
+        (tmp_path / "themes").mkdir()
+        (tmp_path / "themes" / "t.json").write_text(
+            resources.files("towerkit").joinpath("themes/default.json").read_text("utf-8"),
+            encoding="utf-8",
+        )
+        path = self._file(tmp_path, "themes/t.json")
+        monkeypatch.chdir(tmp_path)
+        _, diags = validate_file(path)
+        assert not [d for d in diags.items if d.code == "render-theme"]

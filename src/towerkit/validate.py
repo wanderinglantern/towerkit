@@ -515,4 +515,44 @@ def validate_file(path: Path | str) -> tuple[Program | None, Diagnostics]:
         return None, diags
 
     diags.items.extend(validate_program(program).items)
+    _check_render_theme(program, diags)
     return program, diags
+
+
+def _check_render_theme(program: Program, diags: Diagnostics) -> None:
+    """`render.theme` names a FILE, and `towerctl render` reads it with no net
+    underneath — so a value `load_theme` cannot read is a program that
+    validates clean and then crashes the renderer with a raw traceback (round
+    six, 2026-08-20: the write-says-clean genus, one field over from
+    currency). It lives HERE, not in `validate_program`: the check needs the
+    filesystem, and the semantic pass stays pure — model in, diagnostics out.
+
+    Resolution is relative to the working directory, deliberately, because
+    that is exactly how `towerctl render` resolves it: this check is a
+    prediction about the renderer, and a prediction made from anywhere else
+    would be about a render nobody is going to run.
+
+    Absolute paths are an error even when they load: program files are
+    portable by contract (theme paths stay RELATIVE — render.theme docs), and
+    a path that renders here and breaks on the next machine is worse than one
+    that breaks now."""
+    theme = program.render.theme if program.render else None
+    if theme is None:
+        return
+    from .theme import load_theme
+
+    if Path(theme).is_absolute():
+        diags.error(
+            "render-theme",
+            f"render.theme {theme!r} is absolute — program files are portable, "
+            f"store a path relative to where towerctl runs",
+        )
+        return
+    try:
+        load_theme(theme)
+    except Exception as exc:
+        diags.error(
+            "render-theme",
+            f"render.theme {theme!r} cannot be loaded ({type(exc).__name__}: {exc}) "
+            f"— towerctl render will fail on this file",
+        )

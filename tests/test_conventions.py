@@ -1042,3 +1042,49 @@ def test_a_second_pass_over_a_repaired_document_changes_nothing() -> None:
     assert once["$defs"]["layer"]["properties"]["attach"]["minimum"] == 1000
 
     assert sync_document(copy.deepcopy(once)) == once, "sync_document is not idempotent"
+
+
+def test_an_enum_with_non_string_values_raises_rather_than_stringifying() -> None:
+    """Round six, proven against `jsonschema.Draft202012Validator`: an
+    int-valued Enum came out as `{"enum": ["1", "2"]}` while the file would
+    hold `1`, and the validator rejected the file's own value (`1 is not one
+    of ['1', '2']`). Emitting a wrong schema instead of raising is the one
+    thing `schemagen` promises never to do. Latent — every current enum is a
+    StrEnum — so only a shape the generator has never seen can pin it."""
+    from enum import Enum as PlainEnum
+
+    from pydantic import BaseModel as PydanticBase
+
+    from towerkit.schemagen import SchemaDerivationError, derive_property
+
+    class Numbered(PlainEnum):
+        ONE = 1
+        TWO = 2
+
+    class Holder(PydanticBase):
+        numbered: Numbered
+
+    with pytest.raises(SchemaDerivationError, match="non-string"):
+        derive_property(Holder, "numbered", Holder.model_fields["numbered"])
+
+
+def test_a_money_bound_the_schema_cannot_express_raises() -> None:
+    """Round six: `Annotated[int, Field(ge=1), MONEY]` emitted a bare
+    `{"type": "integer"}` — the `ge=1` silently dropped, schema looser than
+    model with no message. The module's precedent for constraints it will not
+    guess at is the nested-model branch: refuse loudly and name the
+    hand-authored repair. Same here — `minimum` is the human's half of the
+    document and survives reconciliation, so the raise says to author it."""
+    from typing import Annotated as Ann
+
+    from pydantic import BaseModel as PydanticBase
+    from pydantic import Field as PydanticField
+
+    from towerkit.model import MONEY as MONEY_TAG
+    from towerkit.schemagen import SchemaDerivationError, derive_property
+
+    class Holder(PydanticBase):
+        amount: Ann[int, PydanticField(ge=1), MONEY_TAG]
+
+    with pytest.raises(SchemaDerivationError, match="minimum"):
+        derive_property(Holder, "amount", Holder.model_fields["amount"])

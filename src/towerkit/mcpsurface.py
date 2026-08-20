@@ -339,6 +339,14 @@ ERROR_CODES: tuple[str, ...] = (
     "exists",
     "no_snapshot",
     "internal_error",
+    # A file on disk that cannot be parsed into the model at all — corrupt
+    # JSON, a merge conflict, a partial write by another tool. A statement
+    # about the FILE, not about any value the caller sent (`bad_value`) and
+    # not about towerkit (`internal_error`). Added in round six: every
+    # `load_program` outside `_write.mutate` leaked the raw
+    # JSONDecodeError/ValidationError uncoded. The refusal points at
+    # `program_check`, which reads the same file through the diagnostic path.
+    "invalid_file",
 )
 
 # Fields whose named setter in `edit.py` does something a plain assignment
@@ -522,7 +530,19 @@ def _classify(where: str, base: Any, metadata: list[Any]) -> tuple[str, tuple[st
     if base is date:
         return "date", None
     if isinstance(base, type) and issubclass(base, Enum):
-        return "enum", tuple(str(member.value) for member in base)
+        values = tuple(member.value for member in base)
+        if not all(isinstance(v, str) for v in values):
+            # Stringified, an int-valued enum ADVERTISES '1' while
+            # `parse_value`'s `Enum('1')` lookup can never match it —
+            # advertised-but-unwritable, the defect class this module exists
+            # to kill. Every current enum is a StrEnum, so only a new shape
+            # can reach this; refuse at derivation, before describe() lies.
+            raise RuntimeError(
+                f"{where} is an enum with non-string values {list(values)!r} — the "
+                f"wire lexicon is strings; make it a StrEnum or teach _classify "
+                f"and parse_value the value type together"
+            )
+        return "enum", values
     if base is bool:  # BEFORE int: bool is a subclass of it
         return "bool", None
     if get_origin(base) is list and get_args(base) == (str,):
@@ -934,8 +954,11 @@ def parse_expecting(entry: Entry, value: object) -> Any:
     files and hand edits carry it — so it has to be expressible, and the value
     the mismatch offers is the value that works.
 
-    A length bound is NOT applied to it: `expecting` is a comparison operand,
-    not a write. A field that cannot hold `""` simply never matches one.
+    `""` is the ONLY value that bypasses the parser. Every other operand goes
+    through `parse_value`, bounds included — so `expecting="EURO"` on currency
+    is refused `bad_value` outright rather than compared and refused
+    `stale_value`. That shortcut loses nothing: a stored value always
+    satisfies the model's own bounds, so no reachable state is inexpressible.
     """
     if value is None:
         return None
@@ -1074,7 +1097,12 @@ def apply(
     address = edit_address(entry, target, index)
     if entry.setter is None:
         return edit.set_field(program, entry.kind, entry.field, value, address, index)
-    edit.rename_line(program, str(target), str(value))
+    # Dispatch on the NAME the row carries, never a hardcoded branch. With one
+    # row a hardcode is invisible — this called `edit.rename_line` for ANY
+    # non-None setter (round six), so the second row anyone added would have
+    # had its field silently applied as a line rename. A setter row's contract
+    # is `edit.<name>(program, target, value)`.
+    getattr(edit, entry.setter)(program, str(target), str(value))
     return []
 
 

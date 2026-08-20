@@ -1285,3 +1285,47 @@ def test_the_share_range_is_the_models_and_not_a_copy_of_it() -> None:
     for refused in (-1, BPS_SCALE + 1):
         with pytest.raises(mcpsurface.BadValue, match="0 to 10000"):
             mcpsurface.parse_value(entry, refused)
+
+def test_apply_dispatches_on_the_setter_the_entry_names(monkeypatch) -> None:
+    """`_SETTERS` rows name their `edit` function, and `apply` must LOOK AT
+    the name. Round six (2026-08-20): with exactly one row it hardcoded
+    `edit.rename_line` behind `if entry.setter is None`, so the test above
+    passed while the dispatch was fiction — the first person to add a second
+    row would have their field silently applied as a line rename. Invisible
+    to any test using only today's rows; this one injects a row the surface
+    has never seen, the same trick that caught table six."""
+    from dataclasses import replace
+
+    calls: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        edit,
+        "probe_setter",
+        lambda program, target, value: calls.append((target, value)),
+        raising=False,
+    )
+    entry = replace(mcpsurface.SURFACE["line"]["name"], setter="probe_setter")
+    program = Program(
+        insured="Atomic", program="Casualty", placement="bound",
+        period=Period(start=date(2026, 1, 1), end=date(2027, 1, 1)),
+        lines=[Line(id="gl", name="General Liability")],
+    )
+    mcpsurface.apply(program, entry, "gl", None, "Cyber")
+    assert calls == [("gl", "Cyber")], "apply must call the function the row names"
+    assert program.lines[0].name == "General Liability", "rename_line must NOT have run"
+
+
+def test_an_enum_with_non_string_values_cannot_be_advertised() -> None:
+    """`_classify` stringifies member values for the published `values` tuple.
+    For an int-valued enum that advertises '1' while `parse_value`'s
+    `Kind('1')` lookup can never match it — advertised-but-unwritable, the
+    exact defect class this module exists to kill. All current enums are
+    StrEnums, so this can only be caught by a shape the surface has never
+    seen; raise at derivation time, before describe() ever lies."""
+    from enum import Enum
+
+    class Numbered(Enum):
+        ONE = 1
+        TWO = 2
+
+    with pytest.raises(RuntimeError, match="non-string"):
+        mcpsurface._classify("layer.numbered", Numbered, [])

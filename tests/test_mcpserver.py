@@ -2011,3 +2011,131 @@ class TestAnEmptyStringIsAState:
         assert next(ly for ly in after["layers"] if ly["id"] == "xs-1")["notes"] == (
             "bound at expiring terms"
         )
+
+
+class TestCodedPerimeter:
+    """Round six (2026-08-20): the stable-code contract was strung around
+    `_write.mutate` only. Everywhere `load_program` ran outside it — the two
+    reads, the write's own pre-image load, clone's source — a corrupt or
+    model-invalid file escaped as a raw `JSONDecodeError`/`ValidationError`
+    with no `[code]`, and `program_create` leaked a bare `ValueError` for a
+    bad placement and the four-line pydantic repr for a bad field. A caller
+    branching on `.code` (bookkit does, per `Refusal`'s docstring) was blind
+    to all of them, and files go corrupt in exactly the ways that produce
+    them: hand edits, merge conflicts, partial external writes."""
+
+    def test_reading_a_corrupt_file_is_a_coded_refusal(self, roots) -> None:
+        (roots[0] / "atomic-2026.json").write_text("{not json", encoding="utf-8")
+        with pytest.raises(edit.Refusal, match=r"\[invalid_file\].*program_check"):
+            _program_read(Programs(roots), "atomic-2026")
+
+    def test_viewing_a_corrupt_file_is_a_coded_refusal(self, roots) -> None:
+        (roots[0] / "atomic-2026.json").write_text("{not json", encoding="utf-8")
+        with pytest.raises(edit.Refusal, match=r"\[invalid_file\]"):
+            _program_view(Programs(roots), "atomic-2026")
+
+    def test_reading_a_model_invalid_file_is_a_coded_refusal(self, roots) -> None:
+        path = roots[0] / "atomic-2026.json"
+        data = json.loads(path.read_text("utf-8"))
+        data["layers"][0]["brokerRef"] = "X-1"
+        path.write_text(json.dumps(data), encoding="utf-8")
+        with pytest.raises(edit.Refusal, match=r"\[invalid_file\]") as caught:
+            _program_read(Programs(roots), "atomic-2026")
+        assert "errors.pydantic.dev" not in str(caught.value)
+
+    def test_editing_a_corrupt_file_with_a_matching_sha_is_a_coded_refusal(self, roots) -> None:
+        """The `expect_sha` route is the documented bookkit path, so this is
+        reachable in the intended workflow: the sha gate passes (it hashes the
+        corrupt bytes faithfully) and then the load blows up uncoded."""
+        path = roots[0] / "atomic-2026.json"
+        path.write_text("{not json", encoding="utf-8")
+        with pytest.raises(edit.Refusal, match=r"\[invalid_file\]"):
+            _program_edit_field(
+                Programs(roots),
+                "atomic-2026",
+                "program",
+                "insured",
+                "X",
+                "whatever",
+                expect_sha=file_sha256(path),
+            )
+
+    def test_create_with_a_bad_placement_names_the_accepted_values(self, roots) -> None:
+        with pytest.raises(edit.Refusal, match=r"\[bad_value\].*'bound'.*'proposed'"):
+            _program_create(
+                Programs(roots),
+                "new-2027",
+                "Acme",
+                "Casualty",
+                "quoted",
+                "2027-01-01",
+                "2028-01-01",
+                ["GL"],
+            )
+
+    def test_create_with_an_invalid_field_is_coded_and_readable(self, roots) -> None:
+        with pytest.raises(edit.Refusal, match=r"\[bad_value\]") as caught:
+            _program_create(
+                Programs(roots),
+                "new-2027",
+                "",
+                "Casualty",
+                "bound",
+                "2027-01-01",
+                "2028-01-01",
+                ["GL"],
+            )
+        assert "errors.pydantic.dev" not in str(caught.value)
+
+    def test_cloning_from_a_corrupt_source_is_a_coded_refusal(self, roots) -> None:
+        (roots[0] / "atomic-2026.json").write_text("{not json", encoding="utf-8")
+        with pytest.raises(edit.Refusal, match=r"\[invalid_file\]"):
+            _program_clone_renewal(Programs(roots), "atomic-2026", "atomic-2027")
+
+
+class TestGenericSetterResponse:
+    def test_renaming_a_line_through_the_generic_setter_returns_the_new_id(self, roots) -> None:
+        """`line.name` through `program_edit_field` cascades the id (that is
+        what the `rename_line` setter row is FOR), but the response said only
+        "set name on line 'gl'" — the caller's `target` was silently dead and
+        the new id appeared nowhere. `line_edit`, the verb, returns `line_id`;
+        the generic write owes the same answer for the same reason."""
+        programs = Programs(roots)
+        _program_read(programs, "atomic-2026")
+        out = _program_edit_field(
+            programs,
+            "atomic-2026",
+            "line",
+            "name",
+            "General Liability Worldwide",
+            "General Liability",
+            target="gl",
+        )
+        assert out["line_id"] == "general-liability-worldwide"
+
+    def test_a_write_that_moves_no_id_reports_none(self, roots) -> None:
+        """Passed trivially at RED, so it owes mutation evidence (CLAUDE.md,
+        2026-08-14). Drill: the `new_id != target` clause dropped from the
+        move detection — `AssertionError: assert ('layer_id' not in {...})`.
+        Restored."""
+        programs = Programs(roots)
+        _program_read(programs, "atomic-2026")
+        out = _program_edit_field(
+            programs, "atomic-2026", "layer", "premium", "2.2m", 2_100_000, target="xs-1"
+        )
+        assert "layer_id" not in out and "line_id" not in out
+
+
+class TestThemeReportedByTheWrite:
+    def test_a_theme_render_cannot_load_is_reported_by_the_write(self, roots) -> None:
+        """The currency defect's genus, one field over: `render.theme` took
+        any junk string, the write said `errors: []`, `towerctl validate`
+        exited 0, and `towerctl render` crashed with a raw JSONDecodeError.
+        The write path reports what `towerctl validate` reports, so the fix
+        is a validator diagnostic — this test pins the reporting end."""
+        programs = Programs(roots)
+        _program_read(programs, "atomic-2026")
+        out = _program_edit_field(
+            programs, "atomic-2026", "program", "render.theme", "no/such/theme.json", None
+        )
+        assert any(d["code"] == "render-theme" for d in out["errors"])
