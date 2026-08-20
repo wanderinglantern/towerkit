@@ -1088,3 +1088,23 @@ def test_a_money_bound_the_schema_cannot_express_raises() -> None:
 
     with pytest.raises(SchemaDerivationError, match="minimum"):
         derive_property(Holder, "amount", Holder.model_fields["amount"])
+
+
+def test_every_tool_registers_through_the_coded_ring() -> None:
+    """Rounds five, six and seven each caught an exception family the ring
+    before it missed — TypeError inside the mutation, load_program at the
+    perimeter, then OSError/KeyError one ring further out. The sequence ends
+    only if the ring is STRUCTURAL: every tool registration goes through
+    `_tool`, which codes anything that is not already a Refusal as
+    [internal_error]. A tool registered with a bare `server.tool()` would sit
+    outside the ring, so no registration site may use it directly."""
+    import re as _re
+
+    source = (REPO / "src" / "towerkit" / "mcpserver.py").read_text(encoding="utf-8")
+    bare = [
+        line.strip()
+        for line in source.splitlines()
+        if _re.search(r"@server\.tool\(", line)
+    ]
+    assert bare == [], f"tools registered outside the coded ring: {bare}"
+    assert "def _tool(" in source, "the ring itself is gone"

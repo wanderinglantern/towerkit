@@ -489,3 +489,28 @@ hand-written `_LAYER_KEYS` named here was deleted on 2026-08-19 — see
   but retyping an Enum field to `str` leaves the schema's old `enum` behind
   as "hand-authored" — stricter than the model with no declaration. The
   asymmetry is inherited, not decided. Not changed here.
+
+## Round seven: the ring becomes structural (2026-08-20)
+
+- **Every tool registration goes through `_tool`,** which codes anything
+  that is not already a `Refusal` as `[internal_error]` before the SDK can
+  emit its bare string. Rounds five, six and seven each caught one more
+  exception family per-site nets had missed (TypeError, load_program's
+  families, then OSError / a meta read / describe's KeyError); the sequence
+  ends only if the ring is the registration path itself. A conventions test
+  refuses any bare `server.tool()` in the source. Specific sites keep their
+  better codes — the ring is the code of last resort.
+- **Snapshot before write.** `_atomic_write` used to run before
+  `snapshot()`, so a snapshot failure (disk full — live on this machine —
+  or a stray file named `.mcp-snapshots`) left the file CHANGED while the
+  tool raised: a landed write with a failure receipt and no pre-image.
+  Reversed; `snapshot()` now takes the post-sha as an argument since the
+  file still holds the pre-image when it runs. An orphaned snapshot for a
+  write that never landed is inert — revert compares the post-sha.
+- **Theme colours are #RRGGBB, and that is towerkit's own contract** —
+  `relative_luminance` parses exactly six hex digits, so `"white"` renders
+  a chart and crashes the SOI contrast pick. `theme_problems` walks every
+  colour slot (derived off dataclass field defaults, not a name list) and
+  the validator reports each as `render-theme`. Cost, stated: a hand-made
+  theme using matplotlib colour names that happened to render charts now
+  validates dirty. It was one crash away from proving why.

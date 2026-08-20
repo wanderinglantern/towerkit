@@ -9,7 +9,8 @@ Colour is three separate concerns in three separate places:
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+import re
+from dataclasses import dataclass, field, fields
 from importlib import resources
 from pathlib import Path
 from typing import Any
@@ -84,6 +85,50 @@ class Theme:
 
     def retention_fill(self, retention_type: str) -> str:
         return self.retention_fills.get(retention_type, "#DDD8C9")
+
+
+_HEX_COLOUR = re.compile(r"^#[0-9A-Fa-f]{6}$")
+
+
+def _colour_slots(obj: Any) -> list[tuple[str, str]]:
+    """The colour-bearing fields of a theme dataclass, DERIVED off the field
+    defaults — a `str` default matching #RRGGBB marks a colour slot. Fonts
+    (`"DejaVu Sans"`), sizes and `None` defaults fall out naturally, and a
+    new colour field is covered without anyone maintaining a name list."""
+    return [
+        (f.name, getattr(obj, f.name))
+        for f in fields(obj)
+        if isinstance(f.default, str) and _HEX_COLOUR.match(f.default)
+    ]
+
+
+def theme_problems(theme: Theme) -> list[str]:
+    """Every colour a renderer would be handed, checked against #RRGGBB.
+
+    The contract is towerkit's OWN, not matplotlib's tolerance:
+    `relative_luminance` parses exactly six hex digits, so `"white"` renders
+    a chart fine and crashes the SOI's contrast pick — and `"notahex"`
+    crashes everything. Round seven (2026-08-20) produced exactly that:
+    a theme that LOADED clean, validated clean, and killed `towerctl render`
+    with a raw matplotlib ValueError. A theme that loads is not a theme that
+    renders; this is the missing half."""
+    problems: list[str] = []
+
+    def check(where: str, value: object) -> None:
+        if not isinstance(value, str) or not _HEX_COLOUR.match(value):
+            problems.append(f"{where}: {value!r} is not a #RRGGBB colour")
+
+    for name, value in _colour_slots(theme.chrome):
+        check(f"chrome.{name}", value)
+    for name, value in _colour_slots(theme.soi):
+        check(f"soi.{name}", value)
+    for i, value in enumerate(theme.carrier_palette):
+        check(f"carrierPalette[{i}]", value)
+    for carrier, value in theme.pinned_carriers.items():
+        check(f"carriers[{carrier}]", value)
+    for kind, value in theme.retention_fills.items():
+        check(f"retentionFills[{kind}]", value)
+    return problems
 
 
 def relative_luminance(hex_colour: str) -> float:

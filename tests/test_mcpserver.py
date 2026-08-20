@@ -1820,7 +1820,7 @@ class TestSnapshotCap:
         snapdir = roots[0] / ".mcp-snapshots"
         image = path.read_bytes()
         for ref, when in (("TKW-a", 1_000_000), ("TKW-b", 2_000_000), ("TKW-c", None)):
-            server.snapshot(path, ref, image)
+            server.snapshot(path, ref, image, file_sha256(path))
             if when is not None:
                 os.utime(snapdir / f"{ref}.json", (when, when))
 
@@ -2139,3 +2139,90 @@ class TestThemeReportedByTheWrite:
             programs, "atomic-2026", "program", "render.theme", "no/such/theme.json", None
         )
         assert any(d["code"] == "render-theme" for d in out["errors"])
+
+
+class TestPerimeterRoundSeven:
+    """Round seven (2026-08-20): round six sealed the contract for the two
+    exception families it named and no others. Ordinary filesystem states —
+    a directory where a file should be, a mode bit, a truncated snapshot
+    meta — still escaped uncoded, and `describe()` leaked a quote-wrapped
+    KeyError, the exact decoration `_reason` exists to strip."""
+
+    def test_a_directory_named_like_a_program_is_a_coded_refusal(self, roots) -> None:
+        (roots[0] / "dirprog.json").mkdir()
+        with pytest.raises(edit.Refusal, match=r"\[invalid_file\]"):
+            _program_read(Programs(roots), "dirprog")
+
+    def test_an_unreadable_file_is_a_coded_refusal(self, roots) -> None:
+        path = roots[0] / "atomic-2026.json"
+        path.chmod(0)
+        try:
+            with pytest.raises(edit.Refusal, match=r"\[invalid_file\]"):
+                _program_read(Programs(roots), "atomic-2026")
+        finally:
+            path.chmod(0o644)
+
+    def test_describe_of_an_unknown_kind_is_a_coded_refusal(self, roots) -> None:
+        from towerkit.mcpserver import _describe
+
+        with pytest.raises(edit.Refusal, match=r"\[no_such_target\].*kinds are"):
+            _describe("bogus")
+
+    def test_revert_with_corrupt_snapshot_meta_is_a_coded_refusal(self, roots) -> None:
+        """The snapshot dir is shared with bookkit and pruned by mtime; a
+        partially-written meta is a real state, and it leaked a raw
+        JSONDecodeError out of the one tool whose job is recovery."""
+        programs = Programs(roots)
+        _program_read(programs, "atomic-2026")
+        out = _program_edit_field(
+            programs, "atomic-2026", "layer", "premium", "2.2m", 2_100_000, target="xs-1"
+        )
+        meta = roots[0] / ".mcp-snapshots" / f"{out['write_ref']}.meta.json"
+        meta.write_text("{trunc", encoding="utf-8")
+        with pytest.raises(edit.Refusal, match=r"\[no_snapshot\]"):
+            _program_revert_write(programs, out["write_ref"])
+
+    def test_a_snapshot_failure_refuses_before_the_file_changes(
+        self, roots, monkeypatch
+    ) -> None:
+        """Round seven's worst finding: `_atomic_write` ran BEFORE
+        `snapshot()`, so a snapshot failure (disk full, a stray file named
+        `.mcp-snapshots`) left the file CHANGED while the tool raised — a
+        write that landed with a failure receipt and no pre-image to revert.
+        The snapshot now lands first; if it cannot, nothing is written."""
+        import towerkit.mcpserver as m
+
+        def boom(*args: object, **kwargs: object) -> None:
+            raise OSError(28, "No space left on device")
+
+        programs = Programs(roots)
+        _program_read(programs, "atomic-2026")
+        path = roots[0] / "atomic-2026.json"
+        before = path.read_bytes()
+        monkeypatch.setattr(m, "snapshot", boom)
+        with pytest.raises(edit.Refusal, match=r"\[internal_error\].*nothing written"):
+            _program_edit_field(
+                programs, "atomic-2026", "layer", "premium", "2.2m", 2_100_000, target="xs-1"
+            )
+        assert path.read_bytes() == before, "the file must not change when the snapshot fails"
+
+    async def test_an_unexpected_exception_reaches_the_client_coded(
+        self, roots, monkeypatch
+    ) -> None:
+        """The structural ring. Rounds five, six and seven each caught an
+        exception family the ring before it missed; this pins the OUTER ring
+        — anything a tool body raises that is not already a Refusal arrives
+        as [internal_error], never as the SDK's bare uncoded string."""
+        from mcp.client import Client
+
+        import towerkit.mcpserver as m
+
+        def boom(programs: object) -> dict[str, object]:
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(m, "_program_list", boom)
+        async with Client(build_server(roots)) as client:
+            result = await client.call_tool("program_list", {})
+            assert result.is_error
+            text = result.content[0].text
+            assert "[internal_error]" in text, text

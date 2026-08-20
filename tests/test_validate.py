@@ -635,3 +635,65 @@ class TestRenderTheme:
         monkeypatch.chdir(tmp_path)
         _, diags = validate_file(path)
         assert not [d for d in diags.items if d.code == "render-theme"]
+
+    def test_a_theme_that_loads_but_cannot_render_is_an_error(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """Round seven: `load_theme` does no semantic validation, so
+        `"notahex"` in the palette loaded clean, validated clean, and killed
+        `towerctl render` with a raw matplotlib ValueError — the same genus
+        as the junk path, one layer deeper. The colour contract is towerkit's
+        own: `relative_luminance` parses exactly #RRGGBB, so anything else is
+        a crash somewhere in the render family even when matplotlib would
+        shrug."""
+        (tmp_path / "themes").mkdir()
+        (tmp_path / "themes" / "bad.json").write_text(
+            json.dumps({"name": "bad", "carrierPalette": ["#000F47", "notahex"]}),
+            encoding="utf-8",
+        )
+        path = self._file(tmp_path, "themes/bad.json")
+        monkeypatch.chdir(tmp_path)
+        _, diags = validate_file(path)
+        offending = [d for d in diags.errors if d.code == "render-theme"]
+        assert offending and "notahex" in offending[0].message
+
+
+class TestThemeProblems:
+    """`theme_problems` walks every colour slot the dataclasses declare —
+    derived off the field DEFAULTS (a str default matching #RRGGBB marks a
+    colour slot), never a hand list of field names."""
+
+    def _theme(self, data):
+        from towerkit.theme import _theme_from_jsonable
+
+        return _theme_from_jsonable(data)
+
+    def test_a_clean_theme_has_no_problems(self) -> None:
+        from towerkit.theme import theme_problems
+
+        assert theme_problems(self._theme({"name": "ok"})) == []
+
+    def test_every_colour_family_is_checked(self) -> None:
+        from towerkit.theme import theme_problems
+
+        bad = self._theme(
+            {
+                "name": "bad",
+                "chrome": {"ink": "notahex"},
+                "carrierPalette": ["#000F47", "nope"],
+                "carriers": {"Zurich": "blue-ish"},
+                "retentionFills": {"deductible": "x"},
+                "soi": {"headerFill": "003865"},
+            }
+        )
+        problems = "\n".join(theme_problems(bad))
+        for needle in ("chrome.ink", "carrierPalette[1]", "Zurich", "deductible", "soi"):
+            assert needle in problems, f"{needle} missing from:\n{problems}"
+
+    def test_a_named_colour_is_refused_even_though_matplotlib_takes_it(self) -> None:
+        """'white' renders a chart fine and crashes `relative_luminance` in
+        the SOI path — the contract is towerkit's colour math, not
+        matplotlib's tolerance."""
+        from towerkit.theme import theme_problems
+
+        assert theme_problems(self._theme({"name": "t", "carrierPalette": ["white"]}))

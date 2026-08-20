@@ -539,7 +539,7 @@ def _check_render_theme(program: Program, diags: Diagnostics) -> None:
     theme = program.render.theme if program.render else None
     if theme is None:
         return
-    from .theme import load_theme
+    from .theme import load_theme, theme_problems
 
     if Path(theme).is_absolute():
         diags.error(
@@ -549,10 +549,18 @@ def _check_render_theme(program: Program, diags: Diagnostics) -> None:
         )
         return
     try:
-        load_theme(theme)
+        loaded = load_theme(theme)
     except Exception as exc:
         diags.error(
             "render-theme",
             f"render.theme {theme!r} cannot be loaded ({type(exc).__name__}: {exc}) "
             f"— towerctl render will fail on this file",
+        )
+        return
+    # Loading is not rendering (round seven): a theme with a colour the
+    # colour math cannot parse loads clean and crashes the renderer.
+    for problem in theme_problems(loaded):
+        diags.error(
+            "render-theme",
+            f"render.theme {theme!r}: {problem} — towerctl render will fail on this file",
         )

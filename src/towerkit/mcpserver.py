@@ -20,6 +20,7 @@ is the proof that registration and wiring work end to end.
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 import os
@@ -188,10 +189,12 @@ def _snapdir(path: Path) -> Path:
     return path.parent / _SNAPDIR
 
 
-def snapshot(path: Path, ref: str, pre_image: bytes) -> None:
-    """Record the pre-image and the post-write sha. Called AFTER a successful
-    write, so a refused write leaves no debris. The directory is shared with
-    bookkit's snapshots; each side globs only its own prefix."""
+def snapshot(path: Path, ref: str, pre_image: bytes, post_sha256: str) -> None:
+    """Record the pre-image and the sha of the write it belongs to. Called
+    BEFORE the write since round seven (see `_write` for why), so the caller
+    passes the post-write sha rather than this reading it off a file that
+    still holds the pre-image. The directory is shared with bookkit's
+    snapshots; each side globs only its own prefix."""
     snapdir = _snapdir(path)
     snapdir.mkdir(exist_ok=True)
     # backup=False: the snapshot directory is its own history, and must not
@@ -199,7 +202,7 @@ def snapshot(path: Path, ref: str, pre_image: bytes) -> None:
     atomic_write_bytes(snapdir / f"{ref}.json", pre_image, backup=False)
     atomic_write_text(
         snapdir / f"{ref}.meta.json",
-        json.dumps({"path": str(path), "post_sha256": file_sha256(path)}),
+        json.dumps({"path": str(path), "post_sha256": post_sha256}),
         backup=False,
     )
     images = sorted(
@@ -338,7 +341,14 @@ def _write(
                 f"pass that read's sha as expect_sha",
             )
 
-    pre_image = path.read_bytes()
+    try:
+        pre_image = path.read_bytes()
+    except OSError as exc:
+        raise Refusal(
+            "invalid_file",
+            f"{name} cannot be read ({exc}) — nothing written; "
+            f"program_check({name!r}) reports the full diagnostics",
+        ) from exc
     program = _load(path, name)
     try:
         mutate(program)
@@ -375,9 +385,23 @@ def _write(
             f"a problem with the value you sent.",
         ) from exc
 
-    _atomic_write(path, text)
+    # Snapshot FIRST, write second (round seven). The old order ran
+    # `_atomic_write` and then `snapshot()`, so a snapshot failure — disk
+    # full, a stray file named `.mcp-snapshots` — left the program file
+    # CHANGED while the tool raised: a write that landed with a failure
+    # receipt and no pre-image to revert. Reversed, a snapshot failure
+    # refuses with nothing written; an orphaned snapshot for a write that
+    # never happened is inert (revert compares the post-sha and refuses).
     ref = write_ref()
-    snapshot(path, ref, pre_image)
+    try:
+        snapshot(path, ref, pre_image, hashlib.sha256(text.encode("utf-8")).hexdigest())
+    except OSError as exc:
+        raise Refusal(
+            "internal_error",
+            f"refused — nothing written: could not record the undo snapshot ({exc}). "
+            f"This is a towerkit or filesystem problem, not your value.",
+        ) from exc
+    _atomic_write(path, text)
     programs.note(path)
     return {
         "wrote": name,
@@ -477,7 +501,11 @@ def _load(path: Path, name: str) -> Program:
     """
     try:
         return load_program(path)
-    except (ValidationError, ValueError) as exc:  # JSONDecodeError IS a ValueError
+    # JSONDecodeError IS a ValueError. OSError joined in round seven: a
+    # directory named foo.json or a mode bit is a plausible checkout/rsync
+    # state, and IsADirectoryError/PermissionError walked straight through
+    # the two families round six named.
+    except (ValidationError, ValueError, OSError) as exc:
         raise Refusal(
             "invalid_file",
             f"{name} cannot be loaded ({_reason(exc)}) — the file on disk is not a "
@@ -1195,7 +1223,17 @@ def _program_revert_write(programs: Programs, write_ref: str) -> dict[str, Any]:
         )
     for root in programs.roots:
         for meta_file in root.rglob(f"{_SNAPDIR}/{write_ref}.meta.json"):
-            target = Path(json.loads(meta_file.read_text())["path"])
+            try:
+                target = Path(json.loads(meta_file.read_text())["path"])
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                # The snapshot dir is shared with bookkit and pruned by
+                # mtime; a truncated meta is a real state, and it leaked a
+                # raw JSONDecodeError out of the recovery tool (round seven).
+                raise Refusal(
+                    "no_snapshot",
+                    f"snapshot metadata for {write_ref} is unreadable "
+                    f"({_reason(exc)}) — this ref cannot be reverted",
+                ) from exc
             restore(target, write_ref)
             programs.note(target)
             return {
@@ -1305,6 +1343,57 @@ def _program_clone_renewal(programs: Programs, source: str, dest: str) -> dict[s
     }
 
 
+def _describe(kind: str | None = None) -> dict[str, Any]:
+    """`mcpsurface.describe` with the error contract: its KeyError for an
+    unknown kind reached the wire quote-wrapped and uncoded (round seven) —
+    the single most reachable hole, since the model only has to misname a
+    kind. Every other kind-resolving path codes this `no_such_target`."""
+    try:
+        return mcpsurface.describe(kind)
+    except KeyError as exc:
+        raise Refusal("no_such_target", _reason(exc)) from exc
+
+
+def _tool(server: MCPServer) -> Callable[[Callable[..., Any]], Any]:
+    """`server.tool()` with the error contract's OUTER RING welded on.
+
+    Rounds five, six and seven each caught an exception family the ring
+    before it missed — `TypeError` inside the mutation, `load_program`'s
+    families at the perimeter, then `OSError`, a snapshot meta read and
+    `describe`'s KeyError one ring further out. Per-site nets end the
+    sequence only if the ring is STRUCTURAL: every registration goes through
+    here, and anything a tool body raises that is not already a `Refusal`
+    leaves as `[internal_error]` rather than the SDK's bare uncoded string.
+    Specific sites still attach better codes first — "towerkit broke" is the
+    code of last resort, not a diagnosis.
+
+    `functools.wraps` carries the name, docstring and annotations, and
+    `__wrapped__` lets `inspect.signature` see the real parameters, which is
+    what the SDK builds the tool schema from — the registered tools' schemas
+    are asserted unchanged by the conventions vocabulary test.
+    """
+    register = server.tool()
+
+    def wrap(fn: Callable[..., Any]) -> Any:
+        @functools.wraps(fn)
+        async def ring(*args: Any, **kwargs: Any) -> Any:
+            try:
+                return await fn(*args, **kwargs)
+            except Refusal:
+                raise
+            except Exception as exc:
+                raise Refusal(
+                    "internal_error",
+                    f"towerkit failed internally ({type(exc).__name__}: "
+                    f"{_reason(exc)}). This is a towerkit bug, not a problem "
+                    f"with what you sent.",
+                ) from exc
+
+        return register(ring)
+
+    return wrap
+
+
 def build_server(roots: list[Path] | None = None) -> MCPServer:
     programs = Programs(roots)
     server = MCPServer(
@@ -1333,12 +1422,14 @@ def build_server(roots: list[Path] | None = None) -> MCPServer:
 
 
 def _register_read_tools(server: MCPServer, programs: Programs) -> None:
-    @server.tool()
+    tool = _tool(server)
+
+    @tool
     async def program_list() -> dict[str, Any]:
         """Every program file under the configured roots."""
         return _program_list(programs)
 
-    @server.tool()
+    @tool
     async def program_read(name: str) -> dict[str, Any]:
         """The full structure of one program. Read before you write.
 
@@ -1346,7 +1437,7 @@ def _register_read_tools(server: MCPServer, programs: Programs) -> None:
         the edit tools address them by."""
         return _program_read(programs, name)
 
-    @server.tool()
+    @tool
     async def program_view(name: str) -> dict[str, Any]:
         """Draw the tower as text. Gaps, overlaps, and column shape are
         visible here in a way they are not in a layer list.
@@ -1355,7 +1446,7 @@ def _register_read_tools(server: MCPServer, programs: Programs) -> None:
         write. Call program_read before writing."""
         return _program_view(programs, name)
 
-    @server.tool()
+    @tool
     async def program_check(name: str) -> dict[str, Any]:
         """towerkit's validator on one program: what is wrong and where —
         the same schema and semantic checks `towerctl validate` runs.
@@ -1364,7 +1455,7 @@ def _register_read_tools(server: MCPServer, programs: Programs) -> None:
         license a write. Call program_read before writing."""
         return _program_check(programs, name)
 
-    @server.tool()
+    @tool
     async def describe(kind: str | None = None) -> dict[str, Any]:
         """What program_edit_field can set, and how each value is written.
 
@@ -1374,17 +1465,19 @@ def _register_read_tools(server: MCPServer, programs: Programs) -> None:
         to narrow it. This is the ONLY place that list is published — no tool
         description repeats it, because a second copy is how the first one
         went stale."""
-        return mcpsurface.describe(kind)
+        return _describe(kind)
 
 
 def _register_write_tools(server: MCPServer, programs: Programs) -> None:
-    @server.tool()
+    tool = _tool(server)
+
+    @tool
     async def program_restack(name: str, expect_sha: str | None = None) -> dict[str, Any]:
         """Reseat every layer on top of what its lines already carry —
         one call heals gaps and overlaps after limit edits."""
         return _program_restack(programs, name, expect_sha)
 
-    @server.tool()
+    @tool
     async def program_edit_field(
         name: str,
         kind: str,
@@ -1423,13 +1516,13 @@ def _register_write_tools(server: MCPServer, programs: Programs) -> None:
             expect_sha,
         )
 
-    @server.tool()
+    @tool
     async def program_revert_write(write_ref: str) -> dict[str, Any]:
         """Undo one write by restoring its pre-image — only while the file
         still holds exactly what that write produced."""
         return _program_revert_write(programs, write_ref)
 
-    @server.tool()
+    @tool
     async def line_add(
         name: str,
         line_name: str,
@@ -1441,7 +1534,7 @@ def _register_write_tools(server: MCPServer, programs: Programs) -> None:
         line-empty until a layer covers it."""
         return _line_add(programs, name, line_name, abbr, group, expect_sha)
 
-    @server.tool()
+    @tool
     async def line_edit(
         name: str,
         line_id: str,
@@ -1454,7 +1547,7 @@ def _register_write_tools(server: MCPServer, programs: Programs) -> None:
         referenced), set its abbreviation, or set its coverage group."""
         return _line_edit(programs, name, line_id, line_name, abbr, group, expect_sha)
 
-    @server.tool()
+    @tool
     async def line_move(
         name: str, line_id: str, delta: int, expect_sha: str | None = None
     ) -> dict[str, Any]:
@@ -1462,7 +1555,7 @@ def _register_write_tools(server: MCPServer, programs: Programs) -> None:
         `delta` must be -1 or +1 — a single step; anything else is refused."""
         return _line_move(programs, name, line_id, delta, expect_sha)
 
-    @server.tool()
+    @tool
     async def line_remove(
         name: str, line_id: str, expect_sha: str | None = None
     ) -> dict[str, Any]:
@@ -1470,7 +1563,7 @@ def _register_write_tools(server: MCPServer, programs: Programs) -> None:
         sublimits — goes with it."""
         return _line_remove(programs, name, line_id, expect_sha)
 
-    @server.tool()
+    @tool
     async def retention_add(
         name: str,
         applies_to: list[str],
@@ -1488,7 +1581,7 @@ def _register_write_tools(server: MCPServer, programs: Programs) -> None:
             programs, name, applies_to, type, amount, aggregate, vehicle, notes, expect_sha
         )
 
-    @server.tool()
+    @tool
     async def retention_edit(
         name: str,
         index: int,
@@ -1518,14 +1611,14 @@ def _register_write_tools(server: MCPServer, programs: Programs) -> None:
             expect_sha,
         )
 
-    @server.tool()
+    @tool
     async def retention_remove(
         name: str, index: int, expecting_lines: list[str], expect_sha: str | None = None
     ) -> dict[str, Any]:
         """Remove the retention at `index`, guarded by the lines it covers."""
         return _retention_remove(programs, name, index, expecting_lines, expect_sha)
 
-    @server.tool()
+    @tool
     async def sublimit_add(
         name: str,
         sublimit_name: str,
@@ -1539,7 +1632,7 @@ def _register_write_tools(server: MCPServer, programs: Programs) -> None:
             programs, name, sublimit_name, amount, applies_to, notes, expect_sha
         )
 
-    @server.tool()
+    @tool
     async def sublimit_edit(
         name: str,
         index: int,
@@ -1563,14 +1656,14 @@ def _register_write_tools(server: MCPServer, programs: Programs) -> None:
             expect_sha,
         )
 
-    @server.tool()
+    @tool
     async def sublimit_remove(
         name: str, index: int, expecting_name: str, expect_sha: str | None = None
     ) -> dict[str, Any]:
         """Remove the sublimit at `index`, guarded by its name."""
         return _sublimit_remove(programs, name, index, expecting_name, expect_sha)
 
-    @server.tool()
+    @tool
     async def layer_remove(
         name: str, layer_id: str, expect_sha: str | None = None
     ) -> dict[str, Any]:
@@ -1578,14 +1671,14 @@ def _register_write_tools(server: MCPServer, programs: Programs) -> None:
         program_restack."""
         return _layer_remove(programs, name, layer_id, expect_sha)
 
-    @server.tool()
+    @tool
     async def layer_lines(
         name: str, layer_id: str, line_ids: list[str], expect_sha: str | None = None
     ) -> dict[str, Any]:
         """Set which coverage lines a layer spans — how wide its block is."""
         return _layer_lines(programs, name, layer_id, line_ids, expect_sha)
 
-    @server.tool()
+    @tool
     async def layer_follows(
         name: str, layer_id: str, follows: bool, expect_sha: str | None = None
     ) -> dict[str, Any]:
@@ -1594,7 +1687,7 @@ def _register_write_tools(server: MCPServer, programs: Programs) -> None:
         is how a shared umbrella sits over columns with differing limits."""
         return _layer_follows(programs, name, layer_id, follows, expect_sha)
 
-    @server.tool()
+    @tool
     async def program_create(
         name: str,
         insured: str,
@@ -1612,7 +1705,7 @@ def _register_write_tools(server: MCPServer, programs: Programs) -> None:
             programs, name, insured, program, placement, period_from, period_to, lines
         )
 
-    @server.tool()
+    @tool
     async def program_clone_renewal(source: str, dest: str) -> dict[str, Any]:
         """Copy a program forward a year as a proposed renewal — the most
         common starting point for next year's design."""
