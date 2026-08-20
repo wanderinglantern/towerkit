@@ -77,16 +77,28 @@ class DraftProgram:
             self._carry(gate)
             raise ProgramInvalidError(gate, source="draft")
         assert self.period is not None  # narrowed by the gate above
-        program = Program(
-            insured=self.insured.strip(),
-            program=self.program.strip(),
-            placement=self.placement,
-            period=self.period,
-            currency=self.currency,
-            lines=list(self.lines),
-            layers=list(self.layers),
-            retentions=list(self.retentions),
-        )
+        try:
+            program = Program(
+                insured=self.insured.strip(),
+                program=self.program.strip(),
+                placement=self.placement,
+                period=self.period,
+                currency=self.currency,
+                lines=list(self.lines),
+                layers=list(self.layers),
+                retentions=list(self.retentions),
+            )
+        except ValidationError as exc:
+            # The header fields ride the DraftProgram dataclass unvalidated,
+            # so the MODEL's refusal (a control character in an
+            # ANSI-coloured insured, round eleven) surfaced here as a raw
+            # ValidationError — and the CLI and TUI import paths catch only
+            # the documented ProgramInvalidError. Same contract as the gate
+            # above: the refusal becomes a diagnostic, the raise is ours.
+            gate = Diagnostics()
+            gate.error("draft.value", _model_refusal(exc))
+            self._carry(gate)
+            raise ProgramInvalidError(gate, source="draft") from exc
         diags = validate_program(program)
         self._carry(diags)
         if not diags.ok:
@@ -117,7 +129,14 @@ def parse_tower(text: str, *, insured: str = "", program: str = "") -> DraftProg
     split on em-dash, spaced hyphen, or pipe. Unreadable lines become error
     diagnostics with their line number — parsing never gives up early."""
     draft = DraftProgram(insured=insured, program=program)
-    cover = Line(id="cover", name=program.strip() or "Coverage")
+    try:
+        cover = Line(id="cover", name=program.strip() or "Coverage")
+    except ValidationError as exc:
+        # The `program` kwarg is a header, not a line, so round ten's
+        # per-line net never saw it (round eleven). The tower still parses
+        # under a placeholder; the refusal is a diagnostic like any other.
+        draft.diagnostics.error("paste.value", f"program name: {_model_refusal(exc)}")
+        cover = Line(id="cover", name="Coverage")
     draft.lines = [cover]
     draft.diagnostics.warn(
         "paste.line", "no coverage lines in pasted text; synthesized one"

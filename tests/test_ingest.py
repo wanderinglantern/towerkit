@@ -337,3 +337,22 @@ class TestControlCharactersAtTheBoundary:
         assert all(
             p.carrier == "Zurich" for ly in draft.layers for p in ly.participants
         )
+
+    def test_a_control_character_insured_refuses_cleanly_not_with_a_traceback(self) -> None:
+        """Round eleven: the per-row nets stopped one field short. An
+        ANSI-coloured insured — the same canonical paste — escaped
+        `to_program()` as a raw ValidationError instead of the documented
+        ProgramInvalidError, crashing `towerctl import` and the TUI's paste
+        modal, both of which catch only the documented type."""
+        draft = _complete_draft()
+        draft.insured = "Acme \x1b[1mCorp"
+        with pytest.raises(ProgramInvalidError):
+            draft.to_program()
+        assert any("control character" in d.message for d in draft.diagnostics.errors)
+
+    def test_a_control_character_program_kwarg_does_not_abort_the_paste(self) -> None:
+        from towerkit.ingest import parse_tower
+
+        draft = parse_tower("Primary 5M — Chubb", program="Prop\x1berty")
+        assert draft.layers, "the tower must still parse"
+        assert any("program" in d.message for d in draft.diagnostics.errors)

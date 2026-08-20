@@ -2423,3 +2423,46 @@ class TestPerimeterRoundTen:
             _program_edit_field(
                 Programs(roots), "dirprog", "program", "insured", "X", "whatever"
             )
+
+
+class TestPerimeterRoundEleven:
+    """Round eleven's design directive, applied: name validation was a
+    denylist grown one escape at a time (blank, then C0+DEL, with dot,
+    slash-shapes and length still open). A name is now validated
+    POSITIVELY, per segment — the filename analogue of "if you enumerate
+    field names anywhere, derive them"."""
+
+    def test_dot_and_slash_shaped_names_are_refused(self, roots) -> None:
+        """`create(name=".")` wrote a hidden `..json` that then bricked
+        `names()` — and with it every program_list and every
+        no_such_program message — until someone deleted the file by hand.
+        `"sub/"` wrote `sub/.json`; `"atomic-2026/"` left a junk directory
+        beside the real file."""
+        programs = Programs(roots)
+        for bad in (".", "sub/", "a//b", ".hidden", "atomic-2026/", "a/./b"):
+            with pytest.raises(edit.Refusal, match=r"\[bad_value\]"):
+                programs.resolve(bad, must_exist=False)
+
+    def test_an_over_long_name_is_the_callers_value_not_a_towerkit_bug(self, roots) -> None:
+        with pytest.raises(edit.Refusal, match=r"\[bad_value\]"):
+            Programs(roots).resolve("x" * 3000, must_exist=False)
+
+    def test_a_weird_json_file_cannot_brick_the_listing(self, roots) -> None:
+        """`names()` used `with_suffix("")`, which raises `ValueError:
+        Invalid name '.'` on a file called `..json` — so one stray file
+        (which the server itself could write, before this round) took out
+        every listing permanently. Round eight's invariant: one broken
+        entry must not hide the rest."""
+        (roots[0] / "..json").write_text("{}", encoding="utf-8")
+        out = _program_list(Programs(roots))
+        assert any(p["name"] == "atomic-2026" for p in out["programs"])
+
+    def test_a_malformed_write_ref_is_bad_value(self, roots) -> None:
+        """A ref is a filename too: `TKW-\\x00` leaked `embedded null
+        character` out of `rglob` as a towerkit bug, and `TKW-*` was a live
+        glob wildcard. `write_ref()` generates the only legitimate shape,
+        so the boundary now demands exactly that shape."""
+        programs = Programs(roots)
+        for bad in ("TKW-\x00", "TKW-*", "TKW-short", "TKW-" + "a" * 40):
+            with pytest.raises(edit.Refusal, match=r"\[bad_value\]"):
+                _program_revert_write(programs, bad)

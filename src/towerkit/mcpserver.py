@@ -116,21 +116,7 @@ class Programs:
     def resolve(self, name: str, must_exist: bool = True) -> Path:
         if name.endswith(".json"):
             name = name[: -len(".json")]
-        if not name.strip():
-            # `program_create(name="")` used to create a hidden `.json`
-            # dotfile that listed back as ".json" (round nine).
-            raise Refusal("bad_value", "a program name cannot be empty")
-        if _NAME_CONTROL_CHARS.search(name):
-            # A name is a FILENAME, so it refuses the whole C0 set plus DEL
-            # — stricter than model content, where \t and \n are legitimate
-            # in notes. Round ten: `create(name="we\x1bird")` put an ESC on
-            # disk, and a NUL raised `embedded null character` out of
-            # `.resolve()` below as "[internal_error] towerkit bug" for a
-            # value the caller sent.
-            raise Refusal(
-                "bad_value",
-                f"a program name cannot contain control characters — got {name!r}",
-            )
+        self._check_name(name)
         for root in self.roots:
             candidate = (root / f"{name}.json").resolve()
             if not self._inside(candidate):
@@ -154,6 +140,50 @@ class Programs:
             "no_such_program", f"no program {name!r} — available: {', '.join(self.names())}"
         )
 
+    @staticmethod
+    def _check_name(name: str) -> None:
+        """POSITIVE per-segment validation — a name is a FILENAME.
+
+        The old checks were a denylist grown one escape at a time: blank
+        (round nine), C0+DEL (round ten), and round eleven still found `.`
+        writing a hidden `..json` that bricked `names()` permanently,
+        `"sub/"` writing `sub/.json`, and a 3,000-char name leaking `File
+        name too long` as a towerkit bug. This is the filename analogue of
+        "if you enumerate field names anywhere, derive them": state what a
+        segment IS — non-empty, no leading dot, no control characters,
+        within the filesystem's length — instead of chasing what it isn't.
+
+        `..` is deliberately NOT refused here: traversal is the sandbox's
+        verdict, and it answers `outside_roots` below, which is the truthful
+        code for it.
+        """
+        segments = name.split("/")
+        if segments and segments[0] == "":
+            # A leading "/" is an absolute path — an ESCAPE, not a bad name,
+            # and the sandbox owns escapes: fall through to `outside_roots`.
+            segments = segments[1:] or [""]
+        for seg in segments:
+            if seg == "..":
+                continue
+            problem = (
+                "an empty segment"
+                if not seg.strip()
+                else "a leading dot"
+                if seg.startswith(".")
+                else "a control character"
+                if _NAME_CONTROL_CHARS.search(seg)
+                else "a segment over 200 bytes"
+                if len(seg.encode("utf-8")) > 200
+                else None
+            )
+            if problem is not None:
+                raise Refusal(
+                    "bad_value",
+                    f"{name!r} is not a valid program name ({problem}) — a name "
+                    f"is one or more /-separated segments, each a non-hidden "
+                    f"filename under 200 bytes with no control characters",
+                )
+
     def _inside(self, candidate: Path) -> bool:
         # `.resolve()` on both `roots` (in __init__) and every `candidate` collapses
         # symlinks before this check — a symlink inside a root that points outside
@@ -172,7 +202,14 @@ class Programs:
             for path in sorted(root.rglob("*.json")):
                 if ".mcp-snapshots" in path.parts:
                     continue
-                name = path.relative_to(root).with_suffix("").as_posix()
+                # A string slice, NOT `with_suffix("")`: on a file named
+                # `..json` with_suffix raises `ValueError: Invalid name '.'`,
+                # which took out every listing — and every no_such_program
+                # message, which quotes this list — until the file was
+                # deleted by hand (round eleven). The weird name survives
+                # here and fails per-entry in the listing, where one broken
+                # entry does not hide the rest.
+                name = path.relative_to(root).as_posix()[: -len(".json")]
                 if name not in seen:
                     seen.add(name)
                     out.append(name)
@@ -205,6 +242,7 @@ class Programs:
 
 
 _NAME_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
+_REF_SHAPE = re.compile(r"TKW-\d{8}T\d{6}-[0-9a-f]{4}")
 
 
 def write_ref() -> str:
@@ -1323,6 +1361,16 @@ def _program_revert_write(programs: Programs, write_ref: str) -> dict[str, Any]:
             "bad_value",
             f"{write_ref!r} is not a towerkit write ref (expected a {_PREFIX!r} "
             f"prefix) — this tool only reverts its own writes",
+        )
+    if _REF_SHAPE.fullmatch(write_ref) is None:
+        # A ref is a FILENAME fed to rglob: `TKW-\x00` leaked `embedded
+        # null character` as a towerkit bug and `TKW-*` was a live glob
+        # wildcard (round eleven). `write_ref()` issues the only legitimate
+        # shape, so the boundary demands exactly that shape.
+        raise Refusal(
+            "bad_value",
+            f"{write_ref!r} is not the shape write_ref() issues "
+            f"(TKW-YYYYMMDDTHHMMSS-hhhh) — pass a write_ref from a write response",
         )
     for root in programs.roots:
         for meta_file in root.rglob(f"{_SNAPDIR}/{write_ref}.meta.json"):
