@@ -514,3 +514,17 @@ hand-written `_LAYER_KEYS` named here was deleted on 2026-08-19 — see
   the validator reports each as `render-theme`. Cost, stated: a hand-made
   theme using matplotlib colour names that happened to render charts now
   validates dirty. It was one crash away from proving why.
+
+## Round eight: the listing, the last unguarded step, and typed theme slots (2026-08-20)
+
+- **`program_list` resolves inside the per-entry try.** One `*.json`
+  symlink pointing outside the roots emptied the whole listing with a
+  nonsensical `outside_roots`; a corrupt FILE already got the graceful
+  per-entry error. One broken entry must not hide the rest, whatever broke.
+- **`_atomic_write` joins the coded perimeter** — `_write` coded six
+  failure points and leaked the seventh, the write itself (read-only file,
+  writable parent). Now `[internal_error]`, file unchanged, the
+  already-recorded snapshot an inert orphan.
+- **Theme slots are type-checked against their defaults** — `"size":
+  "enormous"` loaded clean and crashed `towerctl soi`. Derived off the
+  dataclass fields like the colour walk; no name list.

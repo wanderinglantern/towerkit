@@ -2226,3 +2226,47 @@ class TestPerimeterRoundSeven:
             assert result.is_error
             text = result.content[0].text
             assert "[internal_error]" in text, text
+
+
+class TestPerimeterRoundEight:
+    def test_one_escaping_symlink_does_not_hide_the_other_programs(self, roots) -> None:
+        """Round eight's primary: `_program_list` resolved each name OUTSIDE
+        its per-entry try, so one `*.json` symlink pointing out of the roots
+        (a checkout/rsync/backup artifact) raised `outside_roots` and the
+        whole listing came back empty — while a corrupt FILE got the graceful
+        per-entry error the docstring promises. The broken entry must not
+        hide the rest."""
+        (roots[0] / "escape.json").symlink_to("/etc/hosts")
+        out = _program_list(Programs(roots))
+        names = {p["name"] for p in out["programs"]}
+        assert "atomic-2026" in names, "the valid program must still list"
+        broken = [p for p in out["programs"] if p.get("error")]
+        assert any(p["name"] == "escape" for p in broken), "the symlink must be reported"
+
+    def test_a_failing_final_write_is_a_coded_refusal_and_changes_nothing(
+        self, roots
+    ) -> None:
+        """Round eight: `_write` coded six failure points and leaked the
+        seventh — `_atomic_write` itself. A read-only program file with a
+        writable parent (a state atomicio explicitly raises PermissionError
+        for) let the snapshot land and then threw the raw OSError at a
+        library caller branching on `.code`."""
+        programs = Programs(roots)
+        _program_read(programs, "atomic-2026")
+        path = roots[0] / "atomic-2026.json"
+        before = path.read_bytes()
+        path.chmod(0o444)
+        try:
+            with pytest.raises(edit.Refusal, match=r"\[internal_error\]"):
+                _program_edit_field(
+                    programs,
+                    "atomic-2026",
+                    "layer",
+                    "premium",
+                    "2.2m",
+                    2_100_000,
+                    target="xs-1",
+                )
+        finally:
+            path.chmod(0o644)
+        assert path.read_bytes() == before

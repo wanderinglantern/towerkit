@@ -281,7 +281,9 @@ def _write(
     expect_sha: str | None = None,
 ) -> dict[str, Any]:
     """One design write: drift check → load → mutate → hard-validate →
-    canonical dump → atomic replace → snapshot → re-arm the guard.
+    canonical dump → snapshot → atomic replace → re-arm the guard.
+    (Snapshot BEFORE the replace since round seven — see the comment at the
+    snapshot call for why the old order could eat a write.)
 
     Two tiers of validation, on purpose. HARD: the mutation must produce a
     program that still models and still round-trips through the canonical
@@ -401,7 +403,19 @@ def _write(
             f"refused — nothing written: could not record the undo snapshot ({exc}). "
             f"This is a towerkit or filesystem problem, not your value.",
         ) from exc
-    _atomic_write(path, text)
+    try:
+        _atomic_write(path, text)
+    except OSError as exc:
+        # Symmetric with the snapshot step above (round eight): `_write`
+        # coded six failure points and leaked the seventh — the write
+        # itself. A read-only file with a writable parent raises exactly
+        # here. The file is unchanged; the snapshot already recorded for
+        # this ref is an inert orphan (revert compares the post-sha).
+        raise Refusal(
+            "internal_error",
+            f"refused — nothing written: the write itself failed ({exc}). "
+            f"This is a towerkit or filesystem problem, not your value.",
+        ) from exc
     programs.note(path)
     return {
         "wrote": name,
@@ -547,11 +561,15 @@ def _program_list(programs: Programs) -> dict[str, Any]:
     """Every program file under the configured roots."""
     out: list[dict[str, Any]] = []
     for name in programs.names():
-        path = programs.resolve(name)
         try:
-            program = load_program(path)
-        except Exception as exc:  # a broken file must not hide the rest
-            out.append({"name": name, "error": str(exc)})
+            # `resolve` INSIDE the try (round eight): a *.json symlink
+            # pointing outside the roots — a checkout/rsync/backup artifact —
+            # raised `outside_roots` here and emptied the whole listing,
+            # while a corrupt FILE got the graceful per-entry error below.
+            # One broken entry must not hide the rest, whatever broke it.
+            program = load_program(programs.resolve(name))
+        except Exception as exc:
+            out.append({"name": name, "error": _reason(exc)})
             continue
         out.append(_program_summary(name, program))
     return {"programs": out, "roots": [str(r) for r in programs.roots]}

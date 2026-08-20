@@ -118,10 +118,29 @@ def theme_problems(theme: Theme) -> list[str]:
         if not isinstance(value, str) or not _HEX_COLOUR.match(value):
             problems.append(f"{where}: {value!r} is not a #RRGGBB colour")
 
+    def check_types(prefix: str, obj: Any) -> None:
+        # Round eight: `"size": "enormous"` loaded clean and crashed
+        # `towerctl soi` inside openpyxl — the loads-but-crashes family on
+        # the one slot the colour walk skips. Every slot with a default now
+        # demands the default's TYPE, derived off the dataclass field the
+        # same way the colour slots are. (bool-vs-int cannot arise: no slot
+        # defaults to bool.)
+        for f in fields(obj):
+            default = f.default
+            if default is None or isinstance(default, str) and _HEX_COLOUR.match(default):
+                continue  # colour slots have their own check; None means optional
+            value = getattr(obj, f.name)
+            if not isinstance(value, type(default)):
+                problems.append(
+                    f"{prefix}.{f.name}: {value!r} is not a {type(default).__name__}"
+                )
+
     for name, value in _colour_slots(theme.chrome):
         check(f"chrome.{name}", value)
     for name, value in _colour_slots(theme.soi):
         check(f"soi.{name}", value)
+    check_types("chrome", theme.chrome)
+    check_types("soi", theme.soi)
     for i, value in enumerate(theme.carrier_palette):
         check(f"carrierPalette[{i}]", value)
     for carrier, value in theme.pinned_carriers.items():

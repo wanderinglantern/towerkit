@@ -697,3 +697,21 @@ class TestThemeProblems:
         from towerkit.theme import theme_problems
 
         assert theme_problems(self._theme({"name": "t", "carrierPalette": ["white"]}))
+
+    def test_a_wrongly_typed_slot_is_flagged_even_when_it_is_not_a_colour(self) -> None:
+        """Round eight: `"size": "enormous"` loaded clean, validated clean,
+        and killed `towerctl soi` with a TypeError out of openpyxl — the
+        loads-but-crashes family, on the slot the colour check skips. Every
+        slot with a default now demands the default's TYPE, derived the same
+        way the colour slots are: off the dataclass field, never a name
+        list."""
+        from towerkit.theme import theme_problems
+
+        bad = self._theme({"name": "t", "soi": {"size": "enormous"}})
+        problems = "\n".join(theme_problems(bad))
+        assert "size" in problems and "enormous" in problems
+
+    def test_a_wrongly_typed_font_is_flagged_too(self) -> None:
+        from towerkit.theme import theme_problems
+
+        assert theme_problems(self._theme({"name": "t", "chrome": {"font": 12}}))
