@@ -16,6 +16,8 @@ from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 
+from pydantic import ValidationError
+
 from .dates import parse_flexible_date
 from .model import (
     Layer,
@@ -124,10 +126,24 @@ def parse_tower(text: str, *, insured: str = "", program: str = "") -> DraftProg
         stripped = raw.strip()
         if not stripped:
             continue
-        if _try_retention(draft, stripped, lineno, cover.id):
-            continue
-        _try_layer(draft, stripped, lineno, cover.id)
+        try:
+            if _try_retention(draft, stripped, lineno, cover.id):
+                continue
+            _try_layer(draft, stripped, lineno, cover.id)
+        except ValidationError as exc:
+            # The MODEL can refuse a value mid-line — control characters in
+            # a carrier since round nine — and that refusal escaped the
+            # per-line nets, which caught only MoneyParseError: ANSI-coloured
+            # text pasted from a terminal aborted the whole import with a
+            # pydantic dump and no line number (round ten). This module's
+            # contract is the docstring's: parsing never gives up early.
+            draft.diagnostics.error("paste.value", f"line {lineno}: {_model_refusal(exc)}")
     return draft
+
+
+def _model_refusal(exc: ValidationError) -> str:
+    """The model's objection without pydantic's four-line repr and URL."""
+    return "; ".join(err["msg"].removeprefix("Value error, ") for err in exc.errors())
 
 
 def _try_retention(draft: DraftProgram, text: str, lineno: int, line_id: str) -> bool:
@@ -250,46 +266,58 @@ def program_from_rows(
         if limit is None:
             draft.diagnostics.error("rows.money", f"row {rownum}: limit is required")
             continue
-        line_ids, synthesized = _line_ids_for(
-            draft, lines_by_name, row.get("line"), synthesized
-        )
-        period = _period_from(draft, row, rownum)
-        if draft.period is None and period is not None:
-            draft.period = period
-        layer_name = str(row.get("layer") or "").strip() or (
-            "Primary" if not attach
-            else f"{format_money_compact(limit)} xs {format_money_compact(attach)}"
-        )
-        layer = layers_by_name.get(layer_name)
-        if layer is None:
-            layer = Layer(
-                id=_slug(layer_name, taken={la.id for la in draft.layers}),
-                name=layer_name, applies_to=line_ids, attach=attach or 0, limit=limit,
-                premium=premium,
-                policy_number=str(row.get("policy_number") or "").strip() or None,
-                period=period if period is not None and period != draft.period else None,
+        try:
+            line_ids, synthesized = _line_ids_for(
+                draft, lines_by_name, row.get("line"), synthesized
             )
-            layers_by_name[layer_name] = layer
-            draft.layers.append(layer)
-        elif layer.limit != limit or layer.attach != (attach or 0):
-            draft.diagnostics.error(
-                "rows.band",
-                f"row {rownum}: {layer_name!r} already has a different limit/attachment",
+            period = _period_from(draft, row, rownum)
+            if draft.period is None and period is not None:
+                draft.period = period
+            layer_name = str(row.get("layer") or "").strip() or (
+                "Primary" if not attach
+                else f"{format_money_compact(limit)} xs {format_money_compact(attach)}"
             )
-            continue
-        carrier = str(row.get("carrier") or "").strip()
-        if carrier:
-            share_raw = row.get("share")
-            try:
-                share = (
-                    parse_share(str(share_raw)) if share_raw not in (None, "") else 10_000
+            layer = layers_by_name.get(layer_name)
+            if layer is None:
+                layer = Layer(
+                    id=_slug(layer_name, taken={la.id for la in draft.layers}),
+                    name=layer_name, applies_to=line_ids, attach=attach or 0,
+                    limit=limit, premium=premium,
+                    policy_number=str(row.get("policy_number") or "").strip() or None,
+                    period=(
+                        period if period is not None and period != draft.period else None
+                    ),
                 )
-            except MoneyParseError as exc:
-                draft.diagnostics.error("rows.share", f"row {rownum}: {exc}")
+                layers_by_name[layer_name] = layer
+                draft.layers.append(layer)
+            elif layer.limit != limit or layer.attach != (attach or 0):
+                draft.diagnostics.error(
+                    "rows.band",
+                    f"row {rownum}: {layer_name!r} already has a different "
+                    f"limit/attachment",
+                )
                 continue
-            layer.participants = [
-                *layer.participants, Participant(carrier=carrier, share_bps=share)
-            ]
+            carrier = str(row.get("carrier") or "").strip()
+            if carrier:
+                share_raw = row.get("share")
+                try:
+                    share = (
+                        parse_share(str(share_raw))
+                        if share_raw not in (None, "")
+                        else 10_000
+                    )
+                except MoneyParseError as exc:
+                    draft.diagnostics.error("rows.share", f"row {rownum}: {exc}")
+                    continue
+                layer.participants = [
+                    *layer.participants, Participant(carrier=carrier, share_bps=share)
+                ]
+        except ValidationError as exc:
+            # Same net as `parse_tower`'s, for the same regression: a model
+            # refusal from a cell value (a control character in a carrier)
+            # aborted the whole spreadsheet import instead of becoming this
+            # row's diagnostic.
+            draft.diagnostics.error("rows.value", f"row {rownum}: {_model_refusal(exc)}")
     return draft
 
 

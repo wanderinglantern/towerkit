@@ -2367,3 +2367,59 @@ class TestPerimeterRoundNine:
                 Programs(roots), "", "Acme", "Casualty", "bound",
                 "2027-01-01", "2028-01-01", ["GL"],
             )
+
+
+class TestPerimeterRoundTen:
+    def test_a_control_character_in_a_name_is_refused(self, roots) -> None:
+        """Round ten: names escaped round nine's net because a name is a
+        FILENAME, not a field. `create(name="we\\x1bird")` put an ESC on
+        disk (the exact terminal-garbling harm round nine named), and a NUL
+        in any name raised a raw `embedded null character` ValueError out of
+        `candidate.resolve()` — [internal_error] through the ring, "towerkit
+        bug", for a value the caller sent. Names refuse the WHOLE C0 set
+        plus DEL: \\t and \\n are legitimate in notes, never in a
+        filename."""
+        programs = Programs(roots)
+        for bad in ("we\x1bird", "a\x00b", "tab\tname"):
+            with pytest.raises(edit.Refusal, match=r"\[bad_value\]"):
+                programs.resolve(bad, must_exist=False)
+        with pytest.raises(edit.Refusal, match=r"\[bad_value\]"):
+            _program_read(programs, "a\x00b")
+
+    def test_reverting_after_the_file_vanished_is_not_a_towerkit_bug(self, roots) -> None:
+        programs = Programs(roots)
+        _program_read(programs, "atomic-2026")
+        out = _program_edit_field(
+            programs, "atomic-2026", "layer", "premium", "2.2m", 2_100_000, target="xs-1"
+        )
+        (roots[0] / "atomic-2026.json").unlink()
+        with pytest.raises(edit.Refusal, match=r"\[invalid_file\]"):
+            _program_revert_write(programs, out["write_ref"])
+
+    def test_reverting_a_read_only_file_refuses_with_nothing_restored(self, roots) -> None:
+        """Round eight wrapped `_write`'s final write; round ten found
+        `restore()`'s write still bare."""
+        programs = Programs(roots)
+        _program_read(programs, "atomic-2026")
+        out = _program_edit_field(
+            programs, "atomic-2026", "layer", "premium", "2.2m", 2_100_000, target="xs-1"
+        )
+        path = roots[0] / "atomic-2026.json"
+        after_write = path.read_bytes()
+        path.chmod(0o444)
+        try:
+            with pytest.raises(edit.Refusal, match=r"\[internal_error\].*nothing restored"):
+                _program_revert_write(programs, out["write_ref"])
+        finally:
+            path.chmod(0o644)
+        assert path.read_bytes() == after_write
+
+    def test_editing_a_directory_named_like_a_program_is_coded(self, roots) -> None:
+        """`_write`'s step zero — `file_sha256(path)` — ran before every
+        guard, so the write tools leaked raw IsADirectoryError for the same
+        state the READ path codes `[invalid_file]`."""
+        (roots[0] / "dirprog.json").mkdir()
+        with pytest.raises(edit.Refusal, match=r"\[invalid_file\]"):
+            _program_edit_field(
+                Programs(roots), "dirprog", "program", "insured", "X", "whatever"
+            )

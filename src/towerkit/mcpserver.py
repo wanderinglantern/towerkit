@@ -24,6 +24,7 @@ import functools
 import hashlib
 import json
 import os
+import re
 import secrets
 import shlex
 import subprocess
@@ -119,6 +120,17 @@ class Programs:
             # `program_create(name="")` used to create a hidden `.json`
             # dotfile that listed back as ".json" (round nine).
             raise Refusal("bad_value", "a program name cannot be empty")
+        if _NAME_CONTROL_CHARS.search(name):
+            # A name is a FILENAME, so it refuses the whole C0 set plus DEL
+            # — stricter than model content, where \t and \n are legitimate
+            # in notes. Round ten: `create(name="we\x1bird")` put an ESC on
+            # disk, and a NUL raised `embedded null character` out of
+            # `.resolve()` below as "[internal_error] towerkit bug" for a
+            # value the caller sent.
+            raise Refusal(
+                "bad_value",
+                f"a program name cannot contain control characters — got {name!r}",
+            )
         for root in self.roots:
             candidate = (root / f"{name}.json").resolve()
             if not self._inside(candidate):
@@ -190,6 +202,9 @@ class Programs:
         sha = file_sha256(path)
         self.seen[str(path)] = sha
         return sha
+
+
+_NAME_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
 
 
 def write_ref() -> str:
@@ -265,14 +280,30 @@ def restore(path: Path, ref: str) -> None:
         raise Refusal(
             "no_such_target", f"{ref} was a write to {meta['path']}, not this file"
         )
-    if file_sha256(path) != meta["post_sha256"]:
+    try:
+        # Bare until round ten: the file the ref wrote can be deleted or
+        # unreadable by revert time, and this leaked FileNotFoundError as
+        # "[internal_error] towerkit bug" out of the recovery tool.
+        current = file_sha256(path)
+    except OSError as exc:
+        raise Refusal(
+            "invalid_file",
+            f"the file {ref} wrote cannot be read ({exc}) — nothing restored",
+        ) from exc
+    if current != meta["post_sha256"]:
         raise Refusal(
             "stale_sha",
             f"the file has changed since {ref} wrote it — a newer edit (the "
             f"towerkit editor, bookkit, or a later write) would be lost; revert "
             f"newer writes first",
         )
-    pre_image = image.read_bytes()
+    try:
+        pre_image = image.read_bytes()
+    except OSError as exc:
+        raise Refusal(
+            "no_snapshot",
+            f"the snapshot image for {ref} cannot be read ({exc}) — nothing restored",
+        ) from exc
     try:
         loads_program(pre_image.decode("utf-8"))  # refuse a pre-image that cannot load
     except (
@@ -291,7 +322,16 @@ def restore(path: Path, ref: str) -> None:
             "no_snapshot",
             f"snapshot {ref} is not a loadable program — refusing to restore: {exc}",
         ) from exc
-    _atomic_write_bytes(path, pre_image)
+    try:
+        _atomic_write_bytes(path, pre_image)
+    except OSError as exc:
+        # Round eight wrapped `_write`'s final write; round ten found this
+        # sibling still bare (a read-only file by revert time).
+        raise Refusal(
+            "internal_error",
+            f"nothing restored: the write itself failed ({exc}). This is a "
+            f"towerkit or filesystem problem, not your ref.",
+        ) from exc
 
 
 def _atomic_write(path: Path, text: str) -> None:
@@ -341,7 +381,18 @@ def _write(
     breaking the deadlock once and breaking it permanently.
     """
     path = programs.resolve(name)
-    actual = file_sha256(path)
+    try:
+        # Step ZERO of every write, so it runs before every guard — and it
+        # was the last bare read (round ten): a directory named foo.json or
+        # a mode bit leaked raw IsADirectoryError/PermissionError from every
+        # write tool while the read path coded the identical states.
+        actual = file_sha256(path)
+    except OSError as exc:
+        raise Refusal(
+            "invalid_file",
+            f"{name} cannot be read ({exc}) — nothing written; "
+            f"program_check({name!r}) reports the full diagnostics",
+        ) from exc
     if expect_sha is not None:
         token = expect_sha.strip().lower()
         if len(token) != 64 or any(c not in "0123456789abcdef" for c in token):

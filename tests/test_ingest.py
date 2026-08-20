@@ -300,3 +300,40 @@ class TestImportSchedule:
         )
         assert draft.period is not None
         assert draft.period.start.isoformat() == "2026-01-01"
+
+
+class TestControlCharactersAtTheBoundary:
+    """Round ten: round nine's model refusal REGRESSED this module's own
+    contract — "Unreadable lines become error diagnostics with their line
+    number; parsing never gives up early" — because a ValidationError from
+    a model built mid-row escaped the per-row nets that only caught
+    MoneyParseError. ANSI-coloured text pasted straight from a terminal is
+    the canonical trigger."""
+
+    def test_an_ansi_coloured_paste_never_gives_up_early(self) -> None:
+        from towerkit.ingest import parse_tower
+
+        draft = parse_tower("Primary 5M — \x1b[1mChubb\x1b[0m\n5M xs 5M — Zurich 100%")
+        assert any("line 1" in d.message for d in draft.diagnostics.errors), (
+            "the bad line must become a numbered diagnostic"
+        )
+        assert [ly.attach for ly in draft.layers] == [5_000_000], (
+            "the good line must still land"
+        )
+
+    def test_a_control_character_cell_is_a_row_diagnostic(self) -> None:
+        from towerkit.ingest import program_from_rows
+
+        rows = [
+            {"limit": "5M", "carrier": "Chu\x07bb", "line": "GL"},
+            {"limit": "5M", "attachment": "5M", "carrier": "Zurich", "line": "GL"},
+        ]
+        draft = program_from_rows(rows)
+        assert any("row 1" in d.message for d in draft.diagnostics.errors)
+        # Same semantic as the share-parse error path: the row's layer
+        # stays, only the refused participant is dropped — and the clean
+        # row still lands in full.
+        assert len(draft.layers) == 2
+        assert all(
+            p.carrier == "Zurich" for ly in draft.layers for p in ly.participants
+        )

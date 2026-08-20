@@ -555,3 +555,26 @@ hand-written `_LAYER_KEYS` named here was deleted on 2026-08-19 — see
   `_program_create` / `_program_clone_renewal` remain a hand-mirrored copy
   of the write ritual, ring-coded only; Phase 2 builds on exactly these
   paths and should flatten them first.
+
+## Round ten: names are filenames, and the boundary honours its own contract (2026-08-20)
+
+- **Program names refuse the whole C0 set plus DEL** (`Programs.resolve`)
+  — stricter than model content, where `\t \n` are legitimate in notes,
+  because a name becomes a FILENAME: `create(name="we\x1bird")` put an ESC
+  on disk, and a NUL raised `embedded null character` out of `.resolve()`
+  as a "towerkit bug" for a value the caller sent.
+- **`parse_tower` / `program_from_rows` catch the model's refusal per
+  row** — round nine's validator had regressed the module's own contract
+  ("parsing never gives up early"): ANSI-coloured terminal paste aborted
+  the whole import with a pydantic dump and no line number. The refusal is
+  now that line's numbered diagnostic; partial rows keep the layer and
+  drop the refused participant, matching the share-error path.
+- **`restore()` and `_write`'s step zero join the coded perimeter** — the
+  recovery tool's sha read, image read and final write, and every write
+  tool's opening `file_sha256`, were the last bare filesystem touches.
+- **Ledger, model-change-gated (round ten's audit):** a theme dataclass
+  field annotated bare `Any` would make `_slot_problems` raise
+  `TypeError` (isinstance on Any); a future dict-valued model field's
+  values would escape `_no_control_characters`, which walks strs and list
+  elements only. Neither shape exists today; both need a code change to
+  arise, and whoever adds one owns extending the walk.
