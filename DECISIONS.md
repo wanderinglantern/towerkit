@@ -528,3 +528,30 @@ hand-written `_LAYER_KEYS` named here was deleted on 2026-08-19 — see
 - **Theme slots are type-checked against their defaults** — `"size":
   "enormous"` loaded clean and crashed `towerctl soi`. Derived off the
   dataclass fields like the colour walk; no name list.
+
+## Round nine: control characters, one theme walk, one meta reader (2026-08-20)
+
+- **The C0 controls minus `\t \n \r` are refused ON THE MODEL** (`_Model`
+  after-validator, derived off `model_fields`). `"Atomic \x00 Corp"` rode
+  the hardened write surface into a file that validated exit 0 and crashed
+  `towerctl soi` — round eight's theme finding on program content. Hard
+  tier deliberately: a file already carrying one crashes the SOI export
+  today, so refusing the load names the problem instead of deferring it.
+- **`theme_problems` is one walk with one verdict per slot** — round
+  eight's parallel colour/type walks had to exactly partition the field
+  set, and `titleFont: 12` fell through both. Types now come from the
+  ANNOTATION (also covering a future `default_factory` field, closing
+  round nine's MISSING-trap ledger candidate); a float size is accepted
+  (it renders — the false positive round nine costed out); a bool is not.
+- **`_read_meta` is the one reader of snapshot metadata** — two readers
+  with divergent nets was the scar; a meta without `post_sha256` now
+  refuses `[no_snapshot]` instead of claiming a towerkit bug. Revert also
+  refuses `[outside_roots]` for a meta naming a file outside the roots —
+  the one write that bypassed the sandbox, sha-bounded but not refused.
+- **Listing precedence matches `resolve`** — a shadowed same-name file in
+  a second root no longer lists twice with the first root's content — and
+  a blank program name refuses `bad_value` instead of creating `.json`.
+- **Noted for Phase 2** (round nine design judgement, not acted on):
+  `_program_create` / `_program_clone_renewal` remain a hand-mirrored copy
+  of the write ritual, ring-coded only; Phase 2 builds on exactly these
+  paths and should flatten them first.

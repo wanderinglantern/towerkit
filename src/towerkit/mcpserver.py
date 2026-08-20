@@ -115,6 +115,10 @@ class Programs:
     def resolve(self, name: str, must_exist: bool = True) -> Path:
         if name.endswith(".json"):
             name = name[: -len(".json")]
+        if not name.strip():
+            # `program_create(name="")` used to create a hidden `.json`
+            # dotfile that listed back as ".json" (round nine).
+            raise Refusal("bad_value", "a program name cannot be empty")
         for root in self.roots:
             candidate = (root / f"{name}.json").resolve()
             if not self._inside(candidate):
@@ -146,12 +150,20 @@ class Programs:
         return any(candidate.is_relative_to(root) for root in self.roots)
 
     def names(self) -> list[str]:
+        """Each name ONCE, first root wins — the same precedence `resolve`
+        applies. Duplicates used to list twice, BOTH summarizing the first
+        root's file (round nine): the shadowed file's content misreported
+        under its own name."""
         out: list[str] = []
+        seen: set[str] = set()
         for root in self.roots:
             for path in sorted(root.rglob("*.json")):
                 if ".mcp-snapshots" in path.parts:
                     continue
-                out.append(path.relative_to(root).with_suffix("").as_posix())
+                name = path.relative_to(root).with_suffix("").as_posix()
+                if name not in seen:
+                    seen.add(name)
+                    out.append(name)
         return out
 
     def note(self, path: Path) -> str:
@@ -214,6 +226,28 @@ def snapshot(path: Path, ref: str, pre_image: bytes, post_sha256: str) -> None:
         (snapdir / f"{stale.stem}.meta.json").unlink(missing_ok=True)
 
 
+def _read_meta(meta_file: Path, ref: str) -> dict[str, str]:
+    """The ONE reader of a snapshot's meta file, with the one net.
+
+    Round seven guarded the read in `_program_revert_write` and round nine
+    found `restore()` re-reading the same file with a different net — valid
+    JSON carrying `path` but no `post_sha256` (a truncated meta is a real
+    state; the dir is shared with bookkit and pruned by mtime) passed the
+    first guard and KeyErrored into `[internal_error] This is a towerkit
+    bug` out of the recovery tool: the wrong tier and a false statement.
+    Two readers with divergent guards was the scar; this is the flattening.
+    """
+    try:
+        meta = json.loads(meta_file.read_text(encoding="utf-8"))
+        return {"path": str(meta["path"]), "post_sha256": str(meta["post_sha256"])}
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise Refusal(
+            "no_snapshot",
+            f"snapshot metadata for {ref} is unreadable ({_reason(exc)}) — "
+            f"this ref cannot be reverted",
+        ) from exc
+
+
 def restore(path: Path, ref: str) -> None:
     """Put the pre-image back, only while the file still holds exactly what
     that write produced. Anything newer — the TUI, bookkit, a later write —
@@ -226,7 +260,7 @@ def restore(path: Path, ref: str) -> None:
             f"no snapshot for {ref} — it may have been pruned "
             f"(the last {SNAPSHOT_KEEP} writes are kept)",
         )
-    meta = json.loads(meta_file.read_text(encoding="utf-8"))
+    meta = _read_meta(meta_file, ref)
     if str(path) != meta["path"]:
         raise Refusal(
             "no_such_target", f"{ref} was a write to {meta['path']}, not this file"
@@ -1241,17 +1275,17 @@ def _program_revert_write(programs: Programs, write_ref: str) -> dict[str, Any]:
         )
     for root in programs.roots:
         for meta_file in root.rglob(f"{_SNAPDIR}/{write_ref}.meta.json"):
-            try:
-                target = Path(json.loads(meta_file.read_text())["path"])
-            except (OSError, ValueError, KeyError, TypeError) as exc:
-                # The snapshot dir is shared with bookkit and pruned by
-                # mtime; a truncated meta is a real state, and it leaked a
-                # raw JSONDecodeError out of the recovery tool (round seven).
+            target = Path(_read_meta(meta_file, write_ref)["path"])
+            if not programs._inside(target.resolve()):
+                # `restore()` writes to whatever path the meta names — the
+                # one write that bypassed the sandbox (round nine). Every
+                # reachable path was sha-guarded so harm was bounded, but
+                # bounded is not refused.
                 raise Refusal(
-                    "no_snapshot",
-                    f"snapshot metadata for {write_ref} is unreadable "
-                    f"({_reason(exc)}) — this ref cannot be reverted",
-                ) from exc
+                    "outside_roots",
+                    f"{write_ref} names a file outside the program roots — "
+                    f"refusing to restore it",
+                )
             restore(target, write_ref)
             programs.note(target)
             return {

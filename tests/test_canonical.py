@@ -1,10 +1,14 @@
 """Canonical serialisation: load + save with no edits produces zero diff."""
 
+from datetime import date
 from pathlib import Path
+
+import pytest
 
 from towerkit.model import (
     Layer,
     Participant,
+    Period,
     Program,
     dumps_program,
     load_program,
@@ -363,3 +367,38 @@ def test_the_canonical_guard_refuses_a_type_it_cannot_write() -> None:
 
     with pytest.raises(RuntimeError, match="cannot write a Decimal"):
         _jsonable(Decimal("0.35"))
+
+
+class TestControlCharacters:
+    """The C0 controls minus \\t \\n \\r are refused ON THE MODEL — the
+    branch's stated repair tier for a constraint that must be fatal — so the
+    MCP, the TUI and the library all inherit it. Round nine put \\x00
+    through the hardened write surface and produced a file that validated
+    exit 0 and crashed towerctl soi with a raw openpyxl error."""
+
+    def test_a_nul_in_a_string_field_is_refused(self) -> None:
+        from towerkit.model import Placement, Program
+
+        with pytest.raises(ValueError, match="control character"):
+            Program(
+                insured="Atomic \x00 Corp",
+                program="Casualty",
+                placement=Placement.BOUND,
+                period=Period(start=date(2026, 1, 1), end=date(2027, 1, 1)),
+                lines=[],
+            )
+
+    def test_a_control_character_in_a_list_element_is_refused(self) -> None:
+        from towerkit.model import Layer
+
+        with pytest.raises(ValueError, match="control character"):
+            Layer(id="l1", name="Primary", appliesTo=["gl"], attach=0, limit=1,
+                  states=["N\x07Y"])
+
+    def test_tabs_and_newlines_are_not_control_characters_here(self) -> None:
+        from towerkit.model import Layer
+
+        assert Layer(
+            id="l1", name="Primary", appliesTo=["gl"], attach=0, limit=1,
+            notes="line one\n\tline two",
+        ).notes == "line one\n\tline two"

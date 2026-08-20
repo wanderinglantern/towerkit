@@ -13,6 +13,7 @@ Round-tripping an untouched file must produce a zero diff.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable
 from datetime import date
 from decimal import Decimal
@@ -20,7 +21,7 @@ from enum import Enum, StrEnum
 from pathlib import Path
 from typing import Annotated, Any, get_args
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic.fields import FieldInfo
 
 from .atomicio import atomic_write_text
@@ -93,8 +94,35 @@ class RetentionType(StrEnum):
     CAPTIVE = "captive"
 
 
+# The C0 controls minus \t \n \r — exactly the characters that corrupt an
+# SOI workbook (openpyxl refuses them with a raw IllegalCharacterError) and
+# garble terminals, and never anything a broker types on purpose.
+_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+
+
 class _Model(BaseModel):
     model_config = ConfigDict(extra="forbid", validate_assignment=True, populate_by_name=True)
+
+    @model_validator(mode="after")
+    def _no_control_characters(self) -> _Model:
+        """A HARD rule on the model, the tier the branch reserves for
+        constraints that must be fatal (see `Program.currency`): round nine
+        rode `"Atomic \\x00 Corp"` through the hardened write surface into a
+        file that validated exit 0 and crashed `towerctl soi`. On the model,
+        every surface — MCP, TUI, library — inherits the refusal, and the
+        walk is DERIVED off `model_fields`, never a list of field names.
+        Multi-line text keeps \\t \\n \\r; nested models validate themselves.
+        """
+        for name in type(self).model_fields:
+            value = getattr(self, name)
+            items = value if isinstance(value, list) else [value]
+            for item in items:
+                if isinstance(item, str) and (hit := _CONTROL_CHARS.search(item)):
+                    raise ValueError(
+                        f"{name} contains the control character {hit.group()!r}, "
+                        f"which corrupts SOI workbooks and terminals"
+                    )
+        return self
 
 
 class Line(_Model):

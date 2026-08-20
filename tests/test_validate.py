@@ -715,3 +715,25 @@ class TestThemeProblems:
         from towerkit.theme import theme_problems
 
         assert theme_problems(self._theme({"name": "t", "chrome": {"font": 12}}))
+
+    def test_the_optional_slot_is_typed_when_it_is_set(self) -> None:
+        """Round nine: `"titleFont": 12` fell between the colour walk (skips
+        non-hex defaults) and the type walk (skipped None defaults) and
+        crashed matplotlib. One walk now gives every slot exactly one
+        verdict; the optional slot's accepted types come from its
+        ANNOTATION."""
+        from towerkit.theme import theme_problems
+
+        assert theme_problems(self._theme({"name": "t", "chrome": {"titleFont": 12}}))
+        assert not theme_problems(
+            self._theme({"name": "t", "chrome": {"titleFont": "Marsh Serif"}})
+        )
+
+    def test_a_float_size_is_not_a_false_positive(self) -> None:
+        """Round nine's cost audit: 11.5 renders and exports fine; flagging
+        it made a workable theme validate dirty. A bool, though, is an int
+        that is always a mistake in a size."""
+        from towerkit.theme import theme_problems
+
+        assert not theme_problems(self._theme({"name": "t", "soi": {"size": 11.5}}))
+        assert theme_problems(self._theme({"name": "t", "soi": {"size": True}}))

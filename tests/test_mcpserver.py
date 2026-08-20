@@ -2270,3 +2270,100 @@ class TestPerimeterRoundEight:
         finally:
             path.chmod(0o644)
         assert path.read_bytes() == before
+
+
+class TestPerimeterRoundNine:
+    def test_a_control_character_is_refused_before_it_reaches_the_file(self, roots) -> None:
+        """Round nine: `insured = "Atomic \\x00 Corp"` rode the hardened
+        write surface into a file that validated exit 0 and killed
+        `towerctl soi` with a raw openpyxl IllegalCharacterError — round
+        eight's theme finding transplanted onto program content the MCP
+        itself wrote and pronounced clean. The repair path is the branch's
+        own stated one: put it on the MODEL, so every surface inherits."""
+        programs = Programs(roots)
+        path = roots[0] / "atomic-2026.json"
+        before = path.read_bytes()
+        _program_read(programs, "atomic-2026")
+        with pytest.raises(edit.Refusal, match=r"\[guard_refused\]"):
+            _program_edit_field(
+                programs,
+                "atomic-2026",
+                "program",
+                "insured",
+                "Atomic \x00 Corp",
+                "Atomic Industries, Inc.",
+            )
+        assert path.read_bytes() == before
+
+    def test_newlines_and_tabs_stay_writable(self, roots) -> None:
+        """The forbidden set is exactly the C0 controls that break the SOI
+        workbook and terminals — never \\t \\n \\r, which multi-line notes
+        legitimately carry."""
+        programs = Programs(roots)
+        _program_read(programs, "atomic-2026")
+        _program_edit_field(
+            programs, "atomic-2026", "layer", "notes", "line one\n\tline two", None,
+            target="xs-1",
+        )
+        after = _program_read(programs, "atomic-2026")
+        layer = next(ly for ly in after["layers"] if ly["id"] == "xs-1")
+        assert layer["notes"] == "line one\n\tline two"
+
+    def test_a_meta_missing_its_post_sha_is_no_snapshot_not_a_towerkit_bug(
+        self, roots
+    ) -> None:
+        """Round nine: `_program_revert_write` guarded `["path"]` and then
+        `restore()` re-read the same meta with a different net, so a meta
+        that is valid JSON without `post_sha256` KeyErrored into
+        `[internal_error] This is a towerkit bug` — the wrong tier and a
+        false statement, in the recovery tool. One `_read_meta`, one net."""
+        programs = Programs(roots)
+        _program_read(programs, "atomic-2026")
+        out = _program_edit_field(
+            programs, "atomic-2026", "layer", "premium", "2.2m", 2_100_000, target="xs-1"
+        )
+        meta = roots[0] / ".mcp-snapshots" / f"{out['write_ref']}.meta.json"
+        path_only = {"path": json.loads(meta.read_text("utf-8"))["path"]}
+        meta.write_text(json.dumps(path_only), encoding="utf-8")
+        with pytest.raises(edit.Refusal, match=r"\[no_snapshot\]"):
+            _program_revert_write(programs, out["write_ref"])
+
+    def test_a_meta_naming_a_file_outside_the_roots_is_refused(self, roots, tmp_path) -> None:
+        """`restore()` writes to whatever path the meta names — the one
+        write that bypassed the sandbox. Every reachable path was sha-guarded
+        so harm was bounded, but bounded is not refused."""
+        programs = Programs(roots)
+        _program_read(programs, "atomic-2026")
+        out = _program_edit_field(
+            programs, "atomic-2026", "layer", "premium", "2.2m", 2_100_000, target="xs-1"
+        )
+        victim = tmp_path / "outside.json"
+        victim.write_text("{}", encoding="utf-8")
+        meta = roots[0] / ".mcp-snapshots" / f"{out['write_ref']}.meta.json"
+        data = json.loads(meta.read_text("utf-8"))
+        data["path"] = str(victim)
+        meta.write_text(json.dumps(data), encoding="utf-8")
+        with pytest.raises(edit.Refusal, match=r"\[outside_roots\]"):
+            _program_revert_write(programs, out["write_ref"])
+
+    def test_a_shadowed_program_is_not_misreported(self, tmp_path) -> None:
+        """Two roots holding the same name produced two listing entries BOTH
+        summarizing the first root's file — the shadowed file's content
+        misreported under its own name. The listing now mirrors `resolve`'s
+        precedence: the name appears once, as the file a read would return."""
+        first, second = tmp_path / "a", tmp_path / "b"
+        first.mkdir(), second.mkdir()
+        shutil.copy(SAMPLE, first / "atomic-2026.json")
+        shutil.copy(SAMPLE, second / "atomic-2026.json")
+        out = _program_list(Programs([first, second]))
+        entries = [p for p in out["programs"] if p["name"] == "atomic-2026"]
+        assert len(entries) == 1
+
+    def test_a_blank_program_name_is_refused(self, roots) -> None:
+        """`program_create(name="")` created a hidden `.json` dotfile that
+        listed back as '.json'."""
+        with pytest.raises(edit.Refusal, match=r"\[bad_value\]"):
+            _program_create(
+                Programs(roots), "", "Acme", "Casualty", "bound",
+                "2027-01-01", "2028-01-01", ["GL"],
+            )

@@ -13,7 +13,8 @@ import re
 from dataclasses import dataclass, field, fields
 from importlib import resources
 from pathlib import Path
-from typing import Any
+from types import UnionType
+from typing import Any, Union, get_args, get_origin, get_type_hints
 
 
 @dataclass(frozen=True)
@@ -90,16 +91,47 @@ class Theme:
 _HEX_COLOUR = re.compile(r"^#[0-9A-Fa-f]{6}$")
 
 
-def _colour_slots(obj: Any) -> list[tuple[str, str]]:
-    """The colour-bearing fields of a theme dataclass, DERIVED off the field
-    defaults — a `str` default matching #RRGGBB marks a colour slot. Fonts
-    (`"DejaVu Sans"`), sizes and `None` defaults fall out naturally, and a
-    new colour field is covered without anyone maintaining a name list."""
-    return [
-        (f.name, getattr(obj, f.name))
-        for f in fields(obj)
-        if isinstance(f.default, str) and _HEX_COLOUR.match(f.default)
-    ]
+def _accepted_types(annotation: Any) -> tuple[type, ...]:
+    if get_origin(annotation) in (Union, UnionType):
+        return tuple(arg for arg in get_args(annotation) if isinstance(arg, type))
+    return (annotation,) if isinstance(annotation, type) else ()
+
+
+def _slot_problems(prefix: str, obj: Any) -> list[str]:
+    """One walk, one verdict per slot — colour, type, or optional.
+
+    Round eight ran a colour walk and a type walk in parallel, and their
+    skip rules had to exactly partition the field set; round nine found
+    `titleFont=12` falling through both (non-hex default, so not a colour
+    slot; `None` default, so the type walk skipped it) and crashing
+    matplotlib. Now: a #RRGGBB `str` default marks a colour slot; every
+    other slot's accepted types come from its ANNOTATION — which also
+    covers a future `default_factory` field, whose `f.default` is MISSING.
+    Nothing here is a list of field names."""
+    problems: list[str] = []
+    hints = get_type_hints(type(obj))
+    for f in fields(obj):
+        value = getattr(obj, f.name)
+        where = f"{prefix}.{f.name}"
+        if isinstance(f.default, str) and _HEX_COLOUR.match(f.default):
+            if not isinstance(value, str) or not _HEX_COLOUR.match(value):
+                problems.append(f"{where}: {value!r} is not a #RRGGBB colour")
+            continue
+        accepted = _accepted_types(hints[f.name])
+        if value is None and type(None) in accepted:
+            continue
+        concrete = tuple(t for t in accepted if t is not type(None))
+        wanted = "/".join(t.__name__ for t in concrete)
+        if int in concrete and isinstance(value, bool):
+            # bool IS an int; a True size is always a mistake.
+            problems.append(f"{where}: {value!r} is not a {wanted}")
+        elif int in concrete and isinstance(value, float):
+            # 11.5 renders and exports fine (round nine's cost audit);
+            # refusing it made a workable theme validate dirty.
+            continue
+        elif not isinstance(value, concrete):
+            problems.append(f"{where}: {value!r} is not a {wanted}")
+    return problems
 
 
 def theme_problems(theme: Theme) -> list[str]:
@@ -118,29 +150,8 @@ def theme_problems(theme: Theme) -> list[str]:
         if not isinstance(value, str) or not _HEX_COLOUR.match(value):
             problems.append(f"{where}: {value!r} is not a #RRGGBB colour")
 
-    def check_types(prefix: str, obj: Any) -> None:
-        # Round eight: `"size": "enormous"` loaded clean and crashed
-        # `towerctl soi` inside openpyxl — the loads-but-crashes family on
-        # the one slot the colour walk skips. Every slot with a default now
-        # demands the default's TYPE, derived off the dataclass field the
-        # same way the colour slots are. (bool-vs-int cannot arise: no slot
-        # defaults to bool.)
-        for f in fields(obj):
-            default = f.default
-            if default is None or isinstance(default, str) and _HEX_COLOUR.match(default):
-                continue  # colour slots have their own check; None means optional
-            value = getattr(obj, f.name)
-            if not isinstance(value, type(default)):
-                problems.append(
-                    f"{prefix}.{f.name}: {value!r} is not a {type(default).__name__}"
-                )
-
-    for name, value in _colour_slots(theme.chrome):
-        check(f"chrome.{name}", value)
-    for name, value in _colour_slots(theme.soi):
-        check(f"soi.{name}", value)
-    check_types("chrome", theme.chrome)
-    check_types("soi", theme.soi)
+    problems.extend(_slot_problems("chrome", theme.chrome))
+    problems.extend(_slot_problems("soi", theme.soi))
     for i, value in enumerate(theme.carrier_palette):
         check(f"carrierPalette[{i}]", value)
     for carrier, value in theme.pinned_carriers.items():
