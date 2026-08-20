@@ -195,6 +195,16 @@ STRICTER_THAN_MODEL: dict[str, frozenset[str]] = {
     "": frozenset({"lines", "layers", "retentions", "sublimits"}),
 }
 
+# A hand-authored `enum` on a property whose model type derives none is the
+# schema being STRICTER THAN THE MODEL — and, symmetric with
+# `STRICTER_THAN_MODEL` above, stricter-than-model is a decision someone
+# makes out loud or the generator refuses (Grant's F9 call, 2026-08-20).
+# The asymmetry it closes: retyping an Enum field to plain `str` left the
+# schema's old `enum` behind as silently "hand-authored", declared nowhere.
+# Keyed by the reconcile address (`<pointer or $>:<property>`), value is the
+# reason. A stale declaration raises too — see `stale_enum_declarations`.
+STRICTER_ENUMS: dict[str, str] = {}
+
 # The keywords `derive_property` emits. Everything else in a property is the
 # human's half and is preserved, in place, byte for byte.
 DERIVED_KEYWORDS: frozenset[str] = frozenset({"$ref", "type", "format", "enum", "items"})
@@ -207,7 +217,8 @@ DERIVED_KEYWORDS: frozenset[str] = frozenset({"$ref", "type", "format", "enum", 
 # human's `{"enum": ["USD", "GBP"]}` there loosens the document in silence.
 # The other four are type IDENTITY — `type`, `$ref`, `format`, `items` say what
 # the value IS, which is the model's answer alone, so one left behind by a
-# retyped field is stale and goes.
+# retyped field is stale and goes. Since Grant's F9 call a surviving hand
+# enum must also be DECLARED in `STRICTER_ENUMS` — kept, but never silently.
 HAND_AUTHORABLE_KEYWORDS: frozenset[str] = frozenset({"enum"})
 
 # Every type a JSON instance can have. `null` is here for completeness only:
@@ -521,7 +532,8 @@ def reconcile_property(
         # `format: date` left behind by a field that is no longer a date, a
         # `type` left behind by one that is now a `$ref`. NOT `enum`: the model
         # derives one only from an `Enum` annotation, so its absence from
-        # `derived` means the model has no opinion, and the human's survives.
+        # `derived` means the model has no opinion, and the human's survives —
+        # DECLARED in STRICTER_ENUMS, or the check below refuses (F9).
         del out[key]
     for key, value in derived.items():
         if key == "items" and isinstance(out.get("items"), dict) and isinstance(value, Mapping):
@@ -556,6 +568,15 @@ def reconcile_property(
                 f"against {'it' if len(stranded) == 1 else 'them'}, so it is a rule "
                 f"that rejects nothing; drop it, or change the model back"
             )
+    if "enum" in out and "enum" not in derived and where not in STRICTER_ENUMS:
+        # AFTER the contradiction checks, deliberately: an undeclared enum
+        # that also contradicts the model gets the more diagnostic message
+        # above; this raise is for the enum that would have survived.
+        raise SchemaDerivationError(
+            f"{where} carries a hand-authored enum {out['enum']} and the model "
+            f"derives none — the schema is stricter than the model, which is a "
+            f"decision: declare it in STRICTER_ENUMS with the reason, or drop the enum"
+        )
     return out
 
 
@@ -628,6 +649,7 @@ def sync_document(doc: Mapping[str, Any]) -> dict[str, Any]:
 
     defs = out.get("$defs", {})
     inline = set(SCHEMA_MODELS)
+    reconciled: dict[str, Mapping[str, Any]] = {}
     for pointer, model in SCHEMA_MODELS.items():
         where = pointer or "$"
         node = _at(out, pointer)
@@ -650,12 +672,39 @@ def sync_document(doc: Mapping[str, Any]) -> dict[str, Any]:
                 if key in existing
                 else derived
             )
+            reconciled[f"{where}:{key}"] = properties[key]
         node["properties"] = properties
         required = _required_for(where, pointer, model, properties, node)
         if required:
             node["required"] = required
         else:
             node.pop("required", None)
+    stale = stale_enum_declarations(STRICTER_ENUMS, reconciled)
+    if stale:
+        raise SchemaDerivationError("; ".join(stale))
+    return out
+
+
+def stale_enum_declarations(
+    table: Mapping[str, str], reconciled: Mapping[str, Mapping[str, Any]]
+) -> list[str]:
+    """Both directions, like `STRICTER_THAN_MODEL`'s unknown-name raise: a
+    declaration whose address no document reconciles, or whose property no
+    longer carries an enum, records a decision about nothing — and a table
+    entry nothing checks is how the last six hand-written tables rotted."""
+    out: list[str] = []
+    for address, _reason in table.items():
+        node = reconciled.get(address)
+        if node is None:
+            out.append(
+                f"STRICTER_ENUMS declares {address} and no reconciled document "
+                f"has that property"
+            )
+        elif "enum" not in node:
+            out.append(
+                f"STRICTER_ENUMS declares {address} and the property carries no "
+                f"enum — drop the declaration"
+            )
     return out
 
 

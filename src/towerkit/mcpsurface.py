@@ -604,15 +604,24 @@ def _entry(
 def build_surface(
     models: Mapping[str, type[BaseModel]] | None = None,
     denied: Mapping[str, str] | None = None,
+    undescribable: dict[str, str] | None = None,
 ) -> dict[str, dict[str, Entry]]:
     """kind → advertised field → entry, in MODEL declaration order.
 
     Declaration order IS canonical file order — `model.program_to_jsonable`
     derives the file's key order from the same `model_fields` this walks — so
     `describe` reads like the file a broker opens. Never alphabetical.
+
+    A field the surface cannot classify is NOT a raise (Grant's F8 call,
+    2026-08-20). SURFACE is built at module scope, so a raise here bricked
+    all 23 tools and `towerctl mcp` would not start over one innocent count
+    field. The field instead lands in `undescribable` — served through
+    `denied_reason` with the same instructive message the raise carried —
+    and every classifiable field keeps working. Loud stayed; TOTAL went.
     """
     models = KIND_MODELS if models is None else models
     denied = DENIED if denied is None else denied
+    undescribable = {} if undescribable is None else undescribable
 
     for key in denied:
         kind, _, field = key.partition(".")
@@ -628,59 +637,76 @@ def build_surface(
         for name, info in cls.model_fields.items():
             alias = info.alias or name
             key = f"{kind}.{alias}"
-            base, metadata, optional = _flatten(info)
-            element = get_args(base)[0] if get_origin(base) is list and get_args(base) else None
-            if _is_model(base) or _is_model(element):
-                # A field whose type is a model is denied as a container BY
-                # RULE, so a nested model added later cannot arrive writable.
-                # The denylist row survives only to carry the reason.
-                if key not in denied:
-                    raise RuntimeError(
-                        f"{key} is a model and is denied by rule; add it to DENIED with "
-                        f"the reason describe() should print"
-                    )
-                if _is_model(base):
-                    fields.update(_expand(kind, alias, name, base))
-                continue
-            if key in denied:
-                continue
-            fields[alias] = _entry(kind, alias, (name,), info, base, metadata, optional)
+            try:
+                base, metadata, optional = _flatten(info)
+                element = (
+                    get_args(base)[0] if get_origin(base) is list and get_args(base) else None
+                )
+                if _is_model(base) or _is_model(element):
+                    # A field whose type is a model is denied as a container
+                    # BY RULE, so a nested model added later cannot arrive
+                    # writable. A hand DENIED row carries the human's reason;
+                    # absent one, the rule itself is the reason.
+                    if key not in denied:
+                        undescribable[key] = (
+                            f"{key} is a model and is denied by rule; add it to DENIED "
+                            f"with the reason describe() should print"
+                        )
+                    if _is_model(base):
+                        fields.update(_expand(kind, alias, name, base, undescribable))
+                    continue
+                if key in denied:
+                    continue
+                fields[alias] = _entry(kind, alias, (name,), info, base, metadata, optional)
+            except RuntimeError as exc:
+                undescribable[key] = str(exc)
         surface[kind] = fields
     return surface
 
 
 def _expand(
-    kind: str, alias: str, name: str, container: type[BaseModel]
+    kind: str, alias: str, name: str, container: type[BaseModel],
+    undescribable: dict[str, str],
 ) -> dict[str, Entry]:
     """`period` → `period.start`, `period.end`. Depth is exactly one."""
     out: dict[str, Entry] = {}
     for child_name, child_info in container.model_fields.items():
         child_alias = child_info.alias or child_name
-        base, metadata, optional = _flatten(child_info)
-        if _is_model(base):
-            # Loud, never a silent skip that leaves a field unreachable with
-            # nothing saying so — the same call the canonical serialiser's
-            # `_check_nothing_was_dropped` makes.
-            raise RuntimeError(
-                f"{kind}.{alias}.{child_alias} nests a model inside a nested model; "
-                f"the surface addresses scalars one level deep only"
-            )
         field = f"{alias}.{child_alias}"
-        out[field] = _entry(
-            kind,
-            field,
-            (name, child_name),
-            child_info,
-            base,
-            metadata,
-            optional,
-            container=alias,
-            container_model=container,
-        )
+        try:
+            base, metadata, optional = _flatten(child_info)
+            if _is_model(base):
+                # Loud, never a silent skip that leaves a field unreachable
+                # with nothing saying so — but per-field, not a raise, for
+                # the same F8 reason as `build_surface`.
+                raise RuntimeError(
+                    f"{kind}.{field} nests a model inside a nested model; "
+                    f"the surface addresses scalars one level deep only"
+                )
+            out[field] = _entry(
+                kind,
+                field,
+                (name, child_name),
+                child_info,
+                base,
+                metadata,
+                optional,
+                container=alias,
+                container_model=container,
+            )
+        except RuntimeError as exc:
+            undescribable[f"{kind}.{field}"] = str(exc)
     return out
 
 
-SURFACE: dict[str, dict[str, Entry]] = build_surface()
+# Fields the DERIVATION itself had to refuse — an int that is neither money
+# nor basis points, a non-string enum, a model nested too deep. Populated by
+# the default build below; served through `denied_reason` so the caller gets
+# the instructive message as a `denied_field` refusal instead of a server
+# that will not start (Grant's F8 call, 2026-08-20).
+UNDESCRIBABLE: dict[str, str] = {}
+
+SURFACE: dict[str, dict[str, Entry]] = build_surface(undescribable=UNDESCRIBABLE)
 
 
 # --- addressing ----------------------------------------------------------------
@@ -689,8 +715,11 @@ SURFACE: dict[str, dict[str, Entry]] = build_surface()
 def denied_reason(kind: str, field: str) -> str | None:
     """Consulted BEFORE `resolve`: 'that field does not exist' and 'you may
     not write that field' are different problems and a caller retries them
-    differently."""
-    return DENIED.get(f"{kind}.{field}")
+    differently. The derivation's own refusals (UNDESCRIBABLE) answer here
+    too — the field EXISTS on the model, so `no_such_target` would be a
+    lie; what is true is that it cannot be written until someone classifies
+    it, which is exactly what its message instructs."""
+    return DENIED.get(f"{kind}.{field}") or UNDESCRIBABLE.get(f"{kind}.{field}")
 
 
 def resolve(kind: str, field: str) -> Entry:
@@ -1149,7 +1178,7 @@ def describe(kind: str | None = None) -> dict[str, Any]:
             "fields": fields,
             "denied": {
                 key.split(".", 1)[1]: reason
-                for key, reason in DENIED.items()
+                for key, reason in {**DENIED, **UNDESCRIBABLE}.items()
                 if key.split(".", 1)[0] == name
             },
         }

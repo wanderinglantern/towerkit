@@ -210,20 +210,27 @@ def test_applies_to_is_denied_on_a_layer_and_writable_on_a_retention() -> None:
 
 def test_a_nested_model_is_denied_and_expanded_by_rule() -> None:
     """The three container rows come from the RULE, not from the list. A
-    container missing its reason is refused at import rather than advertised
-    as a wholesale set that can blank its siblings."""
+    container missing its hand reason is still denied — but per FIELD since
+    Grant's F8 call, never a raise that stops the server: the rule itself
+    becomes the recorded reason, and the container's children stay
+    writable."""
 
     class ProgramWithAudit(Program):
         audit: Period | None = None
 
-    with pytest.raises(RuntimeError, match="audit"):
-        mcpsurface.build_surface({**mcpsurface.KIND_MODELS, "program": ProgramWithAudit})
+    undescribable: dict[str, str] = {}
+    surface = mcpsurface.build_surface(
+        {**mcpsurface.KIND_MODELS, "program": ProgramWithAudit},
+        undescribable=undescribable,
+    )
+    assert "add it to DENIED" in undescribable["program.audit"]
+    assert "audit.start" in surface["program"], "the children still expand"
 
 
 def test_a_model_two_levels_deep_is_loud_at_build_time() -> None:
     """Depth is exactly one. A silent skip makes a field unreachable and
-    nothing says so — the canonical serialiser's drop guard raises for the
-    same reason."""
+    nothing says so — loud stays; per-field since F8, so one deep field
+    cannot stop the server."""
 
     class Outer(_Model):
         inner: Period = Period(start=date(2026, 1, 1), end=date(2027, 1, 1))
@@ -232,10 +239,14 @@ def test_a_model_two_levels_deep_is_loud_at_build_time() -> None:
         outer: Outer | None = None
 
     denied = {**mcpsurface.DENIED, "program.outer": "test container"}
-    with pytest.raises(RuntimeError, match="one level"):
-        mcpsurface.build_surface(
-            {**mcpsurface.KIND_MODELS, "program": ProgramWithOuter}, denied=denied
-        )
+    undescribable: dict[str, str] = {}
+    surface = mcpsurface.build_surface(
+        {**mcpsurface.KIND_MODELS, "program": ProgramWithOuter},
+        denied=denied,
+        undescribable=undescribable,
+    )
+    assert "one level" in undescribable["program.outer.inner"]
+    assert "insured" in surface["program"], "the rest of the surface survives"
 
 
 def test_dotted_children_carry_the_container_and_the_python_path() -> None:
@@ -340,15 +351,38 @@ def test_every_advertised_type_is_derived_for_the_whole_surface() -> None:
         assert mcpsurface.SURFACE[kind][field].type == kind_type, f"{kind}.{field}"
 
 
-def test_an_int_the_surface_cannot_classify_is_loud() -> None:
-    """A misclassified type is the mistake this module exists to prevent, so
-    an unknown one refuses at build time instead of being advertised as text."""
+def test_an_int_the_surface_cannot_classify_denies_the_field_not_the_server() -> None:
+    """Grant's F8 decision (2026-08-20): loud stays, TOTAL goes. This used to
+    RAISE — and SURFACE is built at module scope, so one innocent count
+    field added to a model bricked all 23 tools and `towerctl mcp` would
+    not start until it was tagged. The field now lands in the undescribable
+    table with the same instructive message, and every classifiable field
+    keeps working."""
 
     class LineWithCount(Line):
         count: int = 0
 
-    with pytest.raises(RuntimeError, match="count"):
-        mcpsurface.build_surface({**mcpsurface.KIND_MODELS, "line": LineWithCount})
+    undescribable: dict[str, str] = {}
+    surface = mcpsurface.build_surface(
+        {**mcpsurface.KIND_MODELS, "line": LineWithCount}, undescribable=undescribable
+    )
+    assert "count" not in surface["line"]
+    assert "name" in surface["line"], "the classifiable fields must survive"
+    assert "tag it model.MONEY" in undescribable["line.count"], (
+        "the instructive message must survive the degrade"
+    )
+
+
+def test_an_undescribable_field_refuses_with_its_reason(monkeypatch) -> None:
+    """The auto-denial must reach the caller the same way a hand denial
+    does: `denied_reason` serves it, so `program_edit_field` answers
+    `denied_field` with the instructive message instead of `no_such_target`."""
+    monkeypatch.setitem(
+        mcpsurface.UNDESCRIBABLE, "line.count", "count is an int the surface cannot name"
+    )
+    assert mcpsurface.denied_reason("line", "count") == (
+        "count is an int the surface cannot name"
+    )
 
 
 def test_enums_publish_their_values() -> None:

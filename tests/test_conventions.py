@@ -476,12 +476,16 @@ def test_every_schema_enum_lists_the_models_members() -> None:
     members: $: placement lists ['bound', 'proposed'] and the model has
     ['bound', 'proposed', 'quoted'] — run tools/sync_schema.py`. Restored.
     """
-    from towerkit.schemagen import derive_property
+    from towerkit.schemagen import STRICTER_ENUMS, derive_property
 
     wrong = []
     for where, key, model, name, info, existing in _reconcilable_properties():
         wanted = derive_property(model, name, info).get("enum")
         if wanted is None and "enum" not in existing:
+            continue
+        if wanted is None and f"{where}:{key}" in STRICTER_ENUMS:
+            # A DECLARED stricter-than-model enum (F9) is the human's half
+            # by decision; the generator's stale-declaration check owns it.
             continue
         if existing.get("enum") != wanted:
             wrong.append(
@@ -956,11 +960,20 @@ def test_a_hand_authored_enum_the_model_has_no_opinion_on_survives() -> None:
     DERIVED_KEYWORDS and k not in derived`. Failed with `AssertionError: a
     hand-authored enum was silently deleted: {'type': 'string', 'minLength':
     3, 'maxLength': 3}`. Restored.
+
+    Since Grant's F9 call (2026-08-20) the survival requires a DECLARATION
+    in STRICTER_ENUMS — kept, but never silently; the undeclared case is
+    `test_an_undeclared_hand_authored_enum_raises`.
     """
-    from towerkit.schemagen import reconcile_property
+    from towerkit import schemagen
 
     existing = {"type": "string", "minLength": 3, "maxLength": 3, "enum": ["USD", "GBP"]}
-    merged = reconcile_property("$:currency", existing, {"type": "string"}, {})
+    declared = {**schemagen.STRICTER_ENUMS, "$:currency": "the book trades in these"}
+    try:
+        schemagen.STRICTER_ENUMS.update(declared)
+        merged = schemagen.reconcile_property("$:currency", existing, {"type": "string"}, {})
+    finally:
+        schemagen.STRICTER_ENUMS.pop("$:currency", None)
     assert merged == existing, f"a hand-authored enum was silently deleted: {merged}"
     assert _rejects(merged, "XYZ") == ["'XYZ' is not one of ['USD', 'GBP']"]
 
@@ -1024,24 +1037,29 @@ def test_a_second_pass_over_a_repaired_document_changes_nothing() -> None:
     """
     import copy
 
+    from towerkit import schemagen
     from towerkit.schemagen import sync_document
 
     stale = _schema_document()
     stale["required"] = []                                    # to be re-derived
     stale["properties"]["placement"]["enum"] = ["bound"]       # to be re-derived
-    stale["properties"]["currency"]["enum"] = ["USD", "GBP"]   # to be KEPT
+    stale["properties"]["currency"]["enum"] = ["USD", "GBP"]   # to be KEPT (declared, F9)
     stale["$defs"]["layer"]["properties"]["attach"]["minimum"] = 1000  # to be KEPT
 
-    once = sync_document(stale)
-    assert once.get("required") == [
-        "insured", "program", "placement", "period",
-        "lines", "layers", "retentions", "sublimits",
-    ]
-    assert once["properties"]["placement"]["enum"] == ["bound", "proposed"]
-    assert once["properties"]["currency"]["enum"] == ["USD", "GBP"]
-    assert once["$defs"]["layer"]["properties"]["attach"]["minimum"] == 1000
+    schemagen.STRICTER_ENUMS["$:currency"] = "the book trades in exactly these"
+    try:
+        once = sync_document(stale)
+        assert once.get("required") == [
+            "insured", "program", "placement", "period",
+            "lines", "layers", "retentions", "sublimits",
+        ]
+        assert once["properties"]["placement"]["enum"] == ["bound", "proposed"]
+        assert once["properties"]["currency"]["enum"] == ["USD", "GBP"]
+        assert once["$defs"]["layer"]["properties"]["attach"]["minimum"] == 1000
 
-    assert sync_document(copy.deepcopy(once)) == once, "sync_document is not idempotent"
+        assert sync_document(copy.deepcopy(once)) == once, "sync_document is not idempotent"
+    finally:
+        schemagen.STRICTER_ENUMS.pop("$:currency", None)
 
 
 def test_an_enum_with_non_string_values_raises_rather_than_stringifying() -> None:
@@ -1108,3 +1126,41 @@ def test_every_tool_registers_through_the_coded_ring() -> None:
     ]
     assert bare == [], f"tools registered outside the coded ring: {bare}"
     assert "def _tool(" in source, "the ring itself is gone"
+
+
+def test_an_undeclared_hand_authored_enum_raises() -> None:
+    """Grant's F9 decision (2026-08-20): symmetry with STRICTER_THAN_MODEL.
+    A hand-authored `enum` on a property whose model type derives none is
+    the schema being stricter than the model — and stricter-than-model is a
+    decision someone makes out loud, or the generator refuses. Retyping an
+    Enum field to plain `str` used to leave the old enum behind as silently
+    "hand-authored", declared nowhere."""
+    from towerkit.schemagen import SchemaDerivationError, reconcile_property
+
+    with pytest.raises(SchemaDerivationError, match="STRICTER_ENUMS"):
+        reconcile_property(
+            "$:currency", {"type": "string", "enum": ["USD", "GBP"]}, {"type": "string"}
+        )
+
+
+def test_a_declared_hand_authored_enum_survives(monkeypatch) -> None:
+    from towerkit import schemagen
+
+    monkeypatch.setitem(
+        schemagen.STRICTER_ENUMS, "$:currency", "the book trades in exactly these"
+    )
+    out = schemagen.reconcile_property(
+        "$:currency", {"type": "string", "enum": ["USD", "GBP"]}, {"type": "string"}
+    )
+    assert out["enum"] == ["USD", "GBP"]
+
+
+def test_a_declaration_for_a_property_without_an_enum_raises() -> None:
+    """Both directions, like STRICTER_THAN_MODEL: a stale declaration is as
+    wrong as a missing one."""
+    from towerkit import schemagen
+
+    problems = schemagen.stale_enum_declarations(
+        {"$:ghost": "reason"}, {"$:currency": {"type": "string"}}
+    )
+    assert problems

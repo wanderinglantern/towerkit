@@ -476,19 +476,20 @@ hand-written `_LAYER_KEYS` named here was deleted on 2026-08-19 — see
   money `$def` cannot express (silently dropped). Both latent; both now
   refuse loudly and name the hand-authored repair.
 
-## OPEN — two policy calls for Grant, raised by round six (2026-08-20)
+## DECIDED by Grant, 2026-08-20 — the two round-six policy calls
 
-- **Import-time total failure for an unclassifiable int.** `mcpsurface`
-  builds SURFACE at module scope, so one innocent count field added to a
-  model raises `RuntimeError` at import and bricks all 23 tools until it is
-  tagged — `towerctl mcp` will not start. Loud is right; TOTAL is the
-  question. The alternative is a per-field denial with the same message, so
-  the rest of the surface keeps working. Not changed here.
-- **A stale hand-authored `enum` survives retyping silently.** A
-  stricter-than-model `required` must be declared in `STRICTER_THAN_MODEL`,
-  but retyping an Enum field to `str` leaves the schema's old `enum` behind
-  as "hand-authored" — stricter than the model with no declaration. The
-  asymmetry is inherited, not decided. Not changed here.
+- **F8: per-field denial.** An unclassifiable field no longer raises at
+  import (which bricked all 23 tools over one innocent count field): it
+  lands in `mcpsurface.UNDESCRIBABLE` with the same instructive message,
+  served through `denied_reason` as a `denied_field` refusal, and every
+  classifiable field keeps working. The nested-model and depth-two raises
+  degrade the same way — loud stayed, total went.
+- **F9: symmetry.** A hand-authored schema `enum` on a property whose model
+  derives none must be declared in `schemagen.STRICTER_ENUMS` with a
+  reason, or the generator raises — exactly as `STRICTER_THAN_MODEL`
+  demands for `required`. Stale declarations raise in both directions
+  (`stale_enum_declarations`). The table starts empty: both checked-in
+  enums are model-derived.
 
 ## Round seven: the ring becomes structural (2026-08-20)
 
@@ -578,3 +579,26 @@ hand-written `_LAYER_KEYS` named here was deleted on 2026-08-19 — see
   values would escape `_no_control_characters`, which walks strs and list
   elements only. Neither shape exists today; both need a code change to
   arise, and whoever adds one owns extending the walk.
+
+## Round eleven: positive shapes for names and refs; headers join the net (2026-08-20)
+
+- **`Programs._check_name` validates names POSITIVELY, per segment** —
+  non-empty, no leading dot, no control characters, under 200 bytes — the
+  filename analogue of "derive, don't enumerate": the denylist had grown
+  one escape at a time (blank, C0+DEL) and round eleven still walked
+  through it with `.` (wrote a hidden `..json` that bricked `names()` and
+  every listing permanently), `"sub/"`, and a 3,000-char name. `..` and
+  absolute paths stay the sandbox's verdict: `outside_roots`.
+- **`names()` slices instead of `with_suffix`** — one stray `..json` file
+  raised out of every listing; it now fails per-entry like any broken file.
+- **Revert refs must match the exact shape `write_ref()` issues** —
+  `TKW-\x00` leaked `embedded null character`, `TKW-*` was a live glob.
+- **The ingest header fields join round ten's net** — `to_program()` maps
+  the model's refusal to its documented `ProgramInvalidError` (the CLI and
+  TUI import paths catch only that), and `parse_tower`'s cover line from a
+  bad `program` kwarg becomes a diagnostic under a placeholder.
+- **Ledger, gated (round eleven):** lone-surrogate names/ids can reach
+  `[internal_error]` (and one uncoded serialization error when a refusal
+  echoes the value) only if the transport delivers lone `\ud800` escapes —
+  recorded with that caveat. The sha-check-to-write TOCTOU window is
+  inherent to lockless optimistic concurrency — design note, not a bug.
