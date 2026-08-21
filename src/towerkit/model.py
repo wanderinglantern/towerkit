@@ -203,14 +203,20 @@ class Layer(_Model):
     auditable: Annotated[bool, OMIT_EMPTY] = False
     # A DELIBERATE UNINSURED BAND, not a hole. Some towers are placed with a
     # gap the insured carries: nobody is on this slab, and that is the point.
-    # Without it, `_check_line_stack` reports `line-gap` — a false refusal on a
-    # structure a broker really bought (Grant, 2026-08-21).
     #
     # It is a SLAB and not an absence: it has attach and limit like any layer,
-    # so the stack above it seats on its top exactly as it would on real cover.
-    # What it does not have is participants or premium, and `validate` refuses
-    # them on it — a buffer with a carrier on it is a layer, and calling it a
-    # buffer would hide real cover from every total.
+    # so a correctly-sized buffer FILLS the band it occupies and the stack
+    # above it seats on its top exactly as it would on real cover —
+    # `_check_line_stack` reports no `line-gap` because there is none left to
+    # report, not because of a rule keyed on this flag. There was one, briefly
+    # (Grant, 2026-08-21): it suppressed the gap above an UNDER-SIZED buffer
+    # too — a band that is genuinely uninsured and undeclared, which is
+    # exactly what this field exists to make honest. It was deleted the same
+    # day a mutation test proved it dead code for the sized case.
+    #
+    # What a buffer does not have is participants or premium, and `validate`
+    # refuses them on it — a buffer with a carrier on it is a layer, and
+    # calling it a buffer would hide real cover from every total.
     buffer: Annotated[bool, OMIT_EMPTY] = False
     # ONE POLICY, SEVERAL LAYERS. Workers' compensation is the case that forced
     # it: Part A (statutory benefits, no dollar limit) and Part B (employers

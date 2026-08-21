@@ -46,15 +46,29 @@ def _codes(program) -> set[str]:
     return {d.code for d in validate_program(program).items}
 
 
-def test_a_buffer_suppresses_the_gap_it_would_otherwise_be() -> None:
-    """THE POINT. Primary to $5M, nothing to $10M, excess above — reported as
-    a GAP until the band could be declared."""
+def test_a_declared_buffer_leaves_the_column_contiguous() -> None:
+    """THE POINT, stated as what actually happens. A buffer is a SLAB: it has
+    an attachment and a limit, so it fills the band and there is no gap left to
+    report. No suppression rule is needed, and the first cut's one was dead —
+    a surviving mutant proved it (2026-08-21)."""
     program = _stack(
         plain_layer("primary", ["gl"], 0, 5_000_000),
-        _buffer(),
+        _buffer(),                       # 5M xs 5M — fills the band to 10M
         plain_layer("xs", ["gl"], 10_000_000, 10_000_000),
     )
     assert "line-gap" not in _codes(program)
+
+
+def test_a_buffer_that_does_not_reach_still_reports_the_gap_above_it() -> None:
+    """The half that matters more. An UNDER-SIZED buffer leaves a band that is
+    genuinely uninsured and undeclared, and saying so is the whole purpose of
+    the feature. A suppression rule keyed on `buffer` would hide exactly this."""
+    program = _stack(
+        plain_layer("primary", ["gl"], 0, 5_000_000),
+        _buffer(limit=2_000_000),        # reaches only 7M
+        plain_layer("xs", ["gl"], 10_000_000, 10_000_000),
+    )
+    assert "line-gap" in _codes(program)
 
 
 def test_the_same_stack_without_the_buffer_still_reports_the_gap() -> None:

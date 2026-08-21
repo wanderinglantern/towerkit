@@ -494,12 +494,6 @@ def _check_line_stack(program: Program, line_id: str, diags: Diagnostics) -> Non
     for below, above in zip(stack, stack[1:], strict=False):
         above_attach = _effective_attach(program, above, line_id)
         if above_attach > below.top:
-            # A BUFFER IS A DECLARED GAP. The band between these two is
-            # uninsured on purpose when either side says so, and reporting it
-            # would be a false refusal on a tower a broker really placed
-            # (Grant, 2026-08-21). Without a buffer the rule is unchanged.
-            if below.buffer or above.buffer:
-                continue
             diags.error(
                 "line-gap",
                 f"{line_id}: GAP {below.name}→{above.name} at "
