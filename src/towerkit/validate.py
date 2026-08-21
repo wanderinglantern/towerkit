@@ -494,7 +494,17 @@ def _check_line_stack(program: Program, line_id: str, diags: Diagnostics) -> Non
     for below, above in zip(stack, stack[1:], strict=False):
         above_attach = _effective_attach(program, above, line_id)
         if above_attach > below.top:
-            diags.error(
+            # A GAP IS REPORTED, NOT REFUSED. An error here refuses the write,
+            # and because every later write re-validates the whole file, a
+            # program that acquired a gap could never be edited again —
+            # including by the edit that would fill it. That is the wedge
+            # bookkit already ate an afternoon on with `render.theme`. A gap
+            # is a true and important statement about a tower, and the
+            # surfaces that read diagnostics show warnings as prominently as
+            # errors, so nothing is hidden by the move. Removing a mid-stack
+            # layer leaves a gap BY DESIGN (Grant, 2026-08-21) and the confirm
+            # says so before it happens.
+            diags.warn(
                 "line-gap",
                 f"{line_id}: GAP {below.name}→{above.name} at "
                 f"{format_money(below.top)} vs {format_money(above_attach)}",

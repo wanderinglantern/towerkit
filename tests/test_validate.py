@@ -99,10 +99,13 @@ class TestLineRules:
             ]
         )
         diags = validate_program(program)
-        gap = [d for d in diags.errors if d.code == "line-gap"]
+        # line-gap is a WARNING, not an error (2026-08-21): a gap is reported,
+        # not refused, so the file that has one is still saveable.
+        gap = [d for d in diags.warnings if d.code == "line-gap"]
         assert len(gap) == 1
         # both attachment points are reported
         assert "$2,000,000" in gap[0].message and "$2,500,000" in gap[0].message
+        assert diags.ok
 
     def test_overlap_between_layers(self) -> None:
         program = make_program(
@@ -226,7 +229,9 @@ class TestSeededSample:
         mutate(data)
         from towerkit.model import program_from_jsonable
 
-        return {d.code for d in validate_program(program_from_jsonable(data)).errors}
+        # .items, not .errors: line-gap is a WARNING (2026-08-21), and this
+        # test's job is "each defect is caught", not "each defect refuses".
+        return {d.code for d in validate_program(program_from_jsonable(data)).items}
 
     def test_gap_overlap_oversign_all_caught(self) -> None:
         def seed(data: dict) -> None:
@@ -290,20 +295,28 @@ class TestCliExitCodes:
         assert self.run_validate(SAMPLE).returncode == 0
 
     def test_invalid_file_exits_nonzero(self, tmp_path: Path) -> None:
+        # line-gap is a WARNING now (2026-08-21) — removing a layer and
+        # leaving a gap is a saveable, non-refusing state, so it can no
+        # longer stand in for "invalid" here. line-overlap is still an
+        # ERROR, so overlap two layers instead.
         program = load_program(SAMPLE)
         data = program_to_jsonable(program)
-        data["layers"] = [lyr for lyr in data["layers"] if lyr["id"] != "umbrella"]  # gap
+        for lyr in data["layers"]:
+            if lyr["id"] == "xs-1":
+                lyr["attach"] = 20_000_000  # overlaps umbrella's top at 27M
         bad = tmp_path / "bad.json"
         bad.write_text(json.dumps(data))
         result = self.run_validate(bad)
         assert result.returncode == 1
-        assert "GAP" in result.stdout
+        assert "OVERLAP" in result.stdout
 
     def test_validation_survives_python_O(self, tmp_path: Path) -> None:
         # The prototype's `assert not errs` was stripped under -O. Prove ours is not.
         program = load_program(SAMPLE)
         data = program_to_jsonable(program)
-        data["layers"] = [lyr for lyr in data["layers"] if lyr["id"] != "umbrella"]
+        for lyr in data["layers"]:
+            if lyr["id"] == "xs-1":
+                lyr["attach"] = 20_000_000  # overlaps umbrella's top at 27M
         bad = tmp_path / "bad.json"
         bad.write_text(json.dumps(data))
         result = subprocess.run(

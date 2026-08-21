@@ -345,9 +345,11 @@ class TestEditor:
             editor._commit_input(attach)
             await pilot.pause()
             assert editor._layer("umbrella").attach == 2_500_000
-            # the gap this creates shows up immediately in diagnostics
+            # the gap this creates shows up immediately in diagnostics — as a
+            # WARNING (2026-08-21), not an error: a gap is reported, not
+            # refused.
             assert any(
-                d.code == "line-gap" for d in editor.session.diagnostics().errors
+                d.code == "line-gap" for d in editor.session.diagnostics().warnings
             )
 
     @pytest.mark.asyncio
