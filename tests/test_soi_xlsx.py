@@ -242,6 +242,39 @@ class TestStatusAndSubtotals:
         # block's, at r9.
         assert ws["J9"].value == "Included"
 
+    def test_a_wholly_unbound_section_gets_no_empty_bound_block(
+        self, theme, tmp_path
+    ) -> None:
+        """The other edge of the block split, pinned by name.
+
+        A section every one of whose rows is unbound — a programme still
+        entirely at market, or wholly in run-off — must go STRAIGHT to its
+        "— not bound" block. The alternative is an empty heading over no rows
+        with an em-dash subtotal the reader cannot tie to anything, sitting
+        where the schedule should be.
+
+        Fresh-eyes review (2026-08-21) proved this was guarded by nothing:
+        mutating the guard to `if True:` left every test in this file green.
+        The code was right; only this test knows it.
+        """
+        p = make_program()
+        # Strip every participant from every Casualty-group layer, so the
+        # whole section reads To be placed.
+        casualty = {"gl-primary", "gl-x1", "al-primary", "casualty-umbrella"}
+        for layer in p.layers:
+            if layer.id in casualty:
+                layer.participants = []
+        ws = load_workbook(_write(p, theme, tmp_path / "s.xlsx")).active
+
+        headings = [c.value for c in ws["A"] if isinstance(c.value, str)]
+        assert "Casualty — not bound" in headings
+        assert "Casualty" not in headings, (
+            "an empty bound block printed its heading over no rows"
+        )
+        assert headings.count("Bound cover — premium subtotal") == 2, (
+            "expected bound subtotals only for Property and Program-wide"
+        )
+
 
 class TestRowHeightColumnIndices:
     """_LIMITS_IX / _RETENTION_IX index into the RENDERED row tuple, and they
