@@ -118,11 +118,24 @@ def draw_tower(
 
     # layer titles read as the first line of the leftmost cell's text stack
     follows = {ly.id for ly in program.layers if ly.follows_underlying}
+    # A buffer is a deliberate uninsured band, not a hole awaiting a
+    # signature — `layer.buffer` is a `Layer` (model.py) fact, not a
+    # `LayerBlock` (layout.py) one, the same reason `follows` above is
+    # rebuilt from `program.layers` rather than read off `tower.layers`.
+    # THIS is the single seam ("what a buffer is called"): `layer_heading`
+    # and `unplaced_label` both take `buffer=` and say "Uninsured" ahead of
+    # "To be placed" — render/web.py routes through the exact same two
+    # functions, so the export and the web drawing cannot disagree about
+    # vocabulary (fix round 3, 2026-08-21: this renderer is "the copy that
+    # reaches a client," so a buffer band silently mislabelled here was
+    # worse than the same bug on the web preview).
+    buffers = {ly.id for ly in program.layers if ly.buffer}
     titles = {
         layer.layer_id: layer_heading(
             layer,
             follows=layer.layer_id in follows,
             marker=(note_markers or {}).get(layer.layer_id, ""),
+            buffer=layer.layer_id in buffers,
         )
         for layer in tower.layers
     }
@@ -132,6 +145,12 @@ def draw_tower(
     # The predicate is labels.is_pending, not an inline ==0, because
     # render/web.py asks the same question and the two must not be able to
     # answer it differently (R66: the renderers agree about the facts).
+    #
+    # A buffer's signed_bps is ALSO 0 (it has no participants — validate.py
+    # forbids them), so `is_pending` is true for it too; `pending` here still
+    # drives dashed-outline/hatch STYLING unchanged (out of this round's
+    # scope — see the fix-round-3 report), but the WORD printed for a buffer
+    # block routes through `buffer=` below, never through this set alone.
     pending = {ly.layer_id for ly in tower.layers if labels.is_pending(ly)}
 
     # the layer title rides the WIDEST cell of each layer — a narrow lead
@@ -170,6 +189,7 @@ def draw_tower(
         _participant_label(
             ax, block, theme, colours, premium, heading, term,
             pending=block.layer_id in pending,
+            buffer=block.layer_id in buffers,
         )
 
     # layer outlines: solid for placed layers, dashed for pending ones.
@@ -275,13 +295,14 @@ def _participant_label(
     heading: str | None = None,
     term: str | None = None,
     pending: bool = False,
+    buffer: bool = False,
 ) -> None:
     rect = max(block.rects, key=lambda r: r.width, default=None)
     if rect is None:
         return
     if block.carrier is None:
         text_colour = theme.chrome.ink if pending else theme.chrome.muted
-        body = unplaced_label(block.share_bps, pending)
+        body = unplaced_label(block.share_bps, pending, buffer=buffer)
         candidates = [body, ""]
         if heading:
             candidates = [f"{heading}\n{body}", *candidates]

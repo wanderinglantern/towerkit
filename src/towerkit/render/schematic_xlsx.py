@@ -209,18 +209,24 @@ def _participant_lines(
     follows: bool,
     is_pending: bool,
     show_premiums: bool,
+    buffer: bool = False,
 ) -> list[str]:
     """Candidate label lines for a participant block's anchor cell, BEFORE
     `_fit_label`'s width-driven narrow-merge compaction. Used both to
     render the cell and (via `label_row_floor`, in `_label_spans`) to size
     its row band — the row floor always sizes for this full candidate,
     never the compacted one (the row floor and the narrow-merge fix stay
-    orthogonal, per the module docstring)."""
+    orthogonal, per the module docstring).
+
+    `buffer` rides through to `layer_heading`/`unplaced_label`, the same
+    seam render/web.py and render/mpl_program.py both use, so this
+    worksheet cannot say a different thing about a buffer than either of
+    the other two renderers do (fix round 3, 2026-08-21)."""
     lines: list[str] = []
     if is_heading:
-        lines.append(layer_heading(owner, follows=follows))
+        lines.append(layer_heading(owner, follows=follows, buffer=buffer))
     if block.carrier is None:
-        lines.append(unplaced_label(block.share_bps, pending=is_pending))
+        lines.append(unplaced_label(block.share_bps, pending=is_pending, buffer=buffer))
     else:
         lines.append(participant_label(block.carrier, block.share_bps))
         if show_premiums:
@@ -245,6 +251,7 @@ def _label_spans(
     matches what will actually be drawn."""
     follows = {ly.id for ly in program.layers if ly.follows_underlying}
     pending = {ly.layer_id for ly in layout.layers if labels.is_pending(ly)}
+    buffers = {ly.id for ly in program.layers if ly.buffer}
     headings = heading_blocks(layout.participants)
     layer_by_id = {ly.layer_id: ly for ly in layout.layers}
     spans: list[tuple[float, float, int]] = []
@@ -259,6 +266,7 @@ def _label_spans(
             follows=block.layer_id in follows,
             is_pending=block.layer_id in pending,
             show_premiums=show_premiums,
+            buffer=block.layer_id in buffers,
         )
         spans.append((anchor.y0, anchor.y1, label_row_floor(len(lines))))
     spans.extend(
@@ -442,6 +450,7 @@ def add_schematic_sheet(
 
     pending = {ly.layer_id for ly in layout.layers if labels.is_pending(ly)}
     follows = {ly.id for ly in program.layers if ly.follows_underlying}
+    buffers = {ly.id for ly in program.layers if ly.buffer}
     headings = heading_blocks(layout.participants)
     layer_by_id = {ly.layer_id: ly for ly in layout.layers}
 
@@ -456,6 +465,7 @@ def add_schematic_sheet(
             follows=block.layer_id in follows,
             is_pending=is_pending,
             show_premiums=show_premiums,
+            buffer=block.layer_id in buffers,
         )
         if block.carrier is None:
             # graphic: pending = empty dashed outline; open remainder = hatch

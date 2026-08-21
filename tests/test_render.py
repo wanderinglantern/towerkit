@@ -194,6 +194,47 @@ class TestPendingLayers:
         # the partially-open primary keeps its distinct treatment
         assert "20% open" in text
 
+    def make_buffer_program(self):
+        from datetime import date
+
+        from towerkit.model import Layer, Line, Participant, Period, Placement, Program
+
+        return Program(
+            insured="X", program="Y", placement=Placement.PROPOSED,
+            period=Period(start=date(2026, 1, 1), end=date(2027, 1, 1)),
+            lines=[Line(id="gl", name="General Liability")],
+            layers=[
+                Layer(id="p", name="Primary", applies_to=["gl"], attach=0,
+                      limit=5_000_000,
+                      participants=[Participant(carrier="Zurich", share_bps=10_000)]),
+                # NAME DELIBERATELY CONTAINS NEITHER "uninsured" NOR "buffer":
+                # the fix appends those words itself, and a fixture layer
+                # already named "Uninsured Band" would let a positive
+                # assertion pass off the LAYER'S OWN NAME rather than
+                # anything unplaced_label/layer_heading actually produced —
+                # exactly the class of vacuous assertion caught twice
+                # already on this task (round 1's is-buffer class name,
+                # round 2's title attribute).
+                Layer(id="b", name="Second Excess", applies_to=["gl"],
+                      attach=5_000_000, limit=5_000_000, buffer=True),
+            ],
+        )
+
+    def test_a_buffer_reads_uninsured_not_to_be_placed(self, theme, tmp_path) -> None:
+        """Fix round 3 (Grant, 2026-08-21): this renderer is the vector
+        export — "the copy that reaches a client" — and it routed a buffer
+        through the exact same `is_pending`/`unplaced_label` path as a
+        genuinely pending layer, so a buffer band printed "To be placed" on
+        the file a broker actually hands over. `layer_heading` and
+        `unplaced_label` both now take `buffer=`, the same seam the web
+        drawing uses, so the two surfaces cannot disagree about vocabulary.
+        """
+        out = render_program(self.make_buffer_program(), theme, tmp_path, "t", ["svg"])[0]
+        text = out.read_text()
+        assert "Uninsured" in text
+        assert "buffer" in text.lower()
+        assert "To be placed" not in text
+
 
 class TestLayerNameReliability:
     def test_name_survives_narrow_lead_share_with_extras_on(self, theme, tmp_path) -> None:

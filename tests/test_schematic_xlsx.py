@@ -265,6 +265,50 @@ class TestSchematicSheet:
         assert "General Liability" in values                # line header
         assert any(v.startswith("Casualty — Limit") for v in values)  # group band
 
+    def test_a_buffer_reads_uninsured_not_to_be_placed(self, marsh, tmp_path):
+        """Fix round 3 (Grant, 2026-08-21): same error as the vector export
+        — a buffer has no participants, so `is_pending` was true for it
+        exactly as for a genuinely pending layer, and this worksheet printed
+        "To be placed" over a band the broker deliberately left uninsured.
+        `_participant_lines` (the single seam both call sites in this module
+        share) now takes `buffer=`, routed through the same
+        `layer_heading`/`unplaced_label` render/web.py and mpl_program.py
+        use, so no renderer can say a different thing about a buffer than
+        the others do.
+
+        Uses a standalone program, not the shared `program` fixture: none of
+        the golden-hash fixtures in this repo contain a buffer layer, so
+        this assertion needs its own."""
+        # NAME DELIBERATELY CONTAINS NEITHER "uninsured" NOR "buffer": the
+        # fix appends those words itself, and a layer already named
+        # "Uninsured Band" would let a positive assertion pass off the
+        # LAYER'S OWN NAME rather than anything unplaced_label/layer_heading
+        # actually produced — the same class of vacuous assertion this task
+        # has already caught twice (round 1's is-buffer class name, round
+        # 2's title attribute).
+        program = Program(
+            insured="T", program="T", placement=Placement.BOUND,
+            period=Period(start=date(2026, 1, 1), end=date(2027, 1, 1)),
+            lines=[Line(id="gl", name="General Liability")],
+            layers=[
+                Layer(id="p", name="Primary", applies_to=["gl"], attach=0,
+                      limit=5_000_000,
+                      participants=[Participant(carrier="A", share_bps=10_000)]),
+                Layer(id="b", name="Second Excess", applies_to=["gl"],
+                      attach=5_000_000, limit=5_000_000, buffer=True),
+            ],
+        )
+        wb = Workbook()
+        wb.remove(wb.active)
+        add_schematic_sheet(wb, program, marsh)
+        ws = wb.worksheets[0]
+        values = {
+            c.value for row in ws.iter_rows() for c in row if c.value is not None
+        }
+        assert any("Uninsured" in v for v in values)
+        assert any("buffer" in v.lower() for v in values)
+        assert not any("To be placed" in v for v in values)
+
     def test_retention_fill_is_the_typed_theme_fill(self, program, marsh, tmp_path):
         path = _write_schematic(program, marsh, tmp_path / "s.xlsx")
         layout, rows, col_of, _ = _grid(program)

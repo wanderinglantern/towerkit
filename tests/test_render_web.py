@@ -539,6 +539,28 @@ class TestAgreement:
         pending_block = next(b for b in web.blocks if b.layer_id == "pending")
         assert pending_block.name_forms == ("To be placed",)
 
+    def test_a_buffer_is_not_pending(self) -> None:
+        """Fix round 3 (Grant, 2026-08-21): `WebLayer.pending` was True for
+        a buffer — is_pending's own predicate (signed_bps == 0) is true for
+        a buffer too, since it has no participants at all — and this was
+        "harmless by coincidence": bookkit's `.is-buffer` CSS rule already
+        forces the same dashed border `.is-pending` would, so the two flags
+        disagreeing about the fact never surfaced as a visible bug. A buffer
+        is not awaiting a decision, it IS the decision."""
+        program = make_program(
+            ["gl"],
+            [
+                layer("primary", ["gl"], 0, 5_000_000, [("A", 10_000)]),
+                layer("buf", ["gl"], 5_000_000, 5_000_000, buffer=True),
+                layer("pending", ["gl"], 10_000_000, 5_000_000),  # genuinely open
+            ],
+        )
+        web = build_web_tower(program, 240.0)
+        by_id = {ly.layer_id: ly for ly in web.layers}
+        assert by_id["buf"].pending is False
+        # unchanged: a genuinely pending, non-buffer layer still reads pending
+        assert by_id["pending"].pending is True
+
     def test_geometry_is_passed_through_not_recomputed(self) -> None:
         """TowerLayout is a frozen dataclass of tuples, so this is exact and
         needs no tolerance."""

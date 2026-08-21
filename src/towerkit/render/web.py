@@ -257,7 +257,15 @@ def build_web_tower(
                 block.attach, block.limit,
                 statutory=block.statutory, buffer=block.layer_id in buffers,
             ),
-            pending=is_pending(block),
+            # A buffer is not pending — it is DECIDED. is_pending's own
+            # predicate (signed_bps == 0) is true for a buffer too, since it
+            # has no participants at all; without this override, WebLayer.pending
+            # was harmless only by coincidence — CSS's .is-buffer already
+            # forces the same dashed border .is-pending would, so the two
+            # classes disagreeing about the fact never showed up as a visible
+            # bug. Fix round 3 (Grant, 2026-08-21): "harmless by coincidence
+            # is how the next bug gets in."
+            pending=is_pending(block) and block.layer_id not in buffers,
             statutory=block.statutory,
             buffer=block.layer_id in buffers,
             y0=block.y0,
