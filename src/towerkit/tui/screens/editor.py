@@ -43,6 +43,7 @@ from textual.widgets import (
 
 from ... import edit
 from ...model import (
+    Layer,
     Line,
     Participant,
     Placement,
@@ -696,6 +697,20 @@ class EditorScreen(Screen):
                 "Auditable — carrier trues the premium up at expiry",
                 value=layer.auditable,
                 id="f-layer-auditable",
+            ),
+            # ONE POLICY, SEVERAL LAYERS — WC Part A and Part B being the case
+            # it exists for. A SELECT of this program's other layers, never a
+            # text box: the token is machine-minted and nobody should be typing
+            # one, and the set of things a layer may be linked to is exactly
+            # the set of other layers. The blank option is "not linked", which
+            # is a real answer and the common one.
+            Label("Same policy as (WC Part A / Part B)", classes="field-label"),
+            Select(
+                self._policy_link_options(layer),
+                value=self._policy_link_value(layer),
+                allow_blank=True,
+                prompt="not linked",
+                id="f-layer-policy-group",
             ),
             Label("Notes (renders as a chart footnote)", classes="field-label"),
             Input(
@@ -1716,6 +1731,44 @@ class EditorScreen(Screen):
 
     # -- checkbox / select commits --------------------------------------------
 
+    def _policy_link_options(self, layer: Layer) -> list[tuple[str, str]]:
+        """Every OTHER layer, by name. The set of things a layer may share a
+        policy with is exactly this — which is why it is a picker."""
+        return [
+            (other.name, other.id)
+            for other in self.session.program.layers
+            if other.id != layer.id
+        ]
+
+    # `Select.NULL`, NEVER `Select.BLANK`. In Textual 8.2.8 `Select.BLANK` is
+    # literally the bool `False` and the no-selection sentinel is `Select.NULL`
+    # — so passing BLANK as a value raises InvalidSelectValueError at MOUNT,
+    # which takes the whole layer sheet down, and comparing `value is
+    # Select.BLANK` in the change handler silently never matches. The two
+    # selects that predate this are `allow_blank=False`, so their comparison
+    # was unreachable rather than wrong; this one makes blank a real answer and
+    # the distinction load-bearing (2026-08-21).
+    def _policy_link_value(self, layer: Layer) -> Any:
+        """Which sibling to show as selected.
+
+        A group can hold more than two layers, and this control names ONE. It
+        shows the first other member — enough to say "linked, to that" — and
+        the group itself is what the file holds. Choosing a different sibling
+        JOINS rather than reassigns (edit.link_policy), so the answer is never
+        wrong, only partial, and the details it cannot show are visible in the
+        file and in bookkit's own view.
+        """
+        if not layer.policy_group:
+            return Select.NULL
+        others = [
+            other
+            for other in edit.policy_group_members(
+                self.session.program, layer.policy_group
+            )
+            if other.id != layer.id
+        ]
+        return others[0].id if others else Select.NULL
+
     @on(Checkbox.Changed)
     def _checkbox_changed(self, event: Checkbox.Changed) -> None:
         wid = event.checkbox.id or ""
@@ -1842,7 +1895,32 @@ class EditorScreen(Screen):
     def _select_changed(self, event: Select.Changed) -> None:
         wid = event.select.id or ""
         value = event.value
-        if value is Select.BLANK:
+        if wid == "f-layer-policy-group":
+            # BLANK IS A REAL ANSWER HERE, unlike every other select on this
+            # screen: choosing it means "not linked", which is a write. The
+            # early return below would have made unlinking unreachable from
+            # the keyboard — the same shape as a required field with no empty
+            # option, in reverse.
+            kind, key = self._commit_ref
+            layer = self._layer(key) if kind == "layer" else None
+            if layer is None:
+                return
+            layer_id = layer.id
+            if value is Select.NULL:
+                self._mutate_and_refresh(
+                    lambda p: edit.unlink_policy(p, layer_id)
+                )
+            else:
+                other = str(value)
+                # JOIN, not assign: link_policy carries whole groups and
+                # refuses a silent merge of two populated policies. The
+                # refusal reaches the user through _guarded_mutate.
+                self._guarded_mutate(
+                    lambda p: edit.link_policy(p, layer_id, other)
+                )
+            self._notify_layer_refusals(layer_id)
+            return
+        if value is Select.NULL:
             return
         if wid == "f-placement":
             self._mutate_and_refresh(
