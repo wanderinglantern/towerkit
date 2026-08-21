@@ -80,6 +80,7 @@ def layer(
     shares: list[tuple[str, int]] | None = None,
     premium: int | None = None,
     statutory: bool = False,
+    buffer: bool = False,
 ) -> Layer:
     return Layer(
         id=id,
@@ -89,6 +90,7 @@ def layer(
         limit=limit,
         premium=premium,
         statutory=statutory,
+        buffer=buffer,
         participants=[
             Participant(carrier=c, share_bps=b) for c, b in (shares or [])
         ],
@@ -482,6 +484,27 @@ class TestAgreement:
             b for b in build_web_tower(program, 240.0).blocks if b.carrier == "B"
         )
         assert block.height_px == widest.height * 240.0
+
+    def test_a_buffer_layer_says_so_in_the_terms(self) -> None:
+        """`WebLayer.terms` and the block's own `terms` both carry the word
+        — the outline's title attribute (`layer.name — layer.terms` in
+        `_tower_panel.html`) is what makes the drawing say "buffer" even
+        when the block itself is too short to show a name line."""
+        program = make_program(
+            ["gl"],
+            [
+                layer("primary", ["gl"], 0, 5_000_000, [("A", 10_000)]),
+                layer("buf", ["gl"], 5_000_000, 5_000_000, buffer=True),
+            ],
+        )
+        web = build_web_tower(program, 240.0)
+        buf_layer = next(ly for ly in web.layers if ly.layer_id == "buf")
+        assert buf_layer.terms == "$5M xs $5M — buffer"
+        buf_block = next(b for b in web.blocks if b.layer_id == "buf")
+        assert buf_block.terms == "$5M xs $5M — buffer"
+        # the non-buffer layer is untouched
+        primary_layer = next(ly for ly in web.layers if ly.layer_id == "primary")
+        assert "buffer" not in primary_layer.terms
 
     def test_geometry_is_passed_through_not_recomputed(self) -> None:
         """TowerLayout is a frozen dataclass of tuples, so this is exact and

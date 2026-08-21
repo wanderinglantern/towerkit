@@ -251,7 +251,10 @@ def build_web_tower(
             layer_id=block.layer_id,
             name=block.name,
             heading=headings[block.layer_id],
-            terms=layer_terms(block.attach, block.limit, statutory=block.statutory),
+            terms=layer_terms(
+                block.attach, block.limit,
+                statutory=block.statutory, buffer=block.layer_id in buffers,
+            ),
             pending=is_pending(block),
             statutory=block.statutory,
             buffer=block.layer_id in buffers,
@@ -269,6 +272,7 @@ def build_web_tower(
             columns,
             chart_height_px,
             heading=headings[block.layer_id] if heading_owner.get(block.layer_id) == i else None,
+            buffer=block.layer_id in buffers,
         )
         for i, block in enumerate(tower.participants)
     )
@@ -307,6 +311,7 @@ def _web_block(
     columns: tuple[Column, ...],
     chart_height_px: float,
     heading: str | None,
+    buffer: bool,
 ) -> WebBlock:
     # The label rides the widest rect, the same choice the graphic makes
     # (`mpl_program._participant_label`), so both renderers are talking about
@@ -334,7 +339,9 @@ def _web_block(
         spans_columns=spans,
         heading=heading,
         name_forms=name_forms,
-        terms=layer_terms(layer.attach, layer.limit, statutory=layer.statutory),
+        terms=layer_terms(
+            layer.attach, layer.limit, statutory=layer.statutory, buffer=buffer,
+        ),
         premium=premium,
         show_name=height_px >= threshold,
         show_money=height_px >= MONEY_MIN_PX,

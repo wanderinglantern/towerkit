@@ -10,15 +10,30 @@ from ..layout import GroupBand, LayerBlock, ParticipantBlock
 from ..money import format_money_compact, format_share, premium_share
 
 
-def layer_terms(attach: int, limit: int, statutory: bool = False) -> str:
+def layer_terms(
+    attach: int, limit: int, statutory: bool = False, buffer: bool = False
+) -> str:
     """Market convention: a primary is quoted by its limit alone — 'xs $0'
     is meaningless and reads as an error on a chart. Statutory cover has no
-    limit to quote at all."""
+    limit to quote at all.
+
+    A buffer is a deliberate uninsured band, not an error and not missing
+    cover (model.py's `Layer.buffer`, validate.py's `_check_buffer`) — the
+    band still has real money to quote, so the word is APPENDED rather than
+    substituted the way `statutory` replaces the whole string. The word is
+    "buffer", the same one `_stack_editor.html` prints beside a slab, so a
+    reader never sees the drawing and the editor describe the same fact in
+    different vocabulary — a hatch pattern alone is a convention the reader
+    has to already know; the word is what makes an uninsured band read as a
+    DECISION rather than a rendering artefact."""
     if statutory:
         return "Statutory"
-    if attach > 0:
-        return f"{format_money_compact(limit)} xs {format_money_compact(attach)}"
-    return format_money_compact(limit)
+    terms = (
+        f"{format_money_compact(limit)} xs {format_money_compact(attach)}"
+        if attach > 0
+        else format_money_compact(limit)
+    )
+    return f"{terms} — buffer" if buffer else terms
 
 
 def layer_heading(layer: LayerBlock, follows: bool, marker: str = "") -> str:

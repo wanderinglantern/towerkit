@@ -30,6 +30,21 @@ def test_layer_terms_market_convention() -> None:
     assert layer_terms(2_000_000, 25_000_000) == "$25M xs $2M"
 
 
+def test_layer_terms_buffer_says_so() -> None:
+    """A buffer keeps its money — unlike statutory, which has none to quote —
+    and appends the same word `_stack_editor.html` prints beside a slab, so
+    the drawing and the editor never disagree on vocabulary."""
+    assert layer_terms(1_000_000, 5_000_000, buffer=True) == "$5M xs $1M — buffer"
+    assert layer_terms(1_000_000, 5_000_000, buffer=False) == "$5M xs $1M"
+
+
+def test_layer_terms_statutory_wins_over_buffer() -> None:
+    """Mutually exclusive in practice (a buffer has real money to quote,
+    statutory has none); statutory is checked first, same order as
+    `layer_heading`."""
+    assert layer_terms(0, 0, statutory=True, buffer=True) == "Statutory"
+
+
 def test_layer_heading_matches_graphic() -> None:
     excess = _layer("1st Excess", 1_000_000, 4_000_000)
     assert layer_heading(excess, follows=False) == "1st Excess — $4M xs $1M"
