@@ -116,6 +116,7 @@ def validate_program(program: Program) -> Diagnostics:
         _check_retention(retention, index, line_ids, diags)
 
     _check_group_adjacency(program, diags)
+    _check_policy_groups(program, diags)
 
     covered = {lid for r in program.retentions for lid in r.applies_to}
     for line in program.lines:
@@ -342,6 +343,47 @@ def _check_states(layer: Layer, diags: Diagnostics, ref: tuple[str, Any]) -> Non
                 f"{layer.name}: {state!r} is not a two-letter US code, so the "
                 f"monopolistic-fund check could not be applied to it",
                 ref,
+            )
+
+
+def _check_policy_groups(program: Program, diags: Diagnostics) -> None:
+    """ONE POLICY CANNOT HAVE TWO NUMBERS, OR TWO PERIODS.
+
+    `policy_group` says these layers are parts of one issued policy — workers'
+    compensation Part A and Part B being the case it was added for. That is a
+    claim about the world, and it is checkable: parts of one policy share the
+    paper. Two members stating different policy NUMBERS is a contradiction, so
+    it is an error; two stating different PERIODS is very likely one of them
+    being wrong, but a draft is routinely half-filled, so it warns.
+
+    Cross-field consistency is the thin category everywhere in this project,
+    and a link field with no rule attached is just a note.
+    """
+    groups: dict[str, list[Layer]] = {}
+    for layer in program.layers:
+        if layer.policy_group:
+            groups.setdefault(layer.policy_group, []).append(layer)
+    for group, members in groups.items():
+        numbers = {ly.policy_number for ly in members if ly.policy_number}
+        if len(numbers) > 1:
+            diags.error(
+                "policy-group-numbers",
+                f"one policy ({group}) states more than one policy number: "
+                f"{', '.join(sorted(numbers))} — the parts of a policy share "
+                f"its paper",
+                ("layer", members[0].id),
+            )
+        periods = {
+            (ly.period.start.isoformat(), ly.period.end.isoformat())
+            for ly in members
+            if ly.period
+        }
+        if len(periods) > 1:
+            diags.warn(
+                "policy-group-periods",
+                f"one policy ({group}) states more than one policy period — "
+                f"the parts of a policy usually run together",
+                ("layer", members[0].id),
             )
 
 

@@ -538,6 +538,82 @@ def canonical_states(states: list[str]) -> list[str]:
     ]
 
 
+# --- one policy, several layers -------------------------------------------------
+#
+# Workers' compensation is the case: Part A (statutory benefits, no dollar
+# limit) and Part B (employers liability, a real limit) come on ONE policy and
+# CANNOT be one layer, because `statutory` requires limit 0. The schematic
+# draws them apart, which is right, and until 2026-08-21 nothing said they
+# belonged together.
+#
+# `policy_group` is a SHARED TOKEN and these are its verbs. Nothing here
+# invents a relationship: `link` needs two layers the caller names, and
+# `unlink` takes one out without disturbing the rest of its group.
+
+
+def policy_group_members(program: Program, group: str | None) -> list[Layer]:
+    """Every layer in one policy group, in file order. `None`/empty is not a
+    group — an unset field means "not linked", never "linked to the others
+    that are also unset"."""
+    if not group:
+        return []
+    return [layer for layer in program.layers if layer.policy_group == group]
+
+
+def link_policy(program: Program, layer_id: str, other_id: str) -> str:
+    """Put two layers on ONE policy and return the token they now share.
+
+    Joining rather than assigning, so linking a third part to a pair does the
+    obvious thing: if either side already belongs to a group, that group wins
+    and the other side joins it — WITH the rest of its own group, because
+    taking one layer out of a policy to put it in another silently would break
+    the first policy to make the second.
+
+    Refuses to join two layers that already sit in DIFFERENT groups with
+    members on both sides: that is a merge of two policies, and which number
+    survives is a decision only a person can make.
+    """
+    layer = _layer(program, layer_id)
+    other = _layer(program, other_id)
+    if layer.id == other.id:
+        raise Refusal("policy-self-link", "a layer is already its own policy")
+    mine = policy_group_members(program, layer.policy_group)
+    theirs = policy_group_members(program, other.policy_group)
+    if (
+        layer.policy_group
+        and other.policy_group
+        and layer.policy_group != other.policy_group
+        and len(mine) > 1
+        and len(theirs) > 1
+    ):
+        raise Refusal(
+            "policy-group-clash",
+            f"{layer.name} and {other.name} are already on different policies "
+            f"with other layers on each — unlink one side first",
+        )
+    group = layer.policy_group or other.policy_group or unique_id(
+        program, f"pol-{slugify(layer.name)}"
+    )
+    # ONLY THE TWO NAMED LAYERS ARE WRITTEN, and the rest of each group needs
+    # no rewrite: the winning token is one side's OWN token, so that side's
+    # members already carry it, and the only case where a whole populated group
+    # would have to move is the clash refused above. The first cut looped over
+    # `mine` and `theirs` here as well; mutation testing found it — deleting
+    # those two terms changed no behaviour any input could reach, which is the
+    # definition of dead code and not a gap in the tests (2026-08-21).
+    layer.policy_group = group
+    other.policy_group = group
+    return group
+
+
+def unlink_policy(program: Program, layer_id: str) -> Layer:
+    """Take ONE layer off its policy. The rest of the group keeps its token —
+    a policy does not stop being one because a part left it."""
+    layer = _layer(program, layer_id)
+    layer.policy_group = None
+    return layer
+
+
 def set_premium_detail(program: Program, layer_id: str, detail: str | None) -> Layer:
     """The word a ZERO premium prints. Empty is None, so clearing the field
     drops the key from the file rather than writing `""`."""

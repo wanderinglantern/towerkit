@@ -201,6 +201,28 @@ class Layer(_Model):
     # will bring an audit with them. OMIT_EMPTY, so "not auditable" writes no
     # key and no existing file changes shape.
     auditable: Annotated[bool, OMIT_EMPTY] = False
+    # ONE POLICY, SEVERAL LAYERS. Workers' compensation is the case that forced
+    # it: Part A (statutory benefits, no dollar limit) and Part B (employers
+    # liability, a real limit) are almost always ONE policy from ONE carrier,
+    # and the model cannot make them one layer — `statutory` requires limit 0,
+    # so a layer cannot be both. The schematic draws them apart, correctly, and
+    # nothing said they belonged together (Grant, 2026-08-21).
+    #
+    # A SHARED TOKEN, NOT A POINTER. Layers carrying the same non-empty
+    # `policy_group` are parts of one policy. Symmetric by construction, so
+    # there is no direction to get backwards and no dangling reference when a
+    # layer is removed — a group left with one member is simply a policy with
+    # one part, which is the ordinary case. A pointer would need healing on
+    # every remove and rename, and `heal_follows` is enough of that already.
+    #
+    # NOT `policy_number` doing double duty, which was the first proposal and
+    # is wrong for the reason Grant gave: a program being DESIGNED — a sample,
+    # a hypothetical structure, anything before binding — has no policy number
+    # yet, and the relation between the parts is known long before the paper
+    # is. The link is between LAYERS, not between documents.
+    policy_group: Annotated[str | None, OMIT_EMPTY] = Field(
+        alias="policyGroup", default=None
+    )
     follows_underlying: Annotated[bool, OMIT_EMPTY] = Field(
         alias="followsUnderlying", default=False
     )

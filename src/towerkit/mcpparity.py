@@ -371,6 +371,23 @@ MUTATIONS: dict[str, Served] = {
     "add_sublimit": Served(("sublimit_add",), "The add verb, one for one."),
     "edit_sublimit": Served(("sublimit_edit",), "The multi-field edit verb."),
     "remove_sublimit": Served(("sublimit_remove",), "The remove verb, one for one."),
+    "link_policy": Served(
+        ("program_edit_field",),
+        "layer.policyGroup through the generic setter. The FIELD is a plain "
+        "scalar and program_edit_field writes it, so an MCP client can put two "
+        "layers on one policy today by setting the same token on each; "
+        "link_policy is the join RULE on top of that — whose group survives "
+        "when a third part is added, and the refusal when two populated groups "
+        "would merge. A dedicated tool is worth having and is not built: the "
+        "generic setter reaches the data, and half a link is visible in the "
+        "file rather than silent. Revisit when a client asks for it.",
+    ),
+    "unlink_policy": Served(
+        ("program_edit_field",),
+        "layer.policyGroup cleared through the generic setter — clearing one "
+        "member's token IS unlinking it, and the rest of the group keeps "
+        "theirs, which is exactly what this function does.",
+    ),
     "set_states": Served(
         ("program_edit_field",),
         "layer.states through the generic setter. set_states is a thin wrapper "
@@ -458,6 +475,9 @@ NOT_A_MUTATION: dict[str, str] = {
         "Pure text. A typed or pasted jurisdiction list -> USPS codes: "
         "'NY, NJ', 'NY NJ' and 'New York\\nNew Jersey' all give ['NY', 'NJ']. "
         "The entry syntax."
+    ),
+    "policy_group_members": (
+        "Reads the program to list one policy's layers; writes nothing."
     ),
     "canonical_states": (
         "Pure text. The same normalisation for a LIST rather than a typed "
