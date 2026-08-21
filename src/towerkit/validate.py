@@ -274,6 +274,7 @@ def _check_layer_detail(layer: Layer, diags: Diagnostics, ref: tuple[str, Any]) 
     would this value ever reach the reader? A field that silently does nothing
     is how a modelled fact decays into a general-purpose note."""
     _check_states(layer, diags, ref)
+    _check_buffer(layer, diags, ref)
 
     seen: set[str] = set()
     for named in layer.named_limits:
@@ -344,6 +345,33 @@ def _check_states(layer: Layer, diags: Diagnostics, ref: tuple[str, Any]) -> Non
                 f"monopolistic-fund check could not be applied to it",
                 ref,
             )
+
+
+def _check_buffer(layer: Layer, diags: Diagnostics, ref: tuple[str, Any]) -> None:
+    """A buffer is a band NOBODY is on.
+
+    Both rules exist for the same reason: a buffer is excluded from signed
+    limits and premium totals, so a carrier or a premium recorded on one is
+    real money the book would stop counting. If there is a carrier, it is a
+    layer — say so rather than quietly dropping it from the totals.
+    """
+    if not layer.buffer:
+        return
+    if layer.participants:
+        diags.error(
+            "buffer-participants",
+            f"{layer.name}: a buffer is uninsured, but "
+            f"{len(layer.participants)} carrier(s) are on it — clear the "
+            f"buffer flag if this band is placed",
+            ref,
+        )
+    if layer.premium:
+        diags.error(
+            "buffer-premium",
+            f"{layer.name}: a buffer is uninsured, so it cannot carry a "
+            f"premium of {format_money(layer.premium)}",
+            ref,
+        )
 
 
 def _check_policy_groups(program: Program, diags: Diagnostics) -> None:
@@ -466,6 +494,12 @@ def _check_line_stack(program: Program, line_id: str, diags: Diagnostics) -> Non
     for below, above in zip(stack, stack[1:], strict=False):
         above_attach = _effective_attach(program, above, line_id)
         if above_attach > below.top:
+            # A BUFFER IS A DECLARED GAP. The band between these two is
+            # uninsured on purpose when either side says so, and reporting it
+            # would be a false refusal on a tower a broker really placed
+            # (Grant, 2026-08-21). Without a buffer the rule is unchanged.
+            if below.buffer or above.buffer:
+                continue
             diags.error(
                 "line-gap",
                 f"{line_id}: GAP {below.name}→{above.name} at "
