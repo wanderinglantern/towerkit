@@ -58,6 +58,28 @@ def test_layer_heading_statutory() -> None:
     assert layer_heading(block, follows=False) == "Workers Compensation — Statutory"
 
 
+def test_layer_heading_buffer() -> None:
+    """The heading rides `layer_terms`'s own buffer wording — no second
+    string invented here, same register throughout."""
+    band = _layer("Uninsured band", 5_000_000, 5_000_000)
+    assert layer_heading(band, follows=False, buffer=True) == (
+        "Uninsured band — $5M xs $5M — buffer"
+    )
+
+
+def test_unplaced_label_buffer_wins_over_pending() -> None:
+    """Fix round 2 (Grant, 2026-08-21): a buffer's signed_bps is always 0
+    (no participants at all), so `pending` alone cannot tell a genuinely
+    open layer apart from a deliberately uninsured one — and "To be placed"
+    on a buffer is not merely uninformative, it states the OPPOSITE fact.
+    `buffer` is checked first and wins."""
+    assert unplaced_label(10_000, pending=True, buffer=True) == "Uninsured"
+    assert unplaced_label(10_000, pending=False, buffer=True) == "Uninsured"
+    # unchanged for a real pending/partially-open layer
+    assert unplaced_label(10_000, pending=True) == "To be placed"
+    assert unplaced_label(4_000, pending=False) == "40% open"
+
+
 def test_participant_and_unplaced_labels() -> None:
     assert participant_label("Zenith", 10_000) == "Zenith 100%"
     assert unplaced_label(4_000, pending=False) == "40% open"

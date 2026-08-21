@@ -241,7 +241,9 @@ def build_web_tower(
     buffers = {layer.id for layer in program.layers if layer.buffer}
     layer_by_id = {layer.layer_id: layer for layer in tower.layers}
     headings = {
-        block.layer_id: layer_heading(block, follows=block.layer_id in follows)
+        block.layer_id: layer_heading(
+            block, follows=block.layer_id in follows, buffer=block.layer_id in buffers,
+        )
         for block in tower.layers
     }
     heading_owner = heading_blocks(tower.participants)
@@ -321,7 +323,9 @@ def _web_block(
     spans = _spanned_columns(block.rects, columns)
 
     if block.carrier is None:
-        name_forms: tuple[str, ...] = (unplaced_label(block.share_bps, is_pending(layer)),)
+        name_forms: tuple[str, ...] = (
+            unplaced_label(block.share_bps, is_pending(layer), buffer=buffer),
+        )
         premium = None  # unplaced capacity is nobody's premium
     else:
         full = participant_label(block.carrier, block.share_bps)

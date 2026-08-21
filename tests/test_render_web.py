@@ -506,6 +506,39 @@ class TestAgreement:
         primary_layer = next(ly for ly in web.layers if ly.layer_id == "primary")
         assert "buffer" not in primary_layer.terms
 
+    def test_a_buffer_never_reads_to_be_placed(self) -> None:
+        """Fix round 2 (Grant, 2026-08-21): a buffer has no participants, so
+        `is_pending` (signed_bps == 0) is true for it the same as for a
+        genuinely pending layer — and before this fix, `unplaced_label`
+        could not tell the two apart, so a buffer's VISIBLE block text read
+        "To be placed". That is not merely uninformative, it is the OPPOSITE
+        fact: it tells a reader cover is coming to a band the broker
+        deliberately left uninsured. `layer_heading` and `unplaced_label`
+        both now take the layer's `buffer` flag and give it its own case,
+        checked ahead of `pending`."""
+        program = make_program(
+            ["gl"],
+            [
+                layer("primary", ["gl"], 0, 5_000_000, [("A", 10_000)]),
+                layer("buf", ["gl"], 5_000_000, 5_000_000, buffer=True),
+                layer("pending", ["gl"], 10_000_000, 5_000_000),  # genuinely open
+            ],
+        )
+        web = build_web_tower(program, 240.0)
+
+        buf_block = next(b for b in web.blocks if b.layer_id == "buf")
+        assert buf_block.name_forms == ("Uninsured",)
+        assert "To be placed" not in buf_block.name_forms
+        assert buf_block.heading is not None
+        assert buf_block.heading.endswith("— buffer")
+        assert "To be placed" not in buf_block.heading
+
+        # a genuinely pending (non-buffer) layer is UNCHANGED: it still
+        # reads "To be placed" — this fix must not blur the two facts
+        # together, only tell them apart.
+        pending_block = next(b for b in web.blocks if b.layer_id == "pending")
+        assert pending_block.name_forms == ("To be placed",)
+
     def test_geometry_is_passed_through_not_recomputed(self) -> None:
         """TowerLayout is a frozen dataclass of tuples, so this is exact and
         needs no tolerance."""

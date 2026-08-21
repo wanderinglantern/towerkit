@@ -36,15 +36,20 @@ def layer_terms(
     return f"{terms} — buffer" if buffer else terms
 
 
-def layer_heading(layer: LayerBlock, follows: bool, marker: str = "") -> str:
+def layer_heading(
+    layer: LayerBlock, follows: bool, marker: str = "", buffer: bool = False
+) -> str:
     # Statutory is checked first because the two are mutually exclusive —
-    # nothing underlies a statutory bar.
+    # nothing underlies a statutory bar. `buffer` rides through to
+    # `layer_terms`, which already knows how to say so (fix round 2,
+    # 2026-08-21): a buffer cannot follow underlying in practice (its
+    # attach/limit are fixed, not derived), so that branch is untouched.
     if layer.statutory:
         terms = layer_terms(layer.attach, layer.limit, statutory=True)
     elif follows:
         terms = f"{format_money_compact(layer.limit)} xs underlying"
     else:
-        terms = layer_terms(layer.attach, layer.limit)
+        terms = layer_terms(layer.attach, layer.limit, buffer=buffer)
     return f"{layer.name}{marker} — {terms}"
 
 
@@ -71,9 +76,22 @@ def is_pending(layer: LayerBlock) -> bool:
     return layer.signed_bps == 0
 
 
-def unplaced_label(share_bps: int, pending: bool) -> str:
+def unplaced_label(share_bps: int, pending: bool, buffer: bool = False) -> str:
     """Pending layer (nothing signed): 'To be placed'. Partially-open
-    remainder: the open share."""
+    remainder: the open share.
+
+    `buffer` is checked FIRST and wins over `pending`, deliberately — a
+    buffer's `signed_bps` is always 0 (it has no participants at all), so
+    `pending` would otherwise be true and this would print "To be placed"
+    on a band the broker deliberately left uninsured. That is not merely
+    uninformative, it is the OPPOSITE fact: "To be placed" tells a reader
+    cover is coming, and a buffer's whole point is that it is not (fix
+    round 2, 2026-08-21, Grant: "it tells a reader that cover is coming to
+    a band the broker deliberately left uninsured"). "Uninsured" matches
+    the register `layer_terms`'s "Statutory" already uses: one factual
+    word, no exclamation."""
+    if buffer:
+        return "Uninsured"
     return "To be placed" if pending else f"{format_share(share_bps)} open"
 
 
