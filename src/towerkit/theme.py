@@ -213,12 +213,60 @@ def _theme_from_jsonable(data: dict[str, Any]) -> Theme:
     )
 
 
+def resolve_theme(path: Path | str) -> Path:
+    """A stored `render.theme` as a file that exists, or FileNotFoundError.
+
+    THE STORED VALUE IS EFFECTIVELY A NAME. Program files are portable by
+    contract, so a theme path is stored RELATIVE and an absolute one is a
+    validation error — but a relative path only resolves while the process
+    happens to be running from a directory with that file beside it. Nothing
+    pins the working directory, so moving a folder silently broke every stored
+    theme on the machine (Grant, 2026-08-21: `themes/marsh.json` not found
+    after yesterday's move, with the file sitting in a towerkit checkout the
+    renderer had no reason to look in).
+
+    Worse than a failed render: bookkit re-validates the whole program file on
+    EVERY write, and `_check_render_theme` errors on a theme it cannot read, so
+    an unresolvable theme refuses every subsequent edit to that program. The
+    file is wedged, and the theme cannot be changed from any UI because
+    changing it is itself a write.
+
+    So the literal path is tried first — a real relative file next to the
+    caller still wins, which is what a user's own ./themes directory is for —
+    and anything else falls back to a match BY NAME against every theme this
+    machine can see, packaged ones included. `marsh.json` ships with towerkit,
+    which is why that fallback fixes the reported case with no data change and
+    no folder move.
+
+    Two callers already resolved it this way rather than literally (bookkit's
+    `_resolve_theme`, and every theme picker, which lists by stem); the
+    renderer and the validator did not. Now all of them go through here, so a
+    theme that validates is a theme that renders — which is the entire claim
+    `_check_render_theme` exists to make.
+    """
+    direct = Path(path)
+    if direct.is_file():
+        return direct
+    for candidate in available_themes():
+        if candidate.stem == direct.stem:
+            return candidate
+    raise FileNotFoundError(
+        f"no theme named {direct.stem!r} is installed here — put "
+        f"{direct.name} in ./themes, or name one of: "
+        f"{', '.join(sorted(p.stem for p in available_themes())) or 'none found'}"
+    )
+
+
 def load_theme(path: Path | str | None = None) -> Theme:
-    """Load a theme file; None gives the built-in default."""
+    """Load a theme file; None gives the built-in default.
+
+    The path is resolved by `resolve_theme`, so a stored `render.theme` loads
+    wherever the process is running from. Reading it literally is what wedged
+    a program file when a folder moved."""
     if path is None:
         text = resources.files("towerkit").joinpath("themes/default.json").read_text("utf-8")
     else:
-        text = Path(path).read_text(encoding="utf-8")
+        text = resolve_theme(path).read_text(encoding="utf-8")
     return _theme_from_jsonable(json.loads(text))
 
 
