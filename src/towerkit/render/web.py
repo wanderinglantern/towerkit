@@ -144,6 +144,7 @@ class WebLayer:
     terms: str
     pending: bool
     statutory: bool
+    buffer: bool
     y0: float
     y1: float
     outlines: tuple[Rect, ...]
@@ -232,6 +233,12 @@ def build_web_tower(
     columns = tower.columns
 
     follows = {layer.id for layer in program.layers if layer.follows_underlying}
+    # A buffer is a `Layer` fact, not a layout fact — `LayerBlock` (layout.py)
+    # carries no `buffer` field, the same way it carries no `follows`. Read it
+    # off `program.layers` by id, the pattern `follows` already uses, rather
+    # than growing layout.py's geometry type for a fact that is never drawn
+    # differently, only styled differently by the caller.
+    buffers = {layer.id for layer in program.layers if layer.buffer}
     layer_by_id = {layer.layer_id: layer for layer in tower.layers}
     headings = {
         block.layer_id: layer_heading(block, follows=block.layer_id in follows)
@@ -247,6 +254,7 @@ def build_web_tower(
             terms=layer_terms(block.attach, block.limit, statutory=block.statutory),
             pending=is_pending(block),
             statutory=block.statutory,
+            buffer=block.layer_id in buffers,
             y0=block.y0,
             y1=block.y1,
             outlines=block.outlines,
