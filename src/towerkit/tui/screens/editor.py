@@ -686,6 +686,17 @@ class EditorScreen(Screen):
             ),
             Label("Policy number", classes="field-label"),
             Input(value=layer.policy_number or "", id="f-layer-policy"),
+            # Beside the policy number, because it is a fact about the POLICY
+            # and not about the cover: it changes no diagram, no total and no
+            # validation, it just says whether this renewal brings an audit
+            # with it. Two layers of one program legitimately differ — WC is
+            # audited, the property layer above it is not — which is why it is
+            # here and not on the program sheet.
+            Checkbox(
+                "Auditable — carrier trues the premium up at expiry",
+                value=layer.auditable,
+                id="f-layer-auditable",
+            ),
             Label("Notes (renders as a chart footnote)", classes="field-label"),
             Input(
                 value=layer.notes or "",
@@ -1764,6 +1775,20 @@ class EditorScreen(Screen):
             except Exception:
                 pass
             self._notify_layer_refusals(layer.id)
+            return
+        if wid == "f-layer-auditable":
+            kind, key = self._commit_ref
+            layer = self._layer(key) if kind == "layer" else None
+            if layer is None:
+                return
+            layer_id = layer.id
+            flag = bool(event.value)
+            # Through set_field like every other scalar, not a setattr: the
+            # choke point is what makes the write validated, undoable and the
+            # same write the MCP surface makes.
+            self._guarded_mutate(
+                lambda p: edit.set_field(p, "layer", "auditable", flag, layer_id)
+            )
             return
         if wid == "f-layer-follows":
             kind, key = self._commit_ref

@@ -16,6 +16,7 @@ from typing import Any, cast
 import jsonschema
 from pydantic import ValidationError
 
+from .jurisdictions import US_JURISDICTIONS
 from .model import (
     Layer,
     Program,
@@ -39,11 +40,11 @@ MONOPOLISTIC_STATES = frozenset({"ND", "OH", "WA", "WY"})
 # gets a WARNING rather than an error: a non-US programme is not invalid, it is
 # UNCHECKED, and saying so is the whole point — silence would leave the one
 # check this field exists for quietly unapplied on "Ohio" or "Ontario".
-US_JURISDICTIONS = frozenset(
-    """AL AK AZ AR CA CO CT DE DC FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN
-    MS MO MT NE NV NH NJ NM NY NC ND OH OK OR PA RI SC SD TN TX UT VT VA WA WV
-    WI WY""".split()
-)
+#
+# Imported, not spelled out: `edit.parse_states` needs the same vocabulary to
+# tell a pasted state list apart from prose, and fifty-one codes written twice
+# is the copy that quietly differs. See jurisdictions.py for why the
+# monopolistic set stays HERE, beside the rule that reads it.
 
 
 @dataclass(frozen=True)

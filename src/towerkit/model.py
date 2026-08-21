@@ -189,6 +189,18 @@ class Layer(_Model):
     name: str = Field(min_length=1)
     policy_number: str | None = Field(alias="policyNumber", default=None)
     period: Period | None = None
+    # Does the carrier AUDIT this policy at expiry? Workers' compensation and
+    # general liability normally do — the deposit premium is trued up against
+    # actual payroll or sales — while property and most excess layers do not.
+    # An administrative fact about the POLICY, which is why it sits with
+    # policy_number and period rather than with the cover: two layers of one
+    # program can differ, so it cannot live on Program.
+    #
+    # No validation rule attaches to it. It changes no diagram and no total;
+    # it exists so a broker can see, without opening the policy, which renewals
+    # will bring an audit with them. OMIT_EMPTY, so "not auditable" writes no
+    # key and no existing file changes shape.
+    auditable: Annotated[bool, OMIT_EMPTY] = False
     follows_underlying: Annotated[bool, OMIT_EMPTY] = Field(
         alias="followsUnderlying", default=False
     )

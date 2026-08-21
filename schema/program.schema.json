@@ -161,6 +161,10 @@
           "description": "Policy effective/expiry when it differs from the program period.",
           "$ref": "#/$defs/period"
         },
+        "auditable": {
+          "description": "The carrier audits this policy at expiry and trues the premium up against actual exposure — usual on workers' compensation and general liability, not on property.",
+          "type": "boolean"
+        },
         "followsUnderlying": {
           "description": "The layer's bottom edge follows the top of each column's underlying stack (stepped attachment, flat top).",
           "type": "boolean"

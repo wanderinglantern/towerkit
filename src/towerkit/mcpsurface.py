@@ -959,8 +959,14 @@ def _parse_list(entry: Entry, value: object) -> list[str]:
         raise BadValue(
             f"{entry.field} takes a JSON array of strings — {VALUE_RULES['list_of_strings']}"
         )
-    # Blank pieces dropped, order and case left VERBATIM — `edit.parse_states`
-    # states the same rule for the comma form, and `validate` owns duplicates.
+    if entry.accepts_comma_string:
+        # THE STATES FIELD (the one entry carrying this flag — see _COMMA_STRING).
+        # The JSON-array form has to land where the comma-string form lands, or
+        # `{"states": ["ny"]}` stores "ny" while `{"states": "ny"}` stores "NY"
+        # and one field means two things depending on how it was sent.
+        return edit.canonical_states(list(value))
+    # Blank pieces dropped, order and case left VERBATIM — `validate` owns
+    # duplicates, and no other list[str] has a vocabulary to normalise against.
     return [item.strip() for item in value if item.strip()]
 
 

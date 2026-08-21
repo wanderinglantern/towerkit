@@ -14,6 +14,7 @@ import re
 from collections.abc import Callable
 from typing import Any
 
+from . import jurisdictions
 from .model import (
     Layer,
     Line,
@@ -412,16 +413,96 @@ def remove_sublimit(program: Program, index: int) -> None:
 # this module, and deleting the validator copy would leave those unnetted.
 
 
-def parse_states(text: str) -> list[str]:
-    """`'NY, NJ'` → `['NY', 'NJ']` — the comma-separated entry syntax, defined
-    once so every surface splits it the same way.
+# What separates one jurisdiction from the next when a list is TYPED or
+# PASTED. Commas were the whole syntax until 2026-08-21, when a schedule
+# pasted straight off a workers-compensation policy arrived as bare codes with
+# no commas at all and became one twenty-character "state". A policy prints
+# these lists however it likes — one per line, space-run, slash-separated — and
+# the person pasting one is not going to retype it.
+_STATE_SEPARATORS = re.compile(r"[,;/|\r\n\t]+")
 
-    Whitespace is trimmed and empty pieces dropped (a trailing comma is a
-    typing artefact, not a state). Nothing else is touched: codes are stored
-    VERBATIM, and duplicates are NOT collapsed — the validator refuses them by
-    name, and swallowing one here would hide the refusal it exists to make.
+
+def parse_states(text: str) -> list[str]:
+    """A typed or pasted jurisdiction list → USPS codes, in the order given.
+
+    `'NY, NJ'`, `'NY NJ'`, `'New York\nNew Jersey'` and `'ny/nj'` all give
+    `['NY', 'NJ']`. Defined once so every surface reads a paste the same way.
+
+    Three things happen, and one deliberately does not:
+
+    SEPARATORS. Commas, semicolons, slashes, pipes, newlines and tabs split.
+    Runs of plain SPACE split too, but only inside a piece whose every token
+    resolves to a jurisdiction — otherwise "New York" would become "New" and
+    "York". The window is greedy and longest-first, so `'New York NJ'` is two
+    states and not a refusal; that is exact matching over the name table, not
+    a guess.
+
+    NORMALISATION. A recognised token is stored as its USPS code, upper-cased,
+    with a full name resolved to it — `'illinois'` and `'il'` are both `'IL'`.
+    The docstring this replaces said upper-casing "would rewrite files nobody
+    edited"; that reasoning belongs to LOADING, and this function never runs on
+    load. It only ever sees text a person has just typed, where a code stored
+    in the case it was typed in is what made the validator's own
+    upper-cased comparison necessary in the first place.
+
+    WHAT DOES NOT HAPPEN: nothing is guessed and nothing is dropped. An
+    unrecognised piece travels on VERBATIM so `validate` can say it is not a US
+    code — a near-miss quietly corrected here would be a coverage fact invented
+    by a parser. Duplicates are NOT collapsed either, for the same reason as
+    before: the validator refuses them by name and swallowing one would hide
+    the refusal it exists to make.
     """
-    return [part.strip() for part in text.split(",") if part.strip()]
+    states: list[str] = []
+    for piece in _STATE_SEPARATORS.split(text):
+        piece = piece.strip()
+        if piece:
+            states.extend(_read_piece(piece))
+    return states
+
+
+def _read_piece(piece: str) -> list[str]:
+    """One separator-delimited piece → the jurisdictions it names.
+
+    A piece that names ONE jurisdiction wins outright, before any thought of
+    splitting it on spaces: "New York" is a state, not two words.
+    """
+    single = jurisdictions.canonical(piece)
+    if single is not None:
+        return [single]
+    tokens = piece.split()
+    if len(tokens) > 1:
+        run = _read_run(tokens)
+        if run is not None:
+            return run
+    # Not a jurisdiction and not a run of them. Verbatim, for `validate` to
+    # name — see the docstring above.
+    return [piece]
+
+
+def _read_run(tokens: list[str]) -> list[str] | None:
+    """A space-separated run, greedily longest-first, or None if ANY of it
+    fails to resolve.
+
+    All-or-nothing on purpose: a run that half-resolves is prose with a state
+    name in it, and picking the states out of a sentence is the guessing this
+    parser does not do.
+    """
+    states: list[str] = []
+    index = 0
+    while index < len(tokens):
+        for span in range(jurisdictions.LONGEST_NAME_TOKENS, 0, -1):
+            code = (
+                jurisdictions.canonical(" ".join(tokens[index : index + span]))
+                if index + span <= len(tokens)
+                else None
+            )
+            if code is not None:
+                states.append(code)
+                index += span
+                break
+        else:
+            return None
+    return states
 
 
 def set_states(program: Program, layer_id: str, states: list[str]) -> Layer:
@@ -435,10 +516,26 @@ def set_states(program: Program, layer_id: str, states: list[str]) -> Layer:
         program,
         "layer",
         "states",
-        [state.strip() for state in states if state.strip()],
+        canonical_states(states),
         layer_id,
     )
     return layer
+
+
+def canonical_states(states: list[str]) -> list[str]:
+    """A LIST of jurisdictions normalised the way `parse_states` normalises a
+    typed one — blanks dropped, recognised tokens stored as their USPS code,
+    anything else verbatim.
+
+    Both doors, one rule. Without this, `set_states(program, id, ["ny"])` stored
+    "ny" while `parse_states("ny")` stored "NY", and the same field meant two
+    things depending on whether a human typed it or a caller passed a list.
+    """
+    return [
+        jurisdictions.canonical(state) or state.strip()
+        for state in states
+        if state.strip()
+    ]
 
 
 def set_premium_detail(program: Program, layer_id: str, detail: str | None) -> Layer:
