@@ -286,10 +286,19 @@ class TestLayerDetailFields:
         assert edit.parse_states("") == []
         assert edit.parse_states("  ,  ") == []
 
-    def test_parse_states_keeps_the_code_verbatim(self) -> None:
-        """Upper-casing here would rewrite files nobody edited; the validator
-        compares upper-cased and stores what it was given."""
-        assert edit.parse_states("ny, Ontario") == ["ny", "Ontario"]
+    def test_parse_states_normalises_what_it_knows_and_keeps_the_rest(self) -> None:
+        """A RECOGNISED jurisdiction is stored as its USPS code; anything else
+        travels on verbatim for `validate` to name.
+
+        This reverses the older rule that upper-casing "would rewrite files
+        nobody edited" — that reasoning belongs to LOADING, and parse_states
+        never runs on load. It only ever sees text a person just typed, and
+        storing "ny" there is what made the validator's own upper-cased
+        comparison necessary. "Ontario" is untouched, which is the half of the
+        old rule that was always right: a parser must not invent a coverage
+        fact out of a near-miss.
+        """
+        assert edit.parse_states("ny, Ontario") == ["NY", "Ontario"]
 
     def test_parse_states_keeps_duplicates_for_the_validator_to_refuse(self) -> None:
         assert edit.parse_states("NY, NY") == ["NY", "NY"]

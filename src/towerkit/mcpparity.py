@@ -454,7 +454,17 @@ NOT_A_MUTATION: dict[str, str] = {
     "unique_id": "Reads the program to find a free id; writes nothing.",
     "ordinal": "Pure text. 1 -> 'first', for the excess stack's auto-names.",
     "suggested_attach": "Reads the stack to propose an attachment; writes nothing.",
-    "parse_states": "Pure text. 'NY, NJ' -> ['NY', 'NJ'], the entry syntax.",
+    "parse_states": (
+        "Pure text. A typed or pasted jurisdiction list -> USPS codes: "
+        "'NY, NJ', 'NY NJ' and 'New York\\nNew Jersey' all give ['NY', 'NJ']. "
+        "The entry syntax."
+    ),
+    "canonical_states": (
+        "Pure text. The same normalisation for a LIST rather than a typed "
+        "string, so the JSON-array form of layer.states lands where the "
+        "comma-string form lands. Consumed by set_states and by "
+        "mcpsurface._parse_list."
+    ),
 }
 
 

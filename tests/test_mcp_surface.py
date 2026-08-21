@@ -893,12 +893,18 @@ def test_subject_reads_like_the_thing_the_broker_is_looking_at() -> None:
 
 
 def test_the_writable_counts_match_the_reviewed_contract() -> None:
-    """Layer is the field that keeps growing: 10 scalars plus the two dotted
+    """Layer is the field that keeps growing: 11 scalars plus the two dotted
     period entries. A count that drifts without a review is the connector
-    going lossy again in the other direction."""
+    going lossy again in the other direction.
+
+    11 as of 2026-08-21, when `auditable` landed — a recorded policy fact
+    (does the carrier true the premium up at expiry?) with no diagram
+    behaviour and no validation rule. Reviewed and admitted: the write surface
+    is DERIVED, so it picked the field up on its own, and this count is the
+    gate that makes somebody look."""
     assert len(mcpsurface.SURFACE["program"]) == 13
     assert len(mcpsurface.SURFACE["line"]) == 3
-    assert len(mcpsurface.SURFACE["layer"]) == 12
+    assert len(mcpsurface.SURFACE["layer"]) == 13
     assert len(mcpsurface.SURFACE["participant"]) == 2
     assert len(mcpsurface.SURFACE["retention"]) == 6
     assert len(mcpsurface.SURFACE["sublimit"]) == 4
