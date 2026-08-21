@@ -165,6 +165,10 @@
           "description": "The carrier audits this policy at expiry and trues the premium up against actual exposure — usual on workers' compensation and general liability, not on property.",
           "type": "boolean"
         },
+        "buffer": {
+          "description": "A deliberate uninsured band the insured carries. Has an attachment and a limit like any layer, but no carriers and no premium — and it does not report as a gap.",
+          "type": "boolean"
+        },
         "policyGroup": {
           "description": "Layers carrying the same token are parts of ONE issued policy — workers' compensation Part A and Part B are the standard case. Shared, not directional; a group of one is an ordinary policy with one part.",
           "minLength": 1,

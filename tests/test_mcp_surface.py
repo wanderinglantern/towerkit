@@ -893,7 +893,7 @@ def test_subject_reads_like_the_thing_the_broker_is_looking_at() -> None:
 
 
 def test_the_writable_counts_match_the_reviewed_contract() -> None:
-    """Layer is the field that keeps growing: 12 scalars plus the two dotted
+    """Layer is the field that keeps growing: 13 scalars plus the two dotted
     period entries. A count that drifts without a review is the connector
     going lossy again in the other direction.
 
@@ -902,10 +902,15 @@ def test_the_writable_counts_match_the_reviewed_contract() -> None:
     A and Part B on ONE policy). Both reviewed and admitted; neither has
     diagram behaviour, and only policy_group carries validation rules — one
     policy cannot state two numbers. The write surface is DERIVED, so it picked
-    both up on its own, and this count is the gate that makes somebody look."""
+    both up on its own, and this count is the gate that makes somebody look.
+
+    13 as of 2026-08-21, when `buffer` landed — a deliberate uninsured band,
+    which unlike the other two additions DOES carry validation rules (no
+    participants, no premium, and it suppresses the gap it would otherwise be
+    reported as). Reviewed and admitted."""
     assert len(mcpsurface.SURFACE["program"]) == 13
     assert len(mcpsurface.SURFACE["line"]) == 3
-    assert len(mcpsurface.SURFACE["layer"]) == 14
+    assert len(mcpsurface.SURFACE["layer"]) == 15
     assert len(mcpsurface.SURFACE["participant"]) == 2
     assert len(mcpsurface.SURFACE["retention"]) == 6
     assert len(mcpsurface.SURFACE["sublimit"]) == 4

@@ -201,6 +201,17 @@ class Layer(_Model):
     # will bring an audit with them. OMIT_EMPTY, so "not auditable" writes no
     # key and no existing file changes shape.
     auditable: Annotated[bool, OMIT_EMPTY] = False
+    # A DELIBERATE UNINSURED BAND, not a hole. Some towers are placed with a
+    # gap the insured carries: nobody is on this slab, and that is the point.
+    # Without it, `_check_line_stack` reports `line-gap` — a false refusal on a
+    # structure a broker really bought (Grant, 2026-08-21).
+    #
+    # It is a SLAB and not an absence: it has attach and limit like any layer,
+    # so the stack above it seats on its top exactly as it would on real cover.
+    # What it does not have is participants or premium, and `validate` refuses
+    # them on it — a buffer with a carrier on it is a layer, and calling it a
+    # buffer would hide real cover from every total.
+    buffer: Annotated[bool, OMIT_EMPTY] = False
     # ONE POLICY, SEVERAL LAYERS. Workers' compensation is the case that forced
     # it: Part A (statutory benefits, no dollar limit) and Part B (employers
     # liability, a real limit) are almost always ONE policy from ONE carrier,
