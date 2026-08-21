@@ -10,6 +10,7 @@ from __future__ import annotations
 import math
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from openpyxl import Workbook
 from openpyxl.worksheet.worksheet import Worksheet
@@ -43,6 +44,20 @@ _CURRENCY = '"$"#,##0.00'
 _DATE_FMT = "mm/dd/yyyy"
 
 
+def _subtotal(
+    section: SoiSection, *, bound: bool, show: bool
+) -> tuple[tuple[str, Any], ...]:
+    """One block's subtotal line, or nothing when premiums are withheld.
+
+    Computed from the WHOLE section rather than the rows in the block, because
+    `premium_subtotal` already selects on `is_bound` and asking it twice with
+    two different row sets would be two answers to one question."""
+    if not show:
+        return ()
+    word = "Bound" if bound else "Unbound"
+    return ((f"{word} cover — premium subtotal", premium_subtotal(section, bound=bound)),)
+
+
 def _table_parts(
     sections: list[SoiSection], show_premiums: bool
 ) -> tuple[list[TableColumn], list[TableSection]]:
@@ -74,23 +89,59 @@ def _table_parts(
             if show_premiums:
                 values.append(premium_value(row))
             rows.append(tuple(values))
-        # TWO SUBTOTALS, NEVER ONE MINGLED FIGURE (Grant, 2026-08-18): bound
-        # cover on its own line, unbound stated separately beneath it. BOTH
-        # lines print always — a section that sometimes has one line and
-        # sometimes two teaches the reader to skim past them — but what the
-        # cell HOLDS is premium_subtotal's decision, not a bare sum: a section
-        # whose unbound rows state no premium prints an em dash there, because
-        # "$0.00" under a visible "To be placed" row asserts free cover
-        # (fix round 1; see soi.premium_subtotal).
-        table_sections.append(TableSection(
-            section.label, tuple(rows),
-            totals=(
-                ("Bound cover — premium subtotal",
-                 premium_subtotal(section, bound=True)),
-                ("Unbound cover — premium subtotal",
-                 premium_subtotal(section, bound=False)),
-            ) if show_premiums else (),
-        ))
+        # TWO BLOCKS, NOT TWO SUBTOTAL LINES UNDER ONE LIST (Grant,
+        # 2026-08-21). Bound and unbound cover were interleaved in one section
+        # with a subtotal line each underneath, so the SCHEDULE — the thing a
+        # client reads as "what I have" — listed cover nobody has bought yet,
+        # and the reader had to check a Status column row by row to tell them
+        # apart. The primary block is now bound cover alone, and cover that is
+        # not yet bound is lifted out below it under its own heading.
+        #
+        # This supersedes the 2026-08-18 shape but keeps its rule intact: bound
+        # and unbound premium are NEVER added together, and each block prints
+        # its own subtotal unconditionally so a reader never has to work out
+        # whether a missing line means zero or means nothing was stated. What
+        # the cell HOLDS is still premium_subtotal's decision, not a bare sum —
+        # a block whose rows state no premium prints an em dash, because
+        # "$0.00" under a visible "To be placed" row asserts free cover.
+        #
+        # The heading carries the section's own label because a book with three
+        # programmes would otherwise grow three identical "not yet bound"
+        # headings with nothing saying which programme each belonged to.
+        bound_rows = [
+            row for row, src in zip(rows, section.rows, strict=True) if src.is_bound
+        ]
+        unbound_rows = [
+            row for row, src in zip(rows, section.rows, strict=True)
+            if not src.is_bound
+        ]
+
+        # The primary block stands even when nothing is bound YET — an empty
+        # schedule under the programme's own name is a true and useful thing to
+        # print. It is dropped only when every row moved to the block below,
+        # which would otherwise leave a heading with nothing under it and a
+        # subtotal the reader cannot tie to a single row.
+        if bound_rows or not unbound_rows:
+            table_sections.append(TableSection(
+                section.label, tuple(bound_rows),
+                totals=_subtotal(section, bound=True, show=show_premiums),
+            ))
+        if unbound_rows:
+            # "NOT BOUND", NOT "not yet bound". `is_bound` is status ==
+            # BOUND, so this block also collects EXPIRED cover — a run-off
+            # layer inside a programme that is otherwise live. "Not yet"
+            # claims that cover is still coming, which is a false statement
+            # about a policy that has already ended, printed on a document the
+            # client reads. "Not bound" is true of everything that lands here:
+            # quoted, submitted, prospective and expired alike.
+            not_yet = (
+                f"{section.label} — not bound" if section.label
+                else "Not bound"
+            )
+            table_sections.append(TableSection(
+                not_yet, tuple(unbound_rows),
+                totals=_subtotal(section, bound=False, show=show_premiums),
+            ))
 
     return columns, table_sections
 

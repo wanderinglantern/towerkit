@@ -118,14 +118,16 @@ class TestContent:
 
     def test_zebra_restarts_per_section(self, program, theme, tmp_path) -> None:
         ws = load_workbook(_write(program, theme, tmp_path / "s.xlsx")).active
-        # Casualty: band r2, body r3-r6, subtotals r7-r8; next body starts r9.
+        # Casualty BOUND: band r2, body r3-r5, subtotal r6. Casualty NOT
+        # BOUND: band r7, body r8, subtotal r9. Property body starts r10.
         assert ws["A3"].fill.patternType is None          # first body row: white
         assert ws["A4"].fill.fgColor.rgb == "FFF7F3EE"    # second: banded
-        assert ws["A9"].fill.patternType is None          # new section restarts white
+        assert ws["A8"].fill.patternType is None   # the not-bound block restarts
+        assert ws["A10"].fill.patternType is None  # and so does the next section
 
     def test_unlabeled_section_has_no_band_row(self, program, theme, tmp_path) -> None:
         ws = load_workbook(_write(program, theme, tmp_path / "s.xlsx")).active
-        assert ws["B9"].value == "Property — Primary"  # body row, not a section label
+        assert ws["B10"].value == "Property — Primary"  # body row, not a section label
 
     def test_dates_are_real_dates(self, program, theme, tmp_path) -> None:
         import datetime
@@ -142,9 +144,12 @@ class TestContent:
         assert [c.value for c in ws[1]][-1] == "Deductible / SIR / Retention"
         assert ws.max_column == 9
         assert "A2:I2" in {str(r) for r in ws.merged_cells.ranges}  # full-width band
-        # no premium column, so no subtotal lines: the next section's body
-        # follows the Casualty rows immediately
-        assert ws["B7"].value == "Property — Primary"
+        # No premium column, so no subtotal lines — but the bound/not-bound
+        # SPLIT is independent of premiums and still happens, so the Casualty
+        # not-bound band sits at r6 with its one row at r7, and Property's body
+        # follows at r8.
+        assert ws["A6"].value == "Casualty — not bound"
+        assert ws["B8"].value == "Property — Primary"
 
 
 class TestStatusAndSubtotals:
@@ -153,16 +158,27 @@ class TestStatusAndSubtotals:
 
     def test_status_renders_per_row(self, program, theme, tmp_path) -> None:
         ws = load_workbook(_write(program, theme, tmp_path / "s.xlsx")).active
-        assert [ws[f"C{r}"].value for r in (3, 4, 5, 6)] == [
-            "Bound", "Bound", "Bound", "To be placed",
-        ]
+        # r3-r5 are the bound block; r6 is its subtotal; r7 is the not-bound
+        # band and r8 the one row under it.
+        assert [ws[f"C{r}"].value for r in (3, 4, 5)] == ["Bound"] * 3
+        assert ws["C8"].value == "To be placed"
 
-    def test_subtotal_lines_sit_under_the_section_rows(self, program, theme, tmp_path):
+    def test_each_block_carries_its_own_subtotal(self, program, theme, tmp_path):
+        """ONE SUBTOTAL PER BLOCK since 2026-08-21, not two lines under one
+        mingled list.
+
+        This supersedes the 2026-08-18 shape, whose reasoning was that BOTH
+        lines must print always or "a section that sometimes has one line and
+        sometimes two teaches the reader to skim past them". That consistency
+        is kept — it lives per block now, and every block prints exactly one
+        subtotal. What went is a SCHEDULE that listed cover nobody had bought
+        yet beside cover they had."""
         ws = load_workbook(_write(program, theme, tmp_path / "s.xlsx")).active
-        assert ws["A7"].value == "Bound cover — premium subtotal"
-        assert ws["A8"].value == "Unbound cover — premium subtotal"
-        assert "A7:I7" in {str(r) for r in ws.merged_cells.ranges}
-        assert ws["J7"].number_format == '"$"#,##0.00'
+        assert ws["A6"].value == "Bound cover — premium subtotal"
+        assert ws["A7"].value == "Casualty — not bound"
+        assert ws["A9"].value == "Unbound cover — premium subtotal"
+        assert "A6:I6" in {str(r) for r in ws.merged_cells.ranges}
+        assert ws["J6"].number_format == '"$"#,##0.00'
 
     def test_an_unbound_premium_is_never_inside_the_bound_subtotal(
         self, theme, tmp_path
@@ -172,9 +188,9 @@ class TestStatusAndSubtotals:
         ws = load_workbook(
             _write(unbound_with_premium(), theme, tmp_path / "s.xlsx")
         ).active
-        assert ws["C6"].value == "To be placed" and ws["J6"].value == 25_000
-        assert ws["J7"].value == 100_000   # bound cover only
-        assert ws["J8"].value == 25_000    # unbound, stated separately
+        assert ws["C8"].value == "To be placed" and ws["J8"].value == 25_000
+        assert ws["J6"].value == 100_000   # bound cover only
+        assert ws["J9"].value == 25_000    # unbound, in its own block
 
     def test_a_wholly_unstated_subtotal_prints_an_em_dash_not_zero(
         self, program, theme, tmp_path
@@ -184,17 +200,22 @@ class TestStatusAndSubtotals:
         higher up, because $0.00 reads as free cover. Under a visible "To be
         placed" row it said the unplaced cover was free."""
         ws = load_workbook(_write(program, theme, tmp_path / "s.xlsx")).active
-        assert ws["C6"].value == "To be placed" and ws["J6"].value is None
-        assert ws["A8"].value == "Unbound cover — premium subtotal"
-        assert ws["J8"].value == "—"
+        assert ws["C8"].value == "To be placed" and ws["J8"].value is None
+        assert ws["A9"].value == "Unbound cover — premium subtotal"
+        assert ws["J9"].value == "—"
 
-    def test_a_section_with_nothing_unbound_also_states_nothing(
+    def test_a_section_with_nothing_unbound_grows_no_second_block(
         self, program, theme, tmp_path
     ) -> None:
+        """CHANGED 2026-08-21, and this is the one behaviour the block split
+        genuinely reverses. A section used to print an "Unbound cover" line
+        reading "—" even when nothing was unbound. With blocks there is no
+        block to hang it under, and a heading over no rows is worse than its
+        absence — so the section stops after its bound subtotal."""
         ws = load_workbook(_write(program, theme, tmp_path / "s.xlsx")).active
-        assert ws["B9"].value == "Property — Primary"   # the section's only row
-        assert ws["J10"].value == 80_000                # bound, a real figure
-        assert ws["J11"].value == "—"                   # nothing unbound to state
+        assert ws["B10"].value == "Property — Primary"  # the section's only row
+        assert ws["J11"].value == 80_000                # bound, a real figure
+        assert ws["A12"].value == "Program-wide"        # straight on, no empty block
 
     def test_an_unlabelled_section_still_gets_its_subtotal_lines(
         self, program, theme, tmp_path
@@ -203,9 +224,8 @@ class TestStatusAndSubtotals:
         judgement call held ONLY by the golden hash. Pinned by name now, so a
         regeneration cannot drop it silently."""
         ws = load_workbook(_write(program, theme, tmp_path / "s.xlsx")).active
-        assert ws["B9"].value == "Property — Primary"   # body row, no band above
-        assert ws["A10"].value == "Bound cover — premium subtotal"
-        assert ws["A11"].value == "Unbound cover — premium subtotal"
+        assert ws["B10"].value == "Property — Primary"  # body row, no band above
+        assert ws["A11"].value == "Bound cover — premium subtotal"
         assert ws["A12"].value == "Program-wide"        # next section's band
 
     def test_no_premiums_drops_the_subtotal_lines(self, program, theme, tmp_path):
@@ -218,7 +238,9 @@ class TestStatusAndSubtotals:
         p = make_program()
         next(x for x in p.layers if x.id == "al-primary").premium = 0
         ws = load_workbook(_write(p, theme, tmp_path / "s.xlsx")).active
-        assert ws["J6"].value == "Included"
+        # al-primary is the unbound row, so its subtotal is the NOT-BOUND
+        # block's, at r9.
+        assert ws["J9"].value == "Included"
 
 
 class TestRowHeightColumnIndices:
@@ -255,7 +277,12 @@ class TestRowHeightColumnIndices:
 # commit; the guard therefore hashes every zip entry EXCEPT core.xml.
 # Regenerate GOLDEN_SHA only on a deliberate style/content change or an
 # openpyxl bump — never to make a refactor pass.
-GOLDEN_SHA = "39e0fa05c54056bb3f887473d37fd48b167764acd55a0ce9e2abeeed82a13615"
+# Regenerated 2026-08-21 (soi-bound-blocks): the schedule splits into a BOUND
+# block and a NOT BOUND block per section, each with its own single subtotal,
+# instead of one mingled list with two subtotal lines under it. Grant asked for
+# the primary schedule to be bound cover only. Deliberate content change, so
+# the hash moves — see that commit's body.
+GOLDEN_SHA = "72563941395a90f94e4dbaeaf1651f28dfd4e4155c93059bfefd472d0686cc26"
 # Regenerated 2026-08-18 (soi-status-and-statutory, fix round 1): the unbound
 # subtotal of a section whose unbound rows state no premium prints an em dash
 # instead of $0.00 — Casualty's only unbound row has premium=None, so the sheet
@@ -352,7 +379,12 @@ class TestWorkbookOrchestration:
 # Content golden WITH the schematic sheet (same core.xml-exclusion mechanism
 # as GOLDEN_SHA above; same regeneration rule — deliberate change or
 # openpyxl bump only, never to make a refactor pass).
-SCHEMATIC_GOLDEN_SHA = "deac2226cc645b75e16fd411a3a453b42880d707582976495c1c086a4f1c1668"
+# Regenerated 2026-08-21 (soi-bound-blocks): the schedule splits into a BOUND
+# block and a NOT BOUND block per section, each with its own single subtotal,
+# instead of one mingled list with two subtotal lines under it. Grant asked for
+# the primary schedule to be bound cover only. Deliberate content change, so
+# the hash moves — see that commit's body.
+SCHEMATIC_GOLDEN_SHA = "6fae51d7ad639a232d39cf38ef4ac2c20c089455beb7507e45370ab6e783f0de"
 # Regenerated 2026-08-18 (soi-status-and-statutory, fix round 1): the SCHEMATIC
 # sheet is still unchanged; this moves for exactly the reason GOLDEN_SHA moves
 # in the same round (the em-dash unbound subtotal) and for no others.
